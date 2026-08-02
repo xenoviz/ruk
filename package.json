@@ -8,7 +8,7 @@
   },
   "scripts": {
     "check": "node --run check:syntax && node --run check:package && node --run check:repository-policy",
-    "check:syntax": "node --check bin/ruk.js && node --check src/*.js && node --check scripts/*.mjs",
+    "check:syntax": "node scripts/check-syntax.mjs",
     "check:package": "node scripts/verify-package.mjs",
     "check:repository-policy": "node scripts/verify-repository-policy.mjs",
     "test": "node --test --test-concurrency=1",

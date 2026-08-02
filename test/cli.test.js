@@ -74,7 +74,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     { cwd: root },
   );
   const record = JSON.parse(created.stdout);
-  assert.equal(record.path, jsonTree);
+  assert.equal(await fs.realpath(record.path), await fs.realpath(jsonTree));
   assert.equal(record.status, "prepared");
   await run(process.execPath, [cli, "remove", jsonTree, "--force"], { cwd: root });
 });
