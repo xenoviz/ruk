@@ -1,0 +1,50 @@
+{
+  "name": "@xenoviz/ruk",
+  "version": "0.1.0",
+  "description": "Dependency-aware Git workspaces for parallel coding agents",
+  "type": "module",
+  "bin": {
+    "ruk": "bin/ruk.js"
+  },
+  "scripts": {
+    "check": "node --run check:syntax && node --run check:package && node --run check:repository-policy",
+    "check:syntax": "node --check bin/ruk.js && node --check src/*.js && node --check scripts/*.mjs",
+    "check:package": "node scripts/verify-package.mjs",
+    "check:repository-policy": "node scripts/verify-repository-policy.mjs",
+    "test": "node --test --test-concurrency=1",
+    "test:coverage": "node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-lines=85 --test-coverage-functions=90 --test-coverage-branches=70 --test-coverage-exclude=bin/** --test-coverage-exclude=scripts/** --test-coverage-exclude=test/**",
+    "pack:check": "node scripts/verify-pack.mjs",
+    "repo:protect": "node scripts/configure-repository.mjs --apply"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "BENCHMARK.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "git",
+    "worktree",
+    "monorepo",
+    "agents",
+    "bun",
+    "pnpm"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xenoviz/ruk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xenoviz/ruk/issues"
+  },
+  "homepage": "https://github.com/xenoviz/ruk#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}
