@@ -33,9 +33,9 @@ not claim those guarantees yet.
 
 ## Requirements
 
-- Node.js 22.14 or newer
 - Git
 - the repository's declared package manager
+- Node.js 22.14 or newer when installing Ruk from npm
 - Bun 1.3.14+ or pnpm 10.12.1+ when shared mode is enabled
 
 ## Install
@@ -43,6 +43,17 @@ not claim those guarantees yet.
 ```bash
 npm install --global @xenoviz/ruk
 ```
+
+The same Node.js package can be installed with Bun (the Node.js runtime
+requirement still applies to this distribution):
+
+```bash
+bun install --global @xenoviz/ruk
+```
+
+GitHub Releases also provides standalone Linux, macOS, and Windows executables
+for x64 and ARM64. These embed the Bun runtime, so users do not need Node.js or
+Bun installed to run Ruk. Checksums are published beside every executable.
 
 ## Usage
 
@@ -128,7 +139,7 @@ The fingerprint includes:
 - Bun, npm, pnpm, and Yarn lock/configuration files;
 - patch directories;
 - package-manager name, version, command, and dependency mode;
-- Node version and native module ABI;
+- runtime identity (Node or Bun), version, and native module ABI;
 - operating system and CPU architecture.
 
 Changing ordinary source code does not invalidate the dependency projection.
@@ -138,11 +149,17 @@ content already present in the package manager store remains reusable.
 ## Development
 
 ```bash
-npm ci
-npm run check
-npm run test:coverage
-npm run pack:check
+bun install --frozen-lockfile
+bun run check
+bun run test:coverage
+bun run binary:check
+bun run binary:cross-check
+bun run pack:check
 ```
+
+Ruk is authored in strict TypeScript. Bun is the repository toolchain and
+builds the standalone executables; `tsc` emits the Node-compatible npm
+distribution. The published runtime remains dependency-free.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and
 [docs/architecture.md](./docs/architecture.md) before changing lifecycle,
@@ -150,11 +167,15 @@ locking, state, or dependency behavior.
 
 ## Security and releases
 
-- Runtime code has no third-party npm dependencies.
-- CI runs on Node 22 and 24 across Linux, Windows, and macOS.
+- Published runtime code has no third-party npm dependencies.
+- CI runs the compiled package on Node 22 and 24 across Linux, Windows, and
+  macOS.
+- CI also compiles and exercises native Bun executables on all three operating
+  systems.
 - GitHub Actions are pinned to immutable commit SHAs.
-- Releases verify tag/package parity and publish through npm trusted publishing
-  with provenance.
+- Releases verify tag/package parity, publish through npm trusted publishing
+  with provenance, and attach seven standalone executables with SHA-256
+  checksums.
 - `main` is governed by a checked-in ruleset requiring reviewed pull requests,
   code-owner approval, linear history, resolved discussions, and passing CI.
 

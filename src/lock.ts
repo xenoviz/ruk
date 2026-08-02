@@ -2,36 +2,65 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { isErrnoException, isRecord } from "./types.js";
 
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+interface LockOwner {
+  pid: number;
+  hostname: string;
+  token: string;
+  createdAt: string;
+}
 
-async function readOwner(lockPath) {
+export interface LockOptions {
+  timeoutMs?: number;
+  staleMs?: number;
+}
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+function isLockOwner(value: unknown): value is LockOwner {
+  return (
+    isRecord(value) &&
+    typeof value["pid"] === "number" &&
+    typeof value["hostname"] === "string" &&
+    typeof value["token"] === "string" &&
+    typeof value["createdAt"] === "string"
+  );
+}
+
+async function readOwner(lockPath: string): Promise<LockOwner | null> {
   try {
-    return JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+    const owner: unknown = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+    return isLockOwner(owner) ? owner : null;
   } catch (error) {
-    if (error?.code === "ENOENT" || error instanceof SyntaxError) return null;
+    if ((isErrnoException(error) && error.code === "ENOENT") || error instanceof SyntaxError) return null;
     throw error;
   }
 }
 
-function processIsAlive(pid) {
+function processIsAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return error?.code === "EPERM";
+    return isErrnoException(error) && error.code === "EPERM";
   }
 }
 
-async function staleLockCanBeRemoved(lockPath, staleMs) {
+async function staleLockCanBeRemoved(lockPath: string, staleMs: number): Promise<boolean> {
   const stat = await fs.stat(lockPath);
   if (Date.now() - stat.mtimeMs <= staleMs) return false;
   const owner = await readOwner(lockPath);
   return !(owner?.hostname === os.hostname() && processIsAlive(owner.pid));
 }
 
-export async function withDirectoryLock(lockPath, callback, options = {}) {
+export async function withDirectoryLock<T>(
+  lockPath: string,
+  callback: () => T | Promise<T>,
+  options: LockOptions = {},
+): Promise<T> {
   const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
   const staleMs = options.staleMs ?? 30 * 60 * 1000;
   const started = Date.now();
@@ -53,14 +82,14 @@ export async function withDirectoryLock(lockPath, callback, options = {}) {
       );
       break;
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
+      if (!isErrnoException(error) || error.code !== "EEXIST") throw error;
       try {
         if (await staleLockCanBeRemoved(lockPath, staleMs)) {
           await fs.rm(lockPath, { recursive: true, force: true });
           continue;
         }
       } catch (statError) {
-        if (statError?.code === "ENOENT") continue;
+        if (isErrnoException(statError) && statError.code === "ENOENT") continue;
         throw statError;
       }
       if (Date.now() - started > timeoutMs) {

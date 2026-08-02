@@ -1,19 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { commandExists, run } from "./process.js";
+import type { DependencyMode, PackageManager, RukConfig } from "./types.js";
+import { isErrnoException, isRecord } from "./types.js";
 
-const DEPENDENCY_MODES = new Set(["managed", "shared"]);
+const DEPENDENCY_MODES = new Set<DependencyMode>(["managed", "shared"]);
 
-async function readJson(file) {
+async function readJson(file: string): Promise<unknown | null> {
   try {
-    return JSON.parse(await fs.readFile(file, "utf8"));
+    return JSON.parse(await fs.readFile(file, "utf8")) as unknown;
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw new Error(`Cannot read ${file}: ${error.message}`);
+    if (isErrnoException(error) && error.code === "ENOENT") return null;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot read ${file}: ${message}`);
   }
 }
 
-function validateCommand(value, source) {
+function validateCommand(value: unknown, source: string): string[] | null {
   if (value == null) return null;
   if (!Array.isArray(value) || value.length === 0 || value.some((part) => typeof part !== "string" || !part)) {
     throw new Error(`${source} must be a non-empty string array`);
@@ -21,7 +24,7 @@ function validateCommand(value, source) {
   return [...value];
 }
 
-function parseEnvironmentCommand(value) {
+function parseEnvironmentCommand(value: string | undefined): string[] | null {
   if (!value) return null;
   try {
     return validateCommand(JSON.parse(value), "RUK_INSTALL_COMMAND");
@@ -33,17 +36,17 @@ function parseEnvironmentCommand(value) {
   }
 }
 
-function dependencyMode(value, source) {
+function dependencyMode(value: unknown, source: string): DependencyMode {
   const mode = value ?? "managed";
-  if (!DEPENDENCY_MODES.has(mode)) {
+  if (typeof mode !== "string" || !DEPENDENCY_MODES.has(mode as DependencyMode)) {
     throw new Error(`${source} must be either \"managed\" or \"shared\"`);
   }
-  return mode;
+  return mode as DependencyMode;
 }
 
-export async function loadConfig(root) {
+export async function loadConfig(root: string): Promise<RukConfig> {
   const fileConfig = (await readJson(path.join(root, ".rukrc.json"))) ?? {};
-  if (typeof fileConfig !== "object" || Array.isArray(fileConfig)) {
+  if (!isRecord(fileConfig)) {
     throw new Error(".rukrc.json must contain a JSON object");
   }
   const unknown = Object.keys(fileConfig).filter(
@@ -52,26 +55,26 @@ export async function loadConfig(root) {
   if (unknown.length > 0) {
     throw new Error(`Unknown .rukrc.json option${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
   }
-  const environmentCommand = parseEnvironmentCommand(process.env.RUK_INSTALL_COMMAND);
+  const environmentCommand = parseEnvironmentCommand(process.env["RUK_INSTALL_COMMAND"]);
   return {
     installCommand:
-      environmentCommand ?? validateCommand(fileConfig.installCommand, ".rukrc.json installCommand"),
+      environmentCommand ?? validateCommand(fileConfig["installCommand"], ".rukrc.json installCommand"),
     dependencyMode: dependencyMode(
-      process.env.RUK_DEPENDENCY_MODE ?? fileConfig.dependencyMode,
-      process.env.RUK_DEPENDENCY_MODE ? "RUK_DEPENDENCY_MODE" : ".rukrc.json dependencyMode",
+      process.env["RUK_DEPENDENCY_MODE"] ?? fileConfig["dependencyMode"],
+      process.env["RUK_DEPENDENCY_MODE"] ? "RUK_DEPENDENCY_MODE" : ".rukrc.json dependencyMode",
     ),
   };
 }
 
-async function packageManagerFromPackageJson(root) {
+async function packageManagerFromPackageJson(root: string): Promise<string | null> {
   const pkg = await readJson(path.join(root, "package.json"));
-  const value = pkg?.packageManager;
+  const value = isRecord(pkg) ? pkg["packageManager"] : null;
   if (typeof value !== "string") return null;
   const separator = value.lastIndexOf("@");
   return separator > 0 ? value.slice(0, separator) : value;
 }
 
-async function firstExisting(root, names) {
+async function firstExisting(root: string, names: readonly string[]): Promise<string | null> {
   for (const name of names) {
     try {
       await fs.access(path.join(root, name));
@@ -83,10 +86,12 @@ async function firstExisting(root, names) {
   return null;
 }
 
-export async function detectPackageManager(root, config) {
+export async function detectPackageManager(root: string, config: RukConfig): Promise<PackageManager> {
   if (config.installCommand) {
+    const executable = config.installCommand[0];
+    if (!executable) throw new Error("installCommand cannot be empty");
     return {
-      name: path.basename(config.installCommand[0]).replace(/\.exe$/i, ""),
+      name: path.basename(executable).replace(/\.exe$/i, ""),
       command: config.installCommand,
       dependencyMode: config.dependencyMode,
     };
@@ -113,8 +118,10 @@ export async function detectPackageManager(root, config) {
   return { name, command, dependencyMode: config.dependencyMode };
 }
 
-export async function packageManagerVersion(manager, root) {
-  const result = await run(manager.command[0], ["--version"], {
+export async function packageManagerVersion(manager: PackageManager, root: string): Promise<string> {
+  const executable = manager.command[0];
+  if (!executable) throw new Error("Package manager command cannot be empty");
+  const result = await run(executable, ["--version"], {
     cwd: root,
     allowFailure: true,
   });

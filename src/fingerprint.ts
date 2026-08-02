@@ -3,15 +3,26 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dependencyFiles } from "./git.js";
 import { packageManagerVersion } from "./config.js";
+import type { FingerprintDetails, PackageManager } from "./types.js";
+import { isErrnoException } from "./types.js";
 
-export async function dependencyFingerprint({ root, manager }) {
+export async function dependencyFingerprint({
+  root,
+  manager,
+}: {
+  root: string;
+  manager: PackageManager;
+}): Promise<FingerprintDetails> {
   const hash = crypto.createHash("sha256");
   const files = await dependencyFiles(root);
   const version = await packageManagerVersion(manager, root);
 
   hash.update("ruk-fingerprint-v2\0");
   hash.update(`${process.platform}\0${process.arch}\0`);
-  hash.update(`${process.versions.node}\0${process.versions.modules ?? "unknown"}\0`);
+  const bunVersion = (process.versions as NodeJS.ProcessVersions & { bun?: string }).bun ?? "not-bun";
+  hash.update(
+    `${process.versions.node}\0${process.versions.modules ?? "unknown"}\0${bunVersion}\0`,
+  );
   hash.update(
     `${manager.name}\0${version}\0${manager.dependencyMode ?? "managed"}\0${JSON.stringify(manager.command)}\0`,
   );
@@ -28,7 +39,7 @@ export async function dependencyFingerprint({ root, manager }) {
       hash.update("\0");
       hash.update(normalized);
     } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+      if (!isErrnoException(error) || error.code !== "ENOENT") throw error;
       hash.update("missing");
     }
     hash.update("\0");

@@ -11,3 +11,7 @@ versioning.
 - Add dependency fingerprinting, atomic state, and per-workspace locking.
 - Add cross-platform CI, coverage and package smoke gates, protected-main
   policy, and npm trusted-publishing workflow.
+- Author the project in strict TypeScript with Bun as the pinned repository
+  toolchain while retaining a compiled, dependency-free Node.js package.
+- Publish standalone Linux, macOS, and Windows executables for x64 and ARM64
+  with SHA-256 checksums.

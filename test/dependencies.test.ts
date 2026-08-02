@@ -6,8 +6,16 @@ import test from "node:test";
 import { assertSharedBackendSupported, ensureDependencies } from "../src/dependencies.js";
 import { getRepository } from "../src/git.js";
 import { run } from "../src/process.js";
+import type { PackageManager } from "../src/types.js";
 
-async function createFixture() {
+interface DependencyFixture {
+  parent: string;
+  root: string;
+  counter: string;
+  manager: PackageManager;
+}
+
+async function createFixture(): Promise<DependencyFixture> {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-deps-"));
   const root = path.join(parent, "repo");
   await fs.mkdir(root);

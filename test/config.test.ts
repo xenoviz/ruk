@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { detectPackageManager, loadConfig } from "../src/config.js";
+import type { RukConfig } from "../src/types.js";
 
-async function directory(t) {
+async function directory(t: TestContext): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-config-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
@@ -48,32 +49,32 @@ test("package manager detection chooses deterministic install commands", async (
 
 test("environment configuration is parsed and validated", async (t) => {
   const root = await directory(t);
-  const previousCommand = process.env.RUK_INSTALL_COMMAND;
-  const previousMode = process.env.RUK_DEPENDENCY_MODE;
+  const previousCommand = process.env["RUK_INSTALL_COMMAND"];
+  const previousMode = process.env["RUK_DEPENDENCY_MODE"];
   t.after(() => {
-    if (previousCommand === undefined) delete process.env.RUK_INSTALL_COMMAND;
-    else process.env.RUK_INSTALL_COMMAND = previousCommand;
-    if (previousMode === undefined) delete process.env.RUK_DEPENDENCY_MODE;
-    else process.env.RUK_DEPENDENCY_MODE = previousMode;
+    if (previousCommand === undefined) delete process.env["RUK_INSTALL_COMMAND"];
+    else process.env["RUK_INSTALL_COMMAND"] = previousCommand;
+    if (previousMode === undefined) delete process.env["RUK_DEPENDENCY_MODE"];
+    else process.env["RUK_DEPENDENCY_MODE"] = previousMode;
   });
 
-  process.env.RUK_INSTALL_COMMAND = JSON.stringify([process.execPath, "install.mjs"]);
-  process.env.RUK_DEPENDENCY_MODE = "shared";
+  process.env["RUK_INSTALL_COMMAND"] = JSON.stringify([process.execPath, "install.mjs"]);
+  process.env["RUK_DEPENDENCY_MODE"] = "shared";
   assert.deepEqual(await loadConfig(root), {
     installCommand: [process.execPath, "install.mjs"],
     dependencyMode: "shared",
   });
 
-  process.env.RUK_INSTALL_COMMAND = "not-json";
+  process.env["RUK_INSTALL_COMMAND"] = "not-json";
   await assert.rejects(loadConfig(root), /JSON string array/);
-  process.env.RUK_INSTALL_COMMAND = "[]";
+  process.env["RUK_INSTALL_COMMAND"] = "[]";
   await assert.rejects(loadConfig(root), /non-empty string array/);
 });
 
 test("npm auto-detection uses ci with a lockfile and install without one", async (t) => {
   const root = await directory(t);
   await fs.writeFile(path.join(root, "package.json"), '{"name":"fixture"}\n');
-  const config = { dependencyMode: "managed", installCommand: null };
+  const config: RukConfig = { dependencyMode: "managed", installCommand: null };
   assert.deepEqual((await detectPackageManager(root, config)).command, ["npm", "install"]);
   await fs.writeFile(path.join(root, "package-lock.json"), '{}\n');
   assert.deepEqual((await detectPackageManager(root, config)).command, ["npm", "ci"]);

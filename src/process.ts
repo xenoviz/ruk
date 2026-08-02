@@ -1,8 +1,27 @@
 import { spawn } from "node:child_process";
+import type { StdioOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export function run(command, args = [], options = {}) {
+export interface RunOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  stdio?: StdioOptions;
+  allowFailure?: boolean;
+}
+
+export interface RunResult {
+  code: number;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}
+
+export function run(
+  command: string,
+  args: readonly string[] = [],
+  options: RunOptions = {},
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -47,7 +66,7 @@ export function run(command, args = [], options = {}) {
   });
 }
 
-export async function commandExists(command) {
+export async function commandExists(command: string): Promise<boolean> {
   if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) {
     try {
       await fs.access(command);

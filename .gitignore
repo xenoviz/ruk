@@ -1,5 +1,8 @@
 node_modules/
 coverage/
+dist/
+.test-dist/
+artifacts/
 *.tgz
 .DS_Store
 *.log

@@ -4,9 +4,11 @@
 
 ## Validation
 
-- [ ] `npm run check`
-- [ ] `npm run test:coverage`
-- [ ] `npm run pack:check`
+- [ ] `bun run check`
+- [ ] `bun run test:coverage`
+- [ ] `bun run binary:check`
+- [ ] `bun run binary:cross-check`
+- [ ] `bun run pack:check`
 
 ## Risk
 

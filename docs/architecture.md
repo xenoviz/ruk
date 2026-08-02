@@ -1,5 +1,21 @@
 # Architecture
 
+## Toolchain and distributions
+
+Ruk is authored in strict TypeScript and uses the pinned Bun toolchain for
+dependency installation, repository scripts, and standalone executable builds.
+TypeScript performs static checking and emits the Node-compatible npm package.
+
+The core uses portable `node:*` APIs and must not depend on `Bun.*` APIs. This
+keeps one source tree valid for both distributions:
+
+- compiled JavaScript for Node.js 22.14 and newer, published to npm without
+  runtime dependencies;
+- self-contained Bun executables for Linux, macOS, and Windows.
+
+Both distributions must exercise real Git subprocess behavior in CI. A binary
+that only starts or prints its version is not considered verified.
+
 ## Boundaries
 
 Ruk has four deliberately separate concerns:
