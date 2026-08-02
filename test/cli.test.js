@@ -53,7 +53,8 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
 
   const listed = await run(process.execPath, [cli, "list"], { cwd: root });
   assert.match(listed.stdout, /agent\/cli/);
-  assert.match(listed.stdout, new RegExp(tree.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  const canonicalTree = await fs.realpath(tree);
+  assert.match(listed.stdout, new RegExp(canonicalTree.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
   await fs.writeFile(path.join(tree, "package.json"), '{"name":"cli-fixture","dependencies":{"fixture":"2"}}\n');
   const executed = await run(

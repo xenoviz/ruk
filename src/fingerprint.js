@@ -21,9 +21,12 @@ export async function dependencyFingerprint({ root, manager }) {
     hash.update("\0");
     try {
       const content = await fs.readFile(path.join(root, relative));
-      hash.update(String(content.byteLength));
+      const normalized = path.posix.basename(relative.replaceAll("\\", "/")) === "bun.lockb"
+        ? content
+        : Buffer.from(content.toString("utf8").replaceAll("\r\n", "\n"));
+      hash.update(String(normalized.byteLength));
       hash.update("\0");
-      hash.update(content);
+      hash.update(normalized);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
       hash.update("missing");

@@ -36,6 +36,10 @@ test("fingerprint changes only for dependency inputs", async (t) => {
   await fs.writeFile(path.join(root, "bun.lock"), "lock-v2\n");
   const lockChanged = await dependencyFingerprint({ root, manager });
   assert.notEqual(lockChanged.fingerprint, manifestChanged.fingerprint);
+
+  await fs.writeFile(path.join(root, "bun.lock"), "lock-v2\r\n");
+  const lineEndingsChanged = await dependencyFingerprint({ root, manager });
+  assert.equal(lineEndingsChanged.fingerprint, lockChanged.fingerprint);
 });
 
 test("fingerprint separates managed and shared dependency layouts", async (t) => {

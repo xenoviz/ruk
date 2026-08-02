@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 export function run(command, args = [], options = {}) {
   return new Promise((resolve, reject) => {
@@ -46,6 +48,14 @@ export function run(command, args = [], options = {}) {
 }
 
 export async function commandExists(command) {
+  if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) {
+    try {
+      await fs.access(command);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   const locator = process.platform === "win32" ? "where" : "sh";
   const args = process.platform === "win32" ? [command] : ["-c", "command -v \"$1\" >/dev/null 2>&1", "sh", command];
   const result = await run(locator, args, { allowFailure: true });
