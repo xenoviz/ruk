@@ -53,7 +53,8 @@ bun install --global @xenoviz/ruk
 
 GitHub Releases also provides standalone Linux, macOS, and Windows executables
 for x64 and ARM64. These embed the Bun runtime, so users do not need Node.js or
-Bun installed to run Ruk. Checksums are published beside every executable.
+Bun installed to run Ruk. Checksums are published beside every executable, and
+GitHub records signed build-provenance attestations for the release binaries.
 
 ## Usage
 
@@ -88,6 +89,21 @@ ruk remove ../project-agent-auth-flow
 Ruk refuses to remove the workspace in which it is currently running. Removing
 a dirty workspace requires Git's normal protection to pass or an explicit
 `--force`.
+
+Update Ruk without guessing how it was installed:
+
+```bash
+ruk update --check
+ruk update
+```
+
+Standalone executables select the matching operating-system, architecture, and
+Linux libc asset, download its published SHA-256 checksum, and replace the
+current executable atomically. A failed post-replacement version check rolls
+back on POSIX systems; Windows schedules replacement after the running process
+exits. npm, Bun, pnpm, and Yarn installations delegate the exact released
+version to their package manager rather than modifying managed files directly.
+Ruk never performs background update checks or downloads.
 
 ## Dependency modes
 
@@ -175,7 +191,7 @@ locking, state, or dependency behavior.
 - GitHub Actions are pinned to immutable commit SHAs.
 - Releases verify tag/package parity, publish through npm trusted publishing
   with provenance, and attach seven standalone executables with SHA-256
-  checksums.
+  checksums and signed GitHub build-provenance attestations.
 - `main` is governed by a checked-in ruleset requiring reviewed pull requests,
   code-owner approval, linear history, resolved discussions, and passing CI.
 

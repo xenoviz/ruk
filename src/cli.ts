@@ -10,6 +10,8 @@ import { addWorktree, getRepository, listWorktrees, removeWorktree } from "./git
 import { run } from "./process.js";
 import { deleteTreeState, readState, storePaths, treeKey } from "./state.js";
 import type { CliIo, DependencyReporter } from "./types.js";
+import { formatUpdate, updateRuk } from "./update.js";
+import type { Distribution } from "./update.js";
 import { VERSION } from "./version.js";
 
 const HELP = `Ruk — dependency-aware Git workspaces for parallel coding agents
@@ -22,6 +24,7 @@ Usage:
   ruk list [--json]
   ruk remove <path> [--force]
   ruk status [--json]
+  ruk update [--check] [--json]
 
 Ruk uses safe managed installs by default. Set dependencyMode to "shared" in
 .rukrc.json only after validating the repository with its normal CI suite.
@@ -33,6 +36,7 @@ interface ParsedOptions {
   detach?: boolean;
   json?: boolean;
   force?: boolean;
+  check?: boolean;
 }
 
 function parseOptions(
@@ -269,6 +273,7 @@ export interface MainOptions {
   cwd?: string;
   stdout?: NodeJS.WriteStream;
   stderr?: NodeJS.WriteStream;
+  distribution?: Distribution;
 }
 
 export async function main(argv: readonly string[], options: MainOptions = {}): Promise<number> {
@@ -307,6 +312,17 @@ export async function main(argv: readonly string[], options: MainOptions = {}): 
   }
   if (command === "remove") {
     await remove(args, cwd);
+    return 0;
+  }
+  if (command === "update") {
+    const { options: parsed, positional } = parseOptions(args, { flags: ["--check", "--json"] });
+    requirePositionals(positional, 0, "update does not accept positional arguments");
+    const result = await updateRuk({
+      distribution: options.distribution ?? "package",
+      checkOnly: parsed.check ?? false,
+      reporter: dependencyReporter(io, parsed.json ?? false),
+    });
+    io.stdout.write(parsed.json ? jsonLine(result) : formatUpdate(result));
     return 0;
   }
   throw new Error(`Unknown command ${command}. Run ruk --help.`);

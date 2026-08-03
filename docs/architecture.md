@@ -16,6 +16,21 @@ keeps one source tree valid for both distributions:
 Both distributions must exercise real Git subprocess behavior in CI. A binary
 that only starts or prints its version is not considered verified.
 
+## Updates and release trust
+
+Self-update is an explicit operation; ordinary commands never contact GitHub.
+The package distribution delegates an exact version to the package manager that
+owns the installation. Standalone builds download only release assets from the
+canonical repository, enforce a size limit, verify the matching SHA-256 file,
+and replace the executable through a same-directory staged file.
+
+POSIX replacement retains a rollback copy until the new executable reports the
+expected version. Windows defers replacement to a detached operating-system
+helper because a running executable may be locked. Release CI generates signed
+GitHub build-provenance attestations in addition to checksums. Checksums protect
+download integrity; provenance provides an independently verifiable record of
+which repository workflow produced an executable.
+
 ## Boundaries
 
 Ruk has four deliberately separate concerns:
@@ -24,6 +39,8 @@ Ruk has four deliberately separate concerns:
 2. `fingerprint.js` identifies dependency inputs without interpreting source.
 3. `dependencies.js` prepares one local projection through a selected backend.
 4. `state.js` records preparation metadata under the common Git directory.
+5. `update.js` owns release discovery, installer delegation, integrity checks,
+   and executable replacement.
 
 `cli.js` composes these modules. Business rules should remain in the closest
 module instead of accumulating in the CLI.

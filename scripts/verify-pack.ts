@@ -44,13 +44,14 @@ try {
   );
   const { filename, files } = parsePackResult(JSON.parse(packed.stdout) as unknown);
   const names = new Set(files.map((file) => file.path));
-  for (const required of ["dist/bin/ruk.js", "dist/src/cli.js", "README.md", "LICENSE"]) {
+  for (const required of ["dist/bin/ruk.js", "dist/src/cli.js", "dist/src/update.js", "README.md", "LICENSE"]) {
     if (!names.has(required)) throw new Error(`Packed artifact is missing ${required}`);
   }
   for (const forbidden of [
     ".github/workflows/release.yml",
     "config/github/main-ruleset.json",
     "bin/ruk.ts",
+    "dist/bin/ruk-standalone.js",
     "src/cli.ts",
   ]) {
     if (names.has(forbidden)) throw new Error(`Packed artifact unexpectedly contains ${forbidden}`);

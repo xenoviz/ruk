@@ -14,7 +14,7 @@ const output = path.resolve(
 await fs.mkdir(path.dirname(output), { recursive: true });
 const args = ["build", "--compile"];
 if (target) args.push(`--target=${target}`);
-args.push(path.join(root, "bin", "ruk.ts"), "--outfile", output);
+args.push(path.join(root, "bin", "ruk-standalone.ts"), "--outfile", output);
 
 await run("bun", args, { cwd: root, stdio: "inherit" });
 process.stdout.write(`Built ${output}${target ? ` for ${target}` : ""}.\n`);

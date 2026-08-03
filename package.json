@@ -29,7 +29,7 @@
   },
   "packageManager": "bun@1.3.14",
   "files": [
-    "dist/bin",
+    "dist/bin/ruk.js",
     "dist/src",
     "README.md",
     "BENCHMARK.md",

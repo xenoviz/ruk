@@ -15,3 +15,5 @@ versioning.
   toolchain while retaining a compiled, dependency-free Node.js package.
 - Publish standalone Linux, macOS, and Windows executables for x64 and ARM64
   with SHA-256 checksums.
+- Add explicit self-update checks, package-manager delegation, verified atomic
+  executable replacement, rollback protection, and signed build provenance.

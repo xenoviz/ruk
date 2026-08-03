@@ -19,3 +19,10 @@ use Ruk only with repositories and dependency changes you trust.
 Shared mode increases the impact of a malicious or mutating package because
 immutable package content is reused. Managed mode is therefore the default.
 Ruk never shares a writable workspace-level `node_modules` directory.
+
+Self-update is opt-in and contacts only the canonical `xenoviz/ruk` GitHub
+release endpoint. Standalone updates enforce canonical asset URLs, download
+size limits, and SHA-256 integrity before replacement. Release CI also records
+signed GitHub build provenance. A checksum establishes that a download matches
+the release asset; users requiring publisher verification should additionally
+verify the GitHub attestation before installing a binary.

@@ -42,7 +42,7 @@ if (
   throw new Error("Only the pinned TypeScript toolchain may be a development dependency");
 }
 if (pkg["packageManager"] !== "bun@1.3.14") throw new Error("packageManager must pin Bun 1.3.14");
-for (const file of ["README.md", "SECURITY.md", "LICENSE", "bin/ruk.ts", "bun.lock", "tsconfig.json"]) {
+for (const file of ["README.md", "SECURITY.md", "LICENSE", "bin/ruk.ts", "bin/ruk-standalone.ts", "bun.lock", "tsconfig.json"]) {
   await fs.access(`${root}/${file}`);
 }
 process.stdout.write(`Validated ${String(pkg["name"])}@${pkg["version"]}.\n`);
