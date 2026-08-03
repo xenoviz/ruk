@@ -48,6 +48,19 @@ test("directory lock removes abandoned stale locks", async (t) => {
   assert.equal(entered, true);
 });
 
+test("directory lock recovers a stale lock created before owner metadata", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-malformed-lock-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const lock = path.join(root, "state.lock");
+  await fs.mkdir(lock);
+  const old = new Date(Date.now() - 10_000);
+  await fs.utimes(lock, old, old);
+
+  let entered = false;
+  await withDirectoryLock(lock, () => { entered = true; }, { staleMs: 1, timeoutMs: 1_000 });
+  assert.equal(entered, true);
+});
+
 test("concurrent stale-lock recovery preserves serialization", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-stale-lock-race-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

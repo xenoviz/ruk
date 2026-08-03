@@ -39,7 +39,8 @@ its renewal and expiry timestamps. Release performs an ID-fenced transition to
 the worktree, and then makes it `available`. If a process survives or the tree
 is dirty, release preserves the assignment for retry. Explicit forced release
 may kill surviving tracked process trees and discard tracked and untracked
-non-ignored changes. It still enforces the assignment fence, so a delayed
+changes. All ignored files are also removed before pooling. It still enforces
+the assignment fence, so a delayed
 command cannot act on a reassigned workspace.
 
 `ruk run` registers its child only for an assigned workspace in managed mode

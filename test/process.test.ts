@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { commandExists, run } from "../src/process.js";
+import { commandExists, killProcessTree, processIdentity, run } from "../src/process.js";
 
 test("process runner captures output and preserves non-zero results when requested", async () => {
   const success = await run(process.execPath, ["-e", "process.stdout.write('ok')"]);
@@ -35,4 +35,31 @@ test("process runner executes Windows command shims without shell injection", as
     env: { ...process.env, PATH: `${root}${path.delimiter}${process.env["PATH"] ?? ""}` },
   });
   assert.equal(result.stdout, "safe&echo injected");
+});
+
+test("process runner reports and cleans up a tracked process group", async () => {
+  let pid = 0;
+  let identity: string | null = null;
+  const running = run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
+    allowFailure: true,
+    onSpawn: async (childPid) => {
+      pid = childPid;
+      identity = await processIdentity(childPid);
+    },
+  });
+  while (!identity) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(await killProcessTree(pid, true, identity), true);
+  const result = await running;
+  assert.notEqual(result.code, 0);
+});
+
+test("process runner terminates a child when tracking registration fails", async () => {
+  await assert.rejects(
+    run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      onSpawn: () => { throw new Error("tracking failed"); },
+    }),
+    /tracking failed/,
+  );
 });

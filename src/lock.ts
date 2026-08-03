@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { processIdentity } from "./process.js";
 import { isErrnoException, isRecord } from "./types.js";
 
 interface LockOwner {
@@ -9,6 +10,7 @@ interface LockOwner {
   hostname: string;
   token: string;
   createdAt: string;
+  processIdentity?: string;
 }
 
 export interface LockOptions {
@@ -18,6 +20,7 @@ export interface LockOptions {
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+const ownerIdentityChecks = new Map<string, { checkedAt: number; result: Promise<boolean> }>();
 
 function isLockOwner(value: unknown): value is LockOwner {
   return (
@@ -25,7 +28,8 @@ function isLockOwner(value: unknown): value is LockOwner {
     typeof value["pid"] === "number" &&
     typeof value["hostname"] === "string" &&
     typeof value["token"] === "string" &&
-    typeof value["createdAt"] === "string"
+    typeof value["createdAt"] === "string" &&
+    (value["processIdentity"] === undefined || typeof value["processIdentity"] === "string")
   );
 }
 
@@ -39,23 +43,32 @@ async function readOwner(lockPath: string): Promise<LockOwner | null> {
   }
 }
 
-function processIsAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+async function ownerIsAlive(owner: LockOwner): Promise<boolean> {
+  if (!Number.isInteger(owner.pid) || owner.pid <= 0) return false;
   try {
-    process.kill(pid, 0);
-    return true;
+    process.kill(owner.pid, 0);
   } catch (error) {
-    return isErrnoException(error) && error.code === "EPERM";
+    if (!(isErrnoException(error) && error.code === "EPERM")) return false;
   }
+  if (!owner.processIdentity) return true;
+  const key = `${owner.pid}:${owner.processIdentity}`;
+  const cached = ownerIdentityChecks.get(key);
+  if (cached && Date.now() - cached.checkedAt < 1_000) return cached.result;
+  const result = processIdentity(owner.pid).then((identity) => identity === owner.processIdentity);
+  ownerIdentityChecks.set(key, { checkedAt: Date.now(), result });
+  return result;
 }
 
-async function staleLockOwner(lockPath: string, staleMs: number): Promise<LockOwner | null> {
+async function staleLockIdentity(lockPath: string, staleMs: number): Promise<string | null> {
   const stat = await fs.stat(lockPath);
   if (Date.now() - stat.mtimeMs <= staleMs) return null;
   const owner = await readOwner(lockPath);
-  if (!owner || (owner.hostname === os.hostname() && processIsAlive(owner.pid))) return null;
-  return owner;
+  if (!owner && Date.now() - stat.mtimeMs <= Math.max(staleMs, 1_000)) return null;
+  if (owner?.hostname === os.hostname() && await ownerIsAlive(owner)) return null;
+  return crypto.createHash("sha256").update(owner?.token ?? `${lockPath}:${stat.mtimeMs}`).digest("hex").slice(0, 20);
 }
+
+let currentProcessIdentity: Promise<string | null> | undefined;
 
 export async function withDirectoryLock<T>(
   lockPath: string,
@@ -66,6 +79,7 @@ export async function withDirectoryLock<T>(
   const staleMs = options.staleMs ?? 30 * 60 * 1000;
   const started = Date.now();
   const token = crypto.randomUUID();
+  const identity = await (currentProcessIdentity ??= processIdentity(process.pid));
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
   while (true) {
@@ -78,6 +92,7 @@ export async function withDirectoryLock<T>(
           hostname: os.hostname(),
           token,
           createdAt: new Date().toISOString(),
+          ...(identity ? { processIdentity: identity } : {}),
         }),
         { mode: 0o600 },
       );
@@ -86,9 +101,8 @@ export async function withDirectoryLock<T>(
       if (!isErrnoException(error) || error.code !== "EEXIST") throw error;
       let abandoned = false;
       try {
-        const owner = await staleLockOwner(lockPath, staleMs);
-        if (owner) {
-          const identity = crypto.createHash("sha256").update(owner.token).digest("hex").slice(0, 20);
+        const identity = await staleLockIdentity(lockPath, staleMs);
+        if (identity) {
           // ponytail: tombstones prevent delayed contenders from deleting a new lock; add GC if crash churn matters.
           await fs.rename(lockPath, `${lockPath}.abandoned-${identity}`);
           abandoned = true;

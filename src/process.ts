@@ -8,6 +8,8 @@ export interface RunOptions {
   env?: NodeJS.ProcessEnv;
   stdio?: StdioOptions;
   allowFailure?: boolean;
+  detached?: boolean;
+  onSpawn?: (pid: number) => void | Promise<void>;
 }
 
 export interface RunResult {
@@ -81,10 +83,30 @@ export async function run(
       stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
+      detached: options.detached ?? false,
     });
 
     let stdout = "";
     let stderr = "";
+    let spawnHook = Promise.resolve();
+    let spawnError: unknown;
+
+    child.once("spawn", () => {
+      if (!options.onSpawn) return;
+      if (!child.pid) {
+        spawnError = new Error(`Could not track ${command}: child PID is unavailable`);
+        child.kill();
+        return;
+      }
+      spawnHook = Promise.resolve().then(() => options.onSpawn!(child.pid!)).catch(async (error: unknown) => {
+        spawnError = error;
+        try {
+          await killProcessTree(child.pid!, true);
+        } catch {
+          child.kill();
+        }
+      });
+    });
 
     if (child.stdout) {
       child.stdout.setEncoding("utf8");
@@ -100,7 +122,12 @@ export async function run(
     }
 
     child.on("error", reject);
-    child.on("close", (code, signal) => {
+    child.on("close", async (code, signal) => {
+      await spawnHook;
+      if (spawnError) {
+        reject(spawnError);
+        return;
+      }
       const result = { code: code ?? 1, signal, stdout, stderr };
       if (result.code === 0 || options.allowFailure) {
         resolve(result);
@@ -116,6 +143,69 @@ export async function run(
       );
     });
   });
+}
+
+export async function processIdentity(pid: number): Promise<string | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === "win32") {
+    const powershell = path.join(
+      environmentValue(process.env, "SYSTEMROOT") ?? "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const result = await run(
+      powershell,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$process=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($process){$process.StartTime.ToUniversalTime().Ticks}`,
+      ],
+      { allowFailure: true },
+    );
+    return result.code === 0 && result.stdout.trim() ? result.stdout.trim() : null;
+  }
+  const result = await run("ps", ["-o", "lstart=", "-p", String(pid)], { allowFailure: true });
+  return result.code === 0 && result.stdout.trim() ? result.stdout.trim().replace(/\s+/g, " ") : null;
+}
+
+export async function killProcessTree(
+  pid: number,
+  force = false,
+  expectedIdentity?: string,
+): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
+    throw new Error(`Refusing to terminate invalid process ${pid}`);
+  }
+  const identity = await processIdentity(pid);
+  if (!identity) return false;
+  if (expectedIdentity && identity !== expectedIdentity) {
+    throw new Error(`Refusing to terminate reused process ID ${pid}`);
+  }
+  if (process.platform === "win32") {
+    const result = await run("taskkill", ["/PID", String(pid), "/T", ...(force ? ["/F"] : [])], {
+      allowFailure: true,
+    });
+    if (result.code !== 0 && !/not found|no running instance/i.test(`${result.stderr}\n${result.stdout}`)) {
+      if (!force) return true;
+      throw new Error(`Could not terminate process tree ${pid}: ${result.stderr.trim() || result.stdout.trim()}`);
+    }
+    return true;
+  }
+  try {
+    process.kill(-pid, force ? "SIGKILL" : "SIGTERM");
+  } catch (error) {
+    if (isMissingProcess(error)) return false;
+    throw error;
+  }
+  return true;
+}
+
+function isMissingProcess(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ESRCH";
 }
 
 export async function commandExists(command: string): Promise<boolean> {

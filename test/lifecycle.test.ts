@@ -93,9 +93,11 @@ test("preparation and assignment finalizers are fenced by immutable IDs", async 
     owner: "other",
     hostname: "host",
     expiresAt: T3,
+    branch: "agent/reused",
     now: T2,
   });
   assert.notEqual(second!.assignment!.id, first.assignment!.id);
+  assert.equal(second!.branch, "agent/reused");
   await assert.rejects(beginWorkspaceReturn(paths, first.assignment!.id, T3), /does not exist/);
 });
 
@@ -120,6 +122,7 @@ test("return transitions retain ownership until tracked processes are removed", 
     T1,
   );
   const returning = await beginWorkspaceReturn(paths, assignmentId, T1);
+  assert.equal((await beginWorkspaceReturn(paths, assignmentId, T1)).lifecycle, "returning");
   assert.equal(returning.assignment!.id, assignmentId);
   assert.equal(returning.processes.length, 1);
   await assert.rejects(finishWorkspaceReturn(paths, assignmentId, T2), /tracked processes/);

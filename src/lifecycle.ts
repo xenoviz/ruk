@@ -12,6 +12,7 @@ export interface AssignmentInput {
   owner: string;
   hostname: string;
   expiresAt: string;
+  branch?: string;
   now?: string;
 }
 
@@ -87,6 +88,7 @@ function requireLifecycle(
 
 function assign(workspace: WorkspaceRecord, input: AssignmentInput): WorkspaceRecord {
   const nextAssignment = assignment(input);
+  if (input.branch !== undefined) workspace.branch = nonempty(input.branch, "branch");
   workspace.lifecycle = "assigned";
   workspace.assignment = nextAssignment;
   workspace.updatedAt = nextAssignment.assignedAt;
@@ -204,6 +206,7 @@ export async function beginWorkspaceReturn(
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
+    if (workspace.lifecycle === "returning") return workspace;
     requireLifecycle(workspace, "assigned");
     workspace.lifecycle = "returning";
     workspace.failure = null;

@@ -73,7 +73,9 @@ Release is fenced by the assignment ID. Ruk cleans only processes recorded for
 that assignment; it does not search for arbitrary processes. Without `--force`,
 release fails and preserves the assignment if a tracked process survives
 graceful termination or the worktree is dirty. `--force` force-kills surviving
-tracked process trees and discards tracked and untracked non-ignored changes.
+tracked process trees and discards tracked and untracked changes.
+Tracked, untracked, and ignored files are removed before a workspace enters the
+pool, so agents must commit or otherwise save every intended artifact first.
 It never permits an old ID to release a newer assignment. `cleanedProcesses`
 counts recorded process identities found and sent a termination request.
 
