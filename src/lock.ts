@@ -49,11 +49,12 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function staleLockCanBeRemoved(lockPath: string, staleMs: number): Promise<boolean> {
+async function staleLockOwner(lockPath: string, staleMs: number): Promise<LockOwner | null> {
   const stat = await fs.stat(lockPath);
-  if (Date.now() - stat.mtimeMs <= staleMs) return false;
+  if (Date.now() - stat.mtimeMs <= staleMs) return null;
   const owner = await readOwner(lockPath);
-  return !(owner?.hostname === os.hostname() && processIsAlive(owner.pid));
+  if (!owner || (owner.hostname === os.hostname() && processIsAlive(owner.pid))) return null;
+  return owner;
 }
 
 export async function withDirectoryLock<T>(
@@ -83,15 +84,23 @@ export async function withDirectoryLock<T>(
       break;
     } catch (error) {
       if (!isErrnoException(error) || error.code !== "EEXIST") throw error;
+      let abandoned = false;
       try {
-        if (await staleLockCanBeRemoved(lockPath, staleMs)) {
-          await fs.rm(lockPath, { recursive: true, force: true });
-          continue;
+        const owner = await staleLockOwner(lockPath, staleMs);
+        if (owner) {
+          const identity = crypto.createHash("sha256").update(owner.token).digest("hex").slice(0, 20);
+          // ponytail: tombstones prevent delayed contenders from deleting a new lock; add GC if crash churn matters.
+          await fs.rename(lockPath, `${lockPath}.abandoned-${identity}`);
+          abandoned = true;
         }
       } catch (statError) {
-        if (isErrnoException(statError) && statError.code === "ENOENT") continue;
+        if (
+          isErrnoException(statError) &&
+          (statError.code === "ENOENT" || statError.code === "EEXIST" || statError.code === "ENOTEMPTY" || statError.code === "EPERM")
+        ) continue;
         throw statError;
       }
+      if (abandoned) continue;
       if (Date.now() - started > timeoutMs) {
         throw new Error(`Timed out waiting for lock ${lockPath}`);
       }

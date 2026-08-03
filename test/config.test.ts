@@ -80,6 +80,30 @@ test("npm auto-detection uses ci with a lockfile and install without one", async
   assert.deepEqual((await detectPackageManager(root, config)).command, ["npm", "ci"]);
 });
 
+test("Yarn uses the locked-install flag supported by Classic and Modern", async (t) => {
+  const root = await directory(t);
+  const bin = path.join(root, "bin");
+  await fs.mkdir(bin);
+  const executable = path.join(bin, process.platform === "win32" ? "yarn.cmd" : "yarn");
+  await fs.writeFile(executable, process.platform === "win32" ? "@exit /B 0\r\n" : "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const previousPath = process.env["PATH"];
+  process.env["PATH"] = `${bin}${path.delimiter}${previousPath ?? ""}`;
+  t.after(() => {
+    if (previousPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = previousPath;
+  });
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    '{"name":"fixture","packageManager":"yarn@1.22.22"}\n',
+  );
+
+  const manager = await detectPackageManager(root, {
+    dependencyMode: "managed",
+    installCommand: null,
+  });
+  assert.deepEqual(manager.command, ["yarn", "install", "--frozen-lockfile"]);
+});
+
 test("auto-detection reports a declared package manager missing from PATH", async (t) => {
   const root = await directory(t);
   await fs.writeFile(

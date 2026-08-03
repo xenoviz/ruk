@@ -47,5 +47,8 @@ for (const workflow of workflows) {
   const content = await fs.readFile(`${root}/${workflow}`, "utf8");
   const mutableAction = content.match(/uses:\s+[^\s]+@(?![a-f0-9]{40}(?:\s|$))[^\s]+/i);
   if (mutableAction) throw new Error(`${workflow} uses an unpinned action: ${mutableAction[0]}`);
+  if (/delete-asset[^\r\n]*\|\|\s*true/.test(content)) {
+    throw new Error(`${workflow} ignores readiness-marker deletion failures`);
+  }
 }
 process.stdout.write("Validated repository protection and immutable workflow dependencies.\n");

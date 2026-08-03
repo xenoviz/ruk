@@ -36,7 +36,7 @@ test("directory lock removes abandoned stale locks", async (t) => {
   await fs.mkdir(lock, { recursive: true });
   await fs.writeFile(
     path.join(lock, "owner.json"),
-    JSON.stringify({ pid: 999_999_999, hostname: os.hostname(), token: "abandoned" }),
+    JSON.stringify({ pid: 999_999_999, hostname: os.hostname(), token: "abandoned", createdAt: oldDate() }),
   );
   const old = new Date(Date.now() - 10_000);
   await fs.utimes(lock, old, old);
@@ -47,3 +47,35 @@ test("directory lock removes abandoned stale locks", async (t) => {
   }, { staleMs: 1, timeoutMs: 1_000 });
   assert.equal(entered, true);
 });
+
+test("concurrent stale-lock recovery preserves serialization", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-stale-lock-race-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const lock = path.join(root, "state.lock");
+  await fs.mkdir(lock, { recursive: true });
+  await fs.writeFile(
+    path.join(lock, "owner.json"),
+    JSON.stringify({ pid: 999_999_999, hostname: os.hostname(), token: "abandoned", createdAt: oldDate() }),
+  );
+  const old = new Date(Date.now() - 10_000);
+  await fs.utimes(lock, old, old);
+
+  let active = 0;
+  let maximumActive = 0;
+  await Promise.all(
+    Array.from({ length: 8 }, () =>
+      withDirectoryLock(lock, async () => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active -= 1;
+      }, { staleMs: 1, timeoutMs: 2_000 }),
+    ),
+  );
+
+  assert.equal(maximumActive, 1);
+});
+
+function oldDate(): string {
+  return new Date(Date.now() - 10_000).toISOString();
+}

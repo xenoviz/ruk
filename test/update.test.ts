@@ -163,6 +163,37 @@ test("update discovery ignores a newer release until its readiness manifest exis
   assert.equal(result.latestVersion, "0.2.0");
 });
 
+test("update discovery falls back when a newer release has an invalid manifest", async () => {
+  const older = releaseFetch("0.2.0");
+  const newer = releaseFetch("0.3.0");
+  const newerResponse = await newer("https://api.github.com/repos/xenoviz/ruk/releases?per_page=10");
+  const newerReleases: unknown = await newerResponse.json();
+  assert.ok(Array.isArray(newerReleases));
+  const olderResponse = await older("https://api.github.com/repos/xenoviz/ruk/releases?per_page=10");
+  const olderReleases: unknown = await olderResponse.json();
+  assert.ok(Array.isArray(olderReleases));
+
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/releases?per_page=10")) {
+      return Response.json([...newerReleases, ...olderReleases]);
+    }
+    if (url.includes("/v0.3.0/ruk-release.json")) {
+      return Response.json({ schemaVersion: 999 });
+    }
+    return older(input, init);
+  };
+
+  const result = await updateRuk({
+    distribution: "package",
+    checkOnly: true,
+    reporter,
+    fetchImpl,
+    installer: "npm",
+  });
+  assert.equal(result.latestVersion, "0.2.0");
+});
+
 test("update discovery fails clearly when no completed release exists", async () => {
   const fetchImpl: typeof fetch = async () => Response.json([
     { tag_name: "v0.2.0", draft: false, prerelease: false, assets: [] },

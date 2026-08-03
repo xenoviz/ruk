@@ -111,7 +111,7 @@ export async function detectPackageManager(root: string, config: RukConfig): Pro
   if (name === "bun" || name === "pnpm") {
     command = [name, "install", "--frozen-lockfile"];
   } else if (name === "yarn") {
-    command = [name, "install", "--immutable"];
+    command = [name, "install", "--frozen-lockfile"];
   } else {
     command = [name, (await firstExisting(root, ["package-lock.json"])) ? "ci" : "install"];
   }

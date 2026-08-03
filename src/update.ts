@@ -147,6 +147,7 @@ async function latestReadyRelease(fetchImpl: Fetch): Promise<LatestRelease> {
   const response = await request(fetchImpl, RELEASES_API, "application/vnd.github+json");
   const value: unknown = await response.json();
   if (!Array.isArray(value)) throw new Error("GitHub returned an invalid release list");
+  let candidateError: unknown;
   for (const candidate of value) {
     if (!isRecord(candidate) || candidate["draft"] !== false || candidate["prerelease"] !== false) {
       continue;
@@ -158,18 +159,24 @@ async function latestReadyRelease(fetchImpl: Fetch): Promise<LatestRelease> {
       continue;
     }
     if (!release.assets.some((asset) => asset.name === "ruk-release.json")) continue;
-    const manifestAsset = releaseAsset(release, "ruk-release.json");
-    const manifestBytes = await download(fetchImpl, manifestAsset);
-    const manifest = parseManifest(
-      JSON.parse(new TextDecoder().decode(manifestBytes)) as unknown,
-      release.version,
-    );
-    for (const name of RELEASE_ASSET_NAMES) {
-      releaseAsset(release, name);
-      releaseAsset(release, `${name}.sha256`);
+    try {
+      const manifestAsset = releaseAsset(release, "ruk-release.json");
+      const manifestBytes = await download(fetchImpl, manifestAsset);
+      const manifest = parseManifest(
+        JSON.parse(new TextDecoder().decode(manifestBytes)) as unknown,
+        release.version,
+      );
+      for (const name of RELEASE_ASSET_NAMES) {
+        releaseAsset(release, name);
+        releaseAsset(release, `${name}.sha256`);
+      }
+      return { ...release, manifest };
+    } catch (error) {
+      candidateError = error;
+      continue;
     }
-    return { ...release, manifest };
   }
+  if (candidateError instanceof Error) throw candidateError;
   throw new Error("No completed Ruk release is available yet");
 }
 

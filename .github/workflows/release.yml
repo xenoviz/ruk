@@ -153,7 +153,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release delete-asset "$RELEASE_TAG" ruk-release.json --yes || true
+          EXISTING_ASSETS=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+          if grep -Fxq ruk-release.json <<<"$EXISTING_ASSETS"; then
+            gh release delete-asset "$RELEASE_TAG" ruk-release.json --yes
+          fi
           mapfile -d '' ASSETS < <(find artifacts -maxdepth 1 -type f ! -name ruk-release.json -print0 | sort -z)
           gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber
           gh release upload "$RELEASE_TAG" artifacts/ruk-release.json --clobber
