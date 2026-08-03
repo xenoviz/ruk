@@ -40,9 +40,42 @@ export interface TreeRecord {
   updatedAt: string;
 }
 
+export type WorkspaceLifecycle = "available" | "preparing" | "assigned" | "returning" | "failed";
+
+export interface AssignmentRecord {
+  id: string;
+  owner: string;
+  hostname: string;
+  assignedAt: string;
+  renewedAt: string;
+  expiresAt: string;
+}
+
+export interface TrackedProcessRecord {
+  pid: number;
+  groupId?: number;
+  command?: string[];
+  startedAt: string;
+}
+
+export interface WorkspaceRecord {
+  path: string;
+  managed: true;
+  branch: string;
+  lifecycle: WorkspaceLifecycle;
+  operationId: string | null;
+  assignment: AssignmentRecord | null;
+  processes: TrackedProcessRecord[];
+  createdAt: string;
+  updatedAt: string;
+  availableAt: string | null;
+  failure: string | null;
+}
+
 export interface RukState {
-  version: 1;
+  version: 2;
   trees: Record<string, TreeRecord>;
+  workspaces: Record<string, WorkspaceRecord>;
 }
 
 export interface StorePaths {
