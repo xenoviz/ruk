@@ -10,8 +10,8 @@ import { addWorktree, getRepository, listWorktrees, removeWorktree } from "./git
 import { run } from "./process.js";
 import { deleteTreeState, readState, storePaths, treeKey } from "./state.js";
 import type { CliIo, DependencyReporter } from "./types.js";
-import { formatUpdate, updateRuk } from "./update.js";
-import type { Distribution } from "./update.js";
+import { formatUpdate, parseUpdateInstaller, updateRuk } from "./update.js";
+import type { Distribution, UpdateInstaller } from "./update.js";
 import { VERSION } from "./version.js";
 
 const HELP = `Ruk — dependency-aware Git workspaces for parallel coding agents
@@ -24,7 +24,7 @@ Usage:
   ruk list [--json]
   ruk remove <path> [--force]
   ruk status [--json]
-  ruk update [--check] [--json]
+  ruk update [--check] [--via <npm|bun|pnpm|yarn>] [--json]
 
 Ruk uses safe managed installs by default. Set dependencyMode to "shared" in
 .rukrc.json only after validating the repository with its normal CI suite.
@@ -37,6 +37,7 @@ interface ParsedOptions {
   json?: boolean;
   force?: boolean;
   check?: boolean;
+  via?: string;
 }
 
 function parseOptions(
@@ -315,12 +316,22 @@ export async function main(argv: readonly string[], options: MainOptions = {}): 
     return 0;
   }
   if (command === "update") {
-    const { options: parsed, positional } = parseOptions(args, { flags: ["--check", "--json"] });
+    const { options: parsed, positional } = parseOptions(args, {
+      values: ["--via"],
+      flags: ["--check", "--json"],
+    });
     requirePositionals(positional, 0, "update does not accept positional arguments");
+    const installer: UpdateInstaller | undefined = parsed.via
+      ? parseUpdateInstaller(parsed.via)
+      : undefined;
+    if ((options.distribution ?? "package") === "standalone" && installer) {
+      throw new Error("--via is only valid for package-manager installations");
+    }
     const result = await updateRuk({
       distribution: options.distribution ?? "package",
       checkOnly: parsed.check ?? false,
       reporter: dependencyReporter(io, parsed.json ?? false),
+      ...(installer ? { installer } : {}),
     });
     io.stdout.write(parsed.json ? jsonLine(result) : formatUpdate(result));
     return 0;

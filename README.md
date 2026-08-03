@@ -95,14 +95,18 @@ Update Ruk without guessing how it was installed:
 ```bash
 ruk update --check
 ruk update
+ruk update --via pnpm
 ```
 
 Standalone executables select the matching operating-system, architecture, and
-Linux libc asset, download its published SHA-256 checksum, and replace the
-current executable atomically. A failed post-replacement version check rolls
+Linux libc asset, verify its manifest-pinned SHA-256 digest, and replace the
+current executable atomically. Published checksum files remain available for
+manual verification. A failed post-replacement version check rolls
 back on POSIX systems; Windows schedules replacement after the running process
 exits. npm, Bun, pnpm, and Yarn installations delegate the exact released
 version to their package manager rather than modifying managed files directly.
+Use `--via` when a custom global installation layout prevents reliable
+auto-detection; automation may set `RUK_UPDATE_INSTALLER` to the same values.
 Ruk never performs background update checks or downloads.
 
 ## Dependency modes
@@ -192,6 +196,9 @@ locking, state, or dependency behavior.
 - Releases verify tag/package parity, publish through npm trusted publishing
   with provenance, and attach seven standalone executables with SHA-256
   checksums and signed GitHub build-provenance attestations.
+- A release becomes visible to `ruk update` only after npm publication and all
+  binaries, checksums, and attestations succeed; `ruk-release.json` is uploaded
+  last. Later releases exercise a real previous-to-current Windows self-update.
 - `main` is governed by a checked-in ruleset requiring reviewed pull requests,
   code-owner approval, linear history, resolved discussions, and passing CI.
 

@@ -1,0 +1,92 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { run } from "../src/process.js";
+import { compareVersions } from "../src/release.js";
+import { isRecord } from "../src/types.js";
+import { VERSION } from "../src/version.js";
+
+function hasAsset(value: unknown, name: string): boolean {
+  return Array.isArray(value) && value.some(
+    (asset) => isRecord(asset) && asset["name"] === name,
+  );
+}
+
+const currentTag = process.env["RELEASE_TAG"];
+if (currentTag !== `v${VERSION}` && currentTag !== VERSION) {
+  throw new Error(`Release tag ${String(currentTag)} does not match ${VERSION}`);
+}
+const response = await run(
+  "gh",
+  ["api", "repos/xenoviz/ruk/releases?per_page=100"],
+);
+const releases: unknown = JSON.parse(response.stdout);
+if (!Array.isArray(releases)) throw new Error("GitHub returned invalid release metadata");
+const previous = releases.find((release) => {
+  if (
+    !isRecord(release) ||
+    release["draft"] !== false ||
+    release["prerelease"] !== false ||
+    typeof release["tag_name"] !== "string" ||
+    release["tag_name"] === currentTag
+  ) {
+    return false;
+  }
+  const version = release["tag_name"].replace(/^v/, "");
+  try {
+    return compareVersions(version, VERSION) < 0 &&
+      hasAsset(release["assets"], "ruk-release.json") &&
+      hasAsset(release["assets"], "ruk-windows-x64.exe");
+  } catch {
+    return false;
+  }
+});
+
+if (!isRecord(previous) || typeof previous["tag_name"] !== "string") {
+  process.stdout.write("No prior ready Windows release exists; the first release has no upgrade source.\n");
+  process.exit(0);
+}
+
+const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-release-update-"));
+try {
+  await run(
+    "gh",
+    [
+      "release",
+      "download",
+      previous["tag_name"],
+      "--repo",
+      "xenoviz/ruk",
+      "--pattern",
+      "ruk-windows-x64.exe",
+      "--dir",
+      temporary,
+    ],
+    { stdio: "inherit" },
+  );
+  const executable = path.join(temporary, "ruk-windows-x64.exe");
+  const before = await run(executable, ["--version"]);
+  if (compareVersions(before.stdout.trim(), VERSION) >= 0) {
+    throw new Error(`Expected an older executable, received ${before.stdout.trim()}`);
+  }
+  await run(executable, ["update"], { stdio: "inherit" });
+
+  const deadline = Date.now() + 60_000;
+  let verified = false;
+  while (Date.now() < deadline) {
+    try {
+      const after = await run(executable, ["--version"], { allowFailure: true });
+      if (after.code === 0 && after.stdout.trim() === VERSION) {
+        verified = true;
+        break;
+      }
+    } catch {
+      // The helper can briefly move the executable between polling attempts.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  if (!verified) throw new Error(`Windows executable did not update to ${VERSION} within 60 seconds`);
+  process.stdout.write(`Verified Windows self-update from ${before.stdout.trim()} to ${VERSION}.\n`);
+} finally {
+  await fs.rm(temporary, { recursive: true, force: true });
+}

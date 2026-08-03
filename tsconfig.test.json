@@ -9,6 +9,10 @@
     "sourceMap": true,
     "noEmitOnError": true
   },
-  "include": ["bin/**/*.ts", "src/**/*.ts", "test/**/*.ts"],
-  "exclude": ["scripts"]
+  "include": [
+    "bin/**/*.ts",
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "scripts/release-manifest.ts"
+  ]
 }

@@ -42,7 +42,6 @@ if (!checks.includes("Required checks")) throw new Error("Main must require the 
 const workflows = [
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
-  ".github/workflows/binaries.yml",
 ];
 for (const workflow of workflows) {
   const content = await fs.readFile(`${root}/${workflow}`, "utf8");

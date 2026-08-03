@@ -4,11 +4,16 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { StdioOptions } from "node:child_process";
 import { run } from "./process.js";
+import {
+  compareVersions,
+  RELEASE_ASSET_NAMES,
+  RUK_PACKAGE_NAME,
+} from "./release.js";
+import type { ReleaseManifest, ReleaseManifestAsset } from "./release.js";
 import { isRecord } from "./types.js";
 import { VERSION } from "./version.js";
 
-const RELEASE_API = "https://api.github.com/repos/xenoviz/ruk/releases/latest";
-const PACKAGE_NAME = "@xenoviz/ruk";
+const RELEASES_API = "https://api.github.com/repos/xenoviz/ruk/releases?per_page=10";
 const MAX_BINARY_BYTES = 250 * 1024 * 1024;
 
 type Fetch = typeof fetch;
@@ -22,9 +27,13 @@ interface ReleaseAsset {
   url: string;
 }
 
-interface LatestRelease {
+interface ReleaseCandidate {
   version: string;
   assets: ReleaseAsset[];
+}
+
+interface LatestRelease extends ReleaseCandidate {
+  manifest: ReleaseManifest;
 }
 
 export interface UpdateReporter {
@@ -60,52 +69,7 @@ function stableVersion(tag: string): string {
   return match[1]!;
 }
 
-interface ParsedVersion {
-  core: readonly [number, number, number];
-  prerelease: string[];
-}
-
-function versionParts(version: string): ParsedVersion {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(version);
-  if (!match) throw new Error(`Unsupported version ${version}`);
-  const core = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
-  if (!core.every(Number.isSafeInteger)) throw new Error(`Unsupported version ${version}`);
-  return { core, prerelease: match[4]?.split(".") ?? [] };
-}
-
-function comparePrerelease(left: readonly string[], right: readonly string[]): number {
-  if (left.length === 0 || right.length === 0) return left.length === right.length ? 0 : left.length === 0 ? 1 : -1;
-  const length = Math.max(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftPart = left[index];
-    const rightPart = right[index];
-    if (leftPart === undefined || rightPart === undefined) return leftPart === undefined ? -1 : 1;
-    if (leftPart === rightPart) continue;
-    const leftNumeric = /^\d+$/.test(leftPart);
-    const rightNumeric = /^\d+$/.test(rightPart);
-    if (leftNumeric && rightNumeric) {
-      const leftNumber = BigInt(leftPart);
-      const rightNumber = BigInt(rightPart);
-      if (leftNumber === rightNumber) continue;
-      return leftNumber < rightNumber ? -1 : 1;
-    }
-    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
-    return leftPart < rightPart ? -1 : 1;
-  }
-  return 0;
-}
-
-export function compareVersions(left: string, right: string): number {
-  const leftParts = versionParts(left);
-  const rightParts = versionParts(right);
-  for (let index = 0; index < leftParts.core.length; index += 1) {
-    const difference = leftParts.core[index]! - rightParts.core[index]!;
-    if (difference !== 0) return Math.sign(difference);
-  }
-  return comparePrerelease(leftParts.prerelease, rightParts.prerelease);
-}
-
-function parseRelease(value: unknown): LatestRelease {
+function parseRelease(value: unknown): ReleaseCandidate {
   if (!isRecord(value) || typeof value["tag_name"] !== "string" || !Array.isArray(value["assets"])) {
     throw new Error("GitHub returned invalid release metadata");
   }
@@ -134,9 +98,79 @@ async function request(fetchImpl: Fetch, url: string, accept: string): Promise<R
   return response;
 }
 
-async function latestRelease(fetchImpl: Fetch): Promise<LatestRelease> {
-  const response = await request(fetchImpl, RELEASE_API, "application/vnd.github+json");
-  return parseRelease(await response.json() as unknown);
+function parseManifest(value: unknown, version: string): ReleaseManifest {
+  if (
+    !isRecord(value) ||
+    value["schemaVersion"] !== 1 ||
+    value["repository"] !== "xenoviz/ruk" ||
+    value["version"] !== version ||
+    !isRecord(value["package"]) ||
+    value["package"]["name"] !== RUK_PACKAGE_NAME ||
+    value["package"]["version"] !== version ||
+    !isRecord(value["assets"])
+  ) {
+    throw new Error(`Release ${version} has an invalid readiness manifest`);
+  }
+  const assets: Record<string, ReleaseManifestAsset> = {};
+  const names = Object.keys(value["assets"]);
+  if (
+    names.length !== RELEASE_ASSET_NAMES.length ||
+    !RELEASE_ASSET_NAMES.every((name) => names.includes(name))
+  ) {
+    throw new Error(`Release ${version} readiness manifest has an invalid asset set`);
+  }
+  for (const name of RELEASE_ASSET_NAMES) {
+    const asset = value["assets"][name];
+    if (
+      !isRecord(asset) ||
+      typeof asset["sha256"] !== "string" ||
+      !/^[a-f0-9]{64}$/.test(asset["sha256"]) ||
+      typeof asset["size"] !== "number" ||
+      !Number.isSafeInteger(asset["size"]) ||
+      asset["size"] <= 0 ||
+      asset["size"] > MAX_BINARY_BYTES
+    ) {
+      throw new Error(`Release ${version} readiness manifest has invalid metadata for ${name}`);
+    }
+    assets[name] = { sha256: asset["sha256"], size: asset["size"] };
+  }
+  return {
+    schemaVersion: 1,
+    repository: "xenoviz/ruk",
+    version,
+    package: { name: RUK_PACKAGE_NAME, version },
+    assets,
+  };
+}
+
+async function latestReadyRelease(fetchImpl: Fetch): Promise<LatestRelease> {
+  const response = await request(fetchImpl, RELEASES_API, "application/vnd.github+json");
+  const value: unknown = await response.json();
+  if (!Array.isArray(value)) throw new Error("GitHub returned an invalid release list");
+  for (const candidate of value) {
+    if (!isRecord(candidate) || candidate["draft"] !== false || candidate["prerelease"] !== false) {
+      continue;
+    }
+    let release: ReleaseCandidate;
+    try {
+      release = parseRelease(candidate);
+    } catch {
+      continue;
+    }
+    if (!release.assets.some((asset) => asset.name === "ruk-release.json")) continue;
+    const manifestAsset = releaseAsset(release, "ruk-release.json");
+    const manifestBytes = await download(fetchImpl, manifestAsset);
+    const manifest = parseManifest(
+      JSON.parse(new TextDecoder().decode(manifestBytes)) as unknown,
+      release.version,
+    );
+    for (const name of RELEASE_ASSET_NAMES) {
+      releaseAsset(release, name);
+      releaseAsset(release, `${name}.sha256`);
+    }
+    return { ...release, manifest };
+  }
+  throw new Error("No completed Ruk release is available yet");
 }
 
 async function detectMusl(): Promise<boolean> {
@@ -169,7 +203,7 @@ export function executableAsset(
   throw new Error(`Standalone updates are not available for ${platform}/${architecture}${musl ? "/musl" : ""}`);
 }
 
-function releaseAsset(release: LatestRelease, name: string): ReleaseAsset {
+function releaseAsset(release: ReleaseCandidate, name: string): ReleaseAsset {
   const asset = release.assets.find((candidate) => candidate.name === name);
   if (!asset) throw new Error(`Release ${release.version} does not contain ${name}`);
   const url = new URL(asset.url);
@@ -190,15 +224,6 @@ function releaseAsset(release: LatestRelease, name: string): ReleaseAsset {
     throw new Error(`Release ${release.version} contains an untrusted URL for ${name}`);
   }
   return asset;
-}
-
-export function checksumFromFile(content: string, assetName: string): string {
-  for (const line of content.split(/\r?\n/)) {
-    const match = /^([a-fA-F0-9]{64})\s+\*?(.+)$/.exec(line.trim());
-    const filename = match?.[2]?.split(/[\\/]/).pop();
-    if (match && filename === assetName) return match[1]!.toLowerCase();
-  }
-  throw new Error(`Checksum file does not contain ${assetName}`);
 }
 
 async function download(fetchImpl: Fetch, asset: ReleaseAsset): Promise<Uint8Array> {
@@ -222,11 +247,16 @@ export function installerFromPath(entrypoint: string): UpdateInstaller {
   return "npm";
 }
 
+export function parseUpdateInstaller(value: string): UpdateInstaller {
+  if (value === "bun" || value === "npm" || value === "pnpm" || value === "yarn") return value;
+  throw new Error(`Unsupported update installer ${value}; expected bun, npm, pnpm, or yarn`);
+}
+
 export function installerCommand(
   version: string,
   installer: UpdateInstaller,
 ): { command: string; args: string[] } {
-  const specification = `${PACKAGE_NAME}@${version}`;
+  const specification = `${RUK_PACKAGE_NAME}@${version}`;
   if (installer === "bun") return { command: "bun", args: ["add", "--global", specification] };
   if (installer === "pnpm") return { command: "pnpm", args: ["add", "--global", specification] };
   if (installer === "yarn") return { command: "yarn", args: ["global", "add", specification] };
@@ -322,12 +352,12 @@ async function updateStandalone(
   const musl = options.musl ?? (platform === "linux" ? await detectMusl() : false);
   const assetName = executableAsset(platform, architecture, musl);
   const asset = releaseAsset(release, assetName);
-  const checksumAsset = releaseAsset(release, `${assetName}.sha256`);
-  const [binary, checksumBytes] = await Promise.all([
-    download(fetchImpl, asset),
-    download(fetchImpl, checksumAsset),
-  ]);
-  const expected = checksumFromFile(new TextDecoder().decode(checksumBytes), assetName);
+  const binary = await download(fetchImpl, asset);
+  const manifestAsset = release.manifest.assets[assetName];
+  if (!manifestAsset || binary.byteLength !== manifestAsset.size) {
+    throw new Error(`Release manifest size does not match ${assetName}`);
+  }
+  const expected = manifestAsset.sha256;
   const actual = crypto.createHash("sha256").update(binary).digest("hex");
   if (!crypto.timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"))) {
     throw new Error(`Checksum verification failed for ${assetName}`);
@@ -365,10 +395,17 @@ async function updateStandalone(
 export async function updateRuk(options: UpdateOptions): Promise<UpdateResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const runImpl = options.runImpl ?? run;
-  const release = await latestRelease(fetchImpl);
+  const environmentInstaller = options.distribution === "package"
+    ? process.env["RUK_UPDATE_INSTALLER"]
+    : undefined;
+  const installer = options.installer ??
+    (environmentInstaller ? parseUpdateInstaller(environmentInstaller) : null) ??
+    installerFromPath(options.entrypoint ?? process.argv[1] ?? "");
   const platform = options.platform ?? process.platform;
-  const musl = options.musl ?? (platform === "linux" ? await detectMusl() : false);
-  const installer = options.installer ?? installerFromPath(options.entrypoint ?? process.argv[1] ?? "");
+  const musl = options.distribution === "standalone"
+    ? options.musl ?? (platform === "linux" ? await detectMusl() : false)
+    : false;
+  const release = await latestReadyRelease(fetchImpl);
   const method: Distribution | UpdateInstaller = options.distribution === "standalone" ? "standalone" : installer;
   const asset = options.distribution === "standalone"
     ? executableAsset(platform, options.architecture ?? process.arch, musl)

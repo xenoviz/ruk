@@ -5,12 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { run } from "../src/process.js";
+import { checksumFromFile } from "../scripts/release-manifest.js";
+import { compareVersions, RELEASE_ASSET_NAMES } from "../src/release.js";
 import {
-  checksumFromFile,
-  compareVersions,
   executableAsset,
   installerCommand,
   installerFromPath,
+  parseUpdateInstaller,
   updateRuk,
   windowsReplacementPlan,
 } from "../src/update.js";
@@ -20,24 +21,49 @@ const reporter = { write: () => {}, stdio: "ignore" as const };
 function releaseFetch(
   version: string,
   binary?: Uint8Array,
-  checksum?: string,
   assetName = "ruk-linux-x64",
+  assetUrl?: string,
+  manifestDigest?: string,
 ): typeof fetch {
+  const digest = manifestDigest ?? (binary
+    ? crypto.createHash("sha256").update(binary).digest("hex")
+    : "0".repeat(64));
+  const manifest = {
+    schemaVersion: 1,
+    repository: "xenoviz/ruk",
+    version,
+    package: { name: "@xenoviz/ruk", version },
+    assets: Object.fromEntries(
+      RELEASE_ASSET_NAMES.map((name) => [
+        name,
+        { sha256: name === assetName ? digest : "0".repeat(64), size: name === assetName && binary ? binary.byteLength : 1 },
+      ]),
+    ),
+  };
+  const assets = [
+    ...RELEASE_ASSET_NAMES.flatMap((name) => [
+      {
+        name,
+        browser_download_url: name === assetName && assetUrl
+          ? assetUrl
+          : `https://github.com/xenoviz/ruk/releases/download/v${version}/${name}`,
+      },
+      {
+        name: `${name}.sha256`,
+        browser_download_url: `https://github.com/xenoviz/ruk/releases/download/v${version}/${name}.sha256`,
+      },
+    ]),
+    {
+      name: "ruk-release.json",
+      browser_download_url: `https://github.com/xenoviz/ruk/releases/download/v${version}/ruk-release.json`,
+    },
+  ];
   return async (input) => {
     const url = String(input);
-    if (url.endsWith("/releases/latest")) {
-      const assets = binary
-        ? [
-            { name: assetName, browser_download_url: `https://github.com/xenoviz/ruk/releases/download/v${version}/${assetName}` },
-            {
-              name: `${assetName}.sha256`,
-              browser_download_url: `https://github.com/xenoviz/ruk/releases/download/v${version}/${assetName}.sha256`,
-            },
-          ]
-        : [];
-      return Response.json({ tag_name: `v${version}`, assets });
+    if (url.endsWith("/releases?per_page=10")) {
+      return Response.json([{ tag_name: `v${version}`, draft: false, prerelease: false, assets }]);
     }
-    if (url.endsWith(".sha256")) return new Response(checksum);
+    if (url.endsWith("ruk-release.json")) return Response.json(manifest);
     if (url.endsWith(assetName)) return new Response(binary);
     return new Response("not found", { status: 404 });
   };
@@ -67,6 +93,8 @@ test("version, target, checksum, and installer selection are deterministic", () 
   assert.equal(installerFromPath("C:\\Users\\me\\AppData\\Local\\pnpm\\global\\5\\node_modules\\.pnpm\\ruk"), "pnpm");
   assert.equal(installerFromPath("/home/me/.config/yarn/global/node_modules/@xenoviz/ruk/dist/bin/ruk.js"), "yarn");
   assert.equal(installerFromPath("/usr/local/lib/node_modules/@xenoviz/ruk/dist/bin/ruk.js"), "npm");
+  assert.equal(parseUpdateInstaller("bun"), "bun");
+  assert.throws(() => parseUpdateInstaller("corepack"), /Unsupported update installer/);
   const plan = windowsReplacementPlan("C:\\Program Files\\Ruk\\ruk.exe", "C:\\Program Files\\Ruk\\ruk.new", "1.2.3", 42);
   assert.match(plan.script, /PID eq 42/);
   assert.match(plan.script, /ruk\.exe" --version \| findstr \/X "1\.2\.3"/);
@@ -86,6 +114,7 @@ test("package updates delegate an exact version to the selected package manager"
     reporter,
     fetchImpl: releaseFetch("0.2.0"),
     runImpl,
+    entrypoint: "/home/me/.bun/install/global/node_modules/@xenoviz/ruk/dist/bin/ruk.js",
     installer: "pnpm",
   });
   assert.equal(result.status, "updated");
@@ -110,25 +139,54 @@ test("check-only reports an update without invoking an installer", async () => {
   assert.equal(result.status, "update-available");
 });
 
-test("standalone updates reject assets outside the canonical release path", async () => {
-  const fetchImpl: typeof fetch = async (input) => {
-    if (String(input).endsWith("/releases/latest")) {
-      return Response.json({
-        tag_name: "v0.2.0",
-        assets: [
-          { name: "ruk-linux-x64", browser_download_url: "https://example.com/ruk-linux-x64" },
-          { name: "ruk-linux-x64.sha256", browser_download_url: "https://example.com/ruk-linux-x64.sha256" },
-        ],
-      });
+test("update discovery ignores a newer release until its readiness manifest exists", async () => {
+  const ready = releaseFetch("0.2.0");
+  const fetchImpl: typeof fetch = async (input, init) => {
+    if (String(input).endsWith("/releases?per_page=10")) {
+      const response = await ready(input, init);
+      const releases: unknown = await response.json();
+      assert.ok(Array.isArray(releases));
+      return Response.json([
+        { tag_name: "v0.3.0", draft: false, prerelease: false, assets: [] },
+        ...releases,
+      ]);
     }
-    throw new Error("untrusted asset must not be downloaded");
+    return ready(input, init);
   };
+  const result = await updateRuk({
+    distribution: "package",
+    checkOnly: true,
+    reporter,
+    fetchImpl,
+    installer: "npm",
+  });
+  assert.equal(result.latestVersion, "0.2.0");
+});
+
+test("update discovery fails clearly when no completed release exists", async () => {
+  const fetchImpl: typeof fetch = async () => Response.json([
+    { tag_name: "v0.2.0", draft: false, prerelease: false, assets: [] },
+  ]);
+  await assert.rejects(
+    updateRuk({
+      distribution: "package",
+      checkOnly: true,
+      reporter,
+      fetchImpl,
+      installer: "npm",
+    }),
+    /No completed Ruk release is available yet/,
+  );
+});
+
+test("standalone updates reject assets outside the canonical release path", async () => {
+  const binary = new TextEncoder().encode("untrusted");
   await assert.rejects(
     updateRuk({
       distribution: "standalone",
       checkOnly: false,
       reporter,
-      fetchImpl,
+      fetchImpl: releaseFetch("0.2.0", binary, "ruk-linux-x64", "https://example.com/ruk-linux-x64"),
       platform: "linux",
       architecture: "x64",
       musl: false,
@@ -144,13 +202,12 @@ test("Windows standalone updates defer replacement until process exit", async (t
   const executable = path.join(temporary, "ruk.exe");
   await fs.writeFile(executable, "current");
   const binary = new TextEncoder().encode("replacement");
-  const digest = crypto.createHash("sha256").update(binary).digest("hex");
   const scheduled: Array<{ executable: string; candidate: string; version: string }> = [];
   const result = await updateRuk({
     distribution: "standalone",
     checkOnly: false,
     reporter,
-    fetchImpl: releaseFetch("0.2.0", binary, `${digest}  ruk-windows-x64.exe\n`, "ruk-windows-x64.exe"),
+    fetchImpl: releaseFetch("0.2.0", binary, "ruk-windows-x64.exe"),
     platform: "win32",
     architecture: "x64",
     executable,
@@ -172,12 +229,11 @@ test("standalone update verifies and atomically replaces the executable", async 
   const executable = path.join(temporary, "ruk");
   await fs.writeFile(executable, "#!/bin/sh\necho 0.1.0\n", { mode: 0o755 });
   const binary = new TextEncoder().encode("#!/bin/sh\necho 0.2.0\n");
-  const digest = crypto.createHash("sha256").update(binary).digest("hex");
   const result = await updateRuk({
     distribution: "standalone",
     checkOnly: false,
     reporter,
-    fetchImpl: releaseFetch("0.2.0", binary, `${digest}  ruk-linux-x64\n`),
+    fetchImpl: releaseFetch("0.2.0", binary),
     platform: "linux",
     architecture: "x64",
     musl: false,
@@ -201,7 +257,7 @@ test("checksum failure and failed verification preserve the current executable",
       distribution: "standalone",
       checkOnly: false,
       reporter,
-      fetchImpl: releaseFetch("0.2.0", invalid, `${"0".repeat(64)}  ruk-linux-x64\n`),
+      fetchImpl: releaseFetch("0.2.0", invalid, "ruk-linux-x64", undefined, "0".repeat(64)),
       platform: "linux",
       architecture: "x64",
       musl: false,
@@ -212,13 +268,12 @@ test("checksum failure and failed verification preserve the current executable",
   assert.equal(await fs.readFile(executable, "utf8"), original);
 
   const wrongVersion = new TextEncoder().encode("#!/bin/sh\necho 9.9.9\n");
-  const digest = crypto.createHash("sha256").update(wrongVersion).digest("hex");
   await assert.rejects(
     updateRuk({
       distribution: "standalone",
       checkOnly: false,
       reporter,
-      fetchImpl: releaseFetch("0.2.0", wrongVersion, `${digest}  ruk-linux-x64\n`),
+      fetchImpl: releaseFetch("0.2.0", wrongVersion),
       platform: "linux",
       architecture: "x64",
       musl: false,

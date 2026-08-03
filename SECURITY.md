@@ -26,3 +26,8 @@ size limits, and SHA-256 integrity before replacement. Release CI also records
 signed GitHub build provenance. A checksum establishes that a download matches
 the release asset; users requiring publisher verification should additionally
 verify the GitHub attestation before installing a binary.
+
+The updater ignores releases without a valid `ruk-release.json` readiness
+manifest. That manifest is published only after the npm package and every
+attested executable are complete, preventing partially published releases from
+being selected.

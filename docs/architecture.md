@@ -21,8 +21,15 @@ that only starts or prints its version is not considered verified.
 Self-update is an explicit operation; ordinary commands never contact GitHub.
 The package distribution delegates an exact version to the package manager that
 owns the installation. Standalone builds download only release assets from the
-canonical repository, enforce a size limit, verify the matching SHA-256 file,
-and replace the executable through a same-directory staged file.
+canonical repository, enforce a size limit, verify the SHA-256 digest committed
+by the readiness manifest, and replace the executable through a same-directory
+staged file.
+
+GitHub release visibility is not update readiness. The release workflow first
+publishes npm and builds and attests all executable assets. A final job verifies
+the staged checksums, uploads the assets, and uploads `ruk-release.json` last.
+Update discovery considers only stable releases with a valid readiness manifest
+and falls back to the previous ready release while publication is incomplete.
 
 POSIX replacement retains a rollback copy until the new executable reports the
 expected version. Windows defers replacement to a detached operating-system
@@ -31,9 +38,16 @@ GitHub build-provenance attestations in addition to checksums. Checksums protect
 download integrity; provenance provides an independently verifiable record of
 which repository workflow produced an executable.
 
+Path-based package-manager detection is a convenience, not an authority. Users
+can select npm, Bun, pnpm, or Yarn explicitly with `--via` or
+`RUK_UPDATE_INSTALLER`. Starting with the second ready release, release CI
+downloads the prior Windows executable, runs its updater against the newly
+finalized release, and verifies the executable version after deferred
+replacement.
+
 ## Boundaries
 
-Ruk has four deliberately separate concerns:
+Ruk has five deliberately separate concerns:
 
 1. `git.js` discovers repositories and performs Git worktree operations.
 2. `fingerprint.js` identifies dependency inputs without interpreting source.
