@@ -13,6 +13,7 @@ const MAX_BINARY_BYTES = 250 * 1024 * 1024;
 
 type Fetch = typeof fetch;
 type Run = typeof run;
+type ScheduleWindows = (executable: string, candidate: string, expectedVersion: string) => Promise<void>;
 export type Distribution = "package" | "standalone";
 export type UpdateInstaller = "bun" | "npm" | "pnpm" | "yarn";
 
@@ -42,6 +43,7 @@ export interface UpdateOptions {
   executable?: string;
   entrypoint?: string;
   installer?: UpdateInstaller;
+  scheduleWindowsImpl?: ScheduleWindows;
 }
 
 export interface UpdateResult {
@@ -236,20 +238,21 @@ function quoteBatch(value: string): string {
   return `"${value}"`;
 }
 
-async function scheduleWindowsReplacement(
+export function windowsReplacementPlan(
   executable: string,
   candidate: string,
   expectedVersion: string,
-): Promise<void> {
+  pid = process.pid,
+): { helper: string; script: string } {
   const helper = `${candidate}.cmd`;
-  const backup = `${executable}.ruk-backup-${process.pid}`;
+  const backup = `${executable}.ruk-backup-${pid}`;
   const executableQuoted = quoteBatch(executable);
   const candidateQuoted = quoteBatch(candidate);
   const backupQuoted = quoteBatch(backup);
   const helperQuoted = quoteBatch(helper);
   const script = `@echo off\r\n` +
     `:wait\r\n` +
-    `tasklist /FI "PID eq ${process.pid}" 2>NUL | find "${process.pid}" >NUL\r\n` +
+    `tasklist /FI "PID eq ${pid}" 2>NUL | find "${pid}" >NUL\r\n` +
     `if not errorlevel 1 (ping 127.0.0.1 -n 2 >NUL & goto wait)\r\n` +
     `copy /Y ${executableQuoted} ${backupQuoted} >NUL || goto fail\r\n` +
     `move /Y ${candidateQuoted} ${executableQuoted} >NUL || goto rollback\r\n` +
@@ -263,6 +266,15 @@ async function scheduleWindowsReplacement(
     `del /Q ${candidateQuoted} >NUL 2>NUL\r\n` +
     `del /Q ${helperQuoted} >NUL 2>NUL\r\n` +
     `exit /B 1\r\n`;
+  return { helper, script };
+}
+
+async function scheduleWindowsReplacement(
+  executable: string,
+  candidate: string,
+  expectedVersion: string,
+): Promise<void> {
+  const { helper, script } = windowsReplacementPlan(executable, candidate, expectedVersion);
   await fs.writeFile(helper, script, { mode: 0o700 });
   const child = spawn("cmd.exe", ["/d", "/s", "/c", helper], {
     detached: true,
@@ -326,7 +338,8 @@ async function updateStandalone(
   await fs.writeFile(candidate, binary, { flag: "wx", mode: 0o755 });
   try {
     if (platform === "win32") {
-      await scheduleWindowsReplacement(executable, candidate, release.version);
+      const schedule = options.scheduleWindowsImpl ?? scheduleWindowsReplacement;
+      await schedule(executable, candidate, release.version);
       return {
         status: "scheduled",
         currentVersion: VERSION,

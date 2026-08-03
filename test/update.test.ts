@@ -12,30 +12,33 @@ import {
   installerCommand,
   installerFromPath,
   updateRuk,
+  windowsReplacementPlan,
 } from "../src/update.js";
 
 const reporter = { write: () => {}, stdio: "ignore" as const };
 
-function releaseFetch(version: string, binary?: Uint8Array, checksum?: string): typeof fetch {
+function releaseFetch(
+  version: string,
+  binary?: Uint8Array,
+  checksum?: string,
+  assetName = "ruk-linux-x64",
+): typeof fetch {
   return async (input) => {
     const url = String(input);
     if (url.endsWith("/releases/latest")) {
       const assets = binary
         ? [
+            { name: assetName, browser_download_url: `https://github.com/xenoviz/ruk/releases/download/v${version}/${assetName}` },
             {
-              name: "ruk-linux-x64",
-              browser_download_url: `https://github.com/xenoviz/ruk/releases/download/v${version}/ruk-linux-x64`,
-            },
-            {
-              name: "ruk-linux-x64.sha256",
-              browser_download_url: `https://github.com/xenoviz/ruk/releases/download/v${version}/ruk-linux-x64.sha256`,
+              name: `${assetName}.sha256`,
+              browser_download_url: `https://github.com/xenoviz/ruk/releases/download/v${version}/${assetName}.sha256`,
             },
           ]
         : [];
       return Response.json({ tag_name: `v${version}`, assets });
     }
     if (url.endsWith(".sha256")) return new Response(checksum);
-    if (url.endsWith("ruk-linux-x64")) return new Response(binary);
+    if (url.endsWith(assetName)) return new Response(binary);
     return new Response("not found", { status: 404 });
   };
 }
@@ -64,6 +67,11 @@ test("version, target, checksum, and installer selection are deterministic", () 
   assert.equal(installerFromPath("C:\\Users\\me\\AppData\\Local\\pnpm\\global\\5\\node_modules\\.pnpm\\ruk"), "pnpm");
   assert.equal(installerFromPath("/home/me/.config/yarn/global/node_modules/@xenoviz/ruk/dist/bin/ruk.js"), "yarn");
   assert.equal(installerFromPath("/usr/local/lib/node_modules/@xenoviz/ruk/dist/bin/ruk.js"), "npm");
+  const plan = windowsReplacementPlan("C:\\Program Files\\Ruk\\ruk.exe", "C:\\Program Files\\Ruk\\ruk.new", "1.2.3", 42);
+  assert.match(plan.script, /PID eq 42/);
+  assert.match(plan.script, /ruk\.exe" --version \| findstr \/X "1\.2\.3"/);
+  assert.match(plan.script, /:rollback/);
+  assert.equal(plan.helper, "C:\\Program Files\\Ruk\\ruk.new.cmd");
 });
 
 test("package updates delegate an exact version to the selected package manager", async () => {
@@ -128,6 +136,33 @@ test("standalone updates reject assets outside the canonical release path", asyn
     }),
     /untrusted URL/,
   );
+});
+
+test("Windows standalone updates defer replacement until process exit", async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-update-windows-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const executable = path.join(temporary, "ruk.exe");
+  await fs.writeFile(executable, "current");
+  const binary = new TextEncoder().encode("replacement");
+  const digest = crypto.createHash("sha256").update(binary).digest("hex");
+  const scheduled: Array<{ executable: string; candidate: string; version: string }> = [];
+  const result = await updateRuk({
+    distribution: "standalone",
+    checkOnly: false,
+    reporter,
+    fetchImpl: releaseFetch("0.2.0", binary, `${digest}  ruk-windows-x64.exe\n`, "ruk-windows-x64.exe"),
+    platform: "win32",
+    architecture: "x64",
+    executable,
+    scheduleWindowsImpl: async (target, candidate, version) => {
+      scheduled.push({ executable: target, candidate, version });
+      assert.deepEqual(new Uint8Array(await fs.readFile(candidate)), binary);
+    },
+  });
+  assert.equal(result.status, "scheduled");
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0]?.executable, executable);
+  assert.equal(scheduled[0]?.version, "0.2.0");
 });
 
 test("standalone update verifies and atomically replaces the executable", async (t) => {
