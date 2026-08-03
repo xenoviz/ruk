@@ -21,15 +21,17 @@ inputs are fingerprinted so a prepared workspace can skip unchanged installs.
 Ruk is an early release with a deliberately small, tested surface:
 
 - create, inspect, run commands in, and remove Git worktrees;
+- acquire, renew, release, and reuse fenced agent workspace assignments;
+- track commands launched by `ruk run` and safely collect recorded workspaces;
 - fingerprint root and workspace manifests, lockfiles, package-manager config,
   patches, runtime, platform, architecture, and install strategy;
 - serialize preparation of the same workspace;
 - use managed installs safely by default;
 - opt into Bun or pnpm global-store projections after repository validation.
 
-Reusable workspace pooling, assignment IDs, process cleanup, runtime namespace
-allocation, and snapshot garbage collection are planned. The current CLI does
-not claim those guarantees yet.
+Lifecycle coordination is local to one host. Runtime namespace allocation is
+not provided. Garbage collection acts only on Ruk-managed records; it does not
+discover or remove arbitrary orphan worktrees or processes.
 
 ## Requirements
 
@@ -57,6 +59,20 @@ Bun installed to run Ruk. Checksums are published beside every executable, and
 GitHub records signed build-provenance attestations for the release binaries.
 
 ## Usage
+
+Acquire a workspace for an agent and retain both values from its JSON output:
+
+```bash
+ruk acquire agent/auth-flow --owner agent-17 --json
+cd <returned-path>
+ruk run -- bun test
+ruk renew <returned-assignmentId> --json
+ruk release <returned-assignmentId> --json
+```
+
+The assignment ID is a fencing token, so renew and release must use the exact
+value returned by acquire. See the [agent JSON contract](./docs/agent-interface.md)
+and [workspace lifecycle design](./docs/plans/2026-08-03-workspace-lifecycle-design.md).
 
 Prepare the current workspace:
 

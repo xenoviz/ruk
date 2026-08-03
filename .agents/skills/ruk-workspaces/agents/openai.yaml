@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ruk Workspaces"
+  short_description: "Manage agent workspaces safely with Ruk"
+  default_prompt: "Use $ruk-workspaces to acquire, operate, renew, and release a Ruk agent workspace."

@@ -82,17 +82,22 @@ State is an optimization, not source of truth. Git and the dependency
 fingerprint remain authoritative. Invalid state fails visibly rather than being
 silently replaced.
 
-## Planned workspace lifecycle
+## Workspace lifecycle
 
-The next lifecycle layer will introduce reusable workspace pooling without
-using rental-oriented terminology:
+Ruk manages reusable agent workspaces with this lifecycle:
 
 ```text
-available -> preparing -> assigned -> returning -> available
-                         \-> failed
+absent -> preparing -> assigned -> returning -> available
+             |           ^                        |
+             v           +------------------------+
+           failed
 ```
 
-Each assignment will have an immutable assignment ID so delayed automation
-cannot return a workspace that has since been reassigned. That work must also
-include process ownership, crash recovery, port/runtime namespaces, and safe
-garbage collection; those guarantees should not be added piecemeal.
+Each assignment has an immutable assignment ID so delayed automation cannot
+return a workspace that has since been reassigned. Leases expire for reporting;
+reclaiming expired assignments requires an explicit forced GC operation.
+Process cleanup is limited to children recorded through `ruk run` for the
+assignment.
+
+See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
+for transitions, fencing, GC boundaries, and non-goals.
