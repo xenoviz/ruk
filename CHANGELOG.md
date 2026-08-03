@@ -17,6 +17,6 @@ versioning.
   with SHA-256 checksums.
 - Add explicit self-update checks, package-manager delegation, verified atomic
   executable replacement, rollback protection, and signed build provenance.
-- Add an explicit update-installer override, manifest-gated release readiness,
-  one coordinated release workflow, and real Windows release-upgrade smoke
-  validation.
+- Add an advanced update-installer environment override, manifest-gated release
+  readiness, one coordinated release workflow, and real Windows
+  release-upgrade smoke validation.

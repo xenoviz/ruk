@@ -85,7 +85,7 @@ test("CLI exposes stable help, version, JSON, and argument errors", async (t) =>
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const help = await run(process.execPath, [cli, "--help"], { cwd: parent });
   assert.match(help.stdout, /^Ruk —/);
-  assert.match(help.stdout, /ruk update \[--check\] \[--via/);
+  assert.match(help.stdout, /ruk update \[--check\] \[--json\]/);
   const version = await run(process.execPath, [cli, "--version"], { cwd: parent });
   assert.match(version.stdout, /^0\.1\.0\n$/);
 
@@ -96,10 +96,10 @@ test("CLI exposes stable help, version, JSON, and argument errors", async (t) =>
   assert.equal(invalid.code, 1);
   assert.match(invalid.stderr, /exactly one branch name/);
 
-  const invalidInstaller = await run(process.execPath, [cli, "update", "--via", "corepack"], {
+  const removedViaOption = await run(process.execPath, [cli, "update", "--via", "pnpm"], {
     cwd: parent,
     allowFailure: true,
   });
-  assert.equal(invalidInstaller.code, 1);
-  assert.match(invalidInstaller.stderr, /Unsupported update installer corepack/);
+  assert.equal(removedViaOption.code, 1);
+  assert.match(removedViaOption.stderr, /Unknown option --via/);
 });

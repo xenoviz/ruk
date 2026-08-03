@@ -39,7 +39,7 @@ download integrity; provenance provides an independently verifiable record of
 which repository workflow produced an executable.
 
 Path-based package-manager detection is a convenience, not an authority. Users
-can select npm, Bun, pnpm, or Yarn explicitly with `--via` or
+can override it for unusual installation layouts or automation with
 `RUK_UPDATE_INSTALLER`. Starting with the second ready release, release CI
 downloads the prior Windows executable, runs its updater against the newly
 finalized release, and verifies the executable version after deferred

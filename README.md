@@ -95,7 +95,6 @@ Update Ruk without guessing how it was installed:
 ```bash
 ruk update --check
 ruk update
-ruk update --via pnpm
 ```
 
 Standalone executables select the matching operating-system, architecture, and
@@ -105,9 +104,11 @@ manual verification. A failed post-replacement version check rolls
 back on POSIX systems; Windows schedules replacement after the running process
 exits. npm, Bun, pnpm, and Yarn installations delegate the exact released
 version to their package manager rather than modifying managed files directly.
-Use `--via` when a custom global installation layout prevents reliable
-auto-detection; automation may set `RUK_UPDATE_INSTALLER` to the same values.
 Ruk never performs background update checks or downloads.
+
+For unusual global installation layouts or automation, set
+`RUK_UPDATE_INSTALLER` to `npm`, `bun`, `pnpm`, or `yarn` to override automatic
+detection.
 
 ## Dependency modes
 
