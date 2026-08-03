@@ -1,0 +1,63 @@
+{
+  "name": "@xenoviz/ruk",
+  "version": "0.1.0",
+  "description": "Dependency-aware Git workspaces for parallel coding agents",
+  "type": "module",
+  "bin": {
+    "ruk": "dist/bin/ruk.js"
+  },
+  "scripts": {
+    "build": "bun scripts/clean.ts dist && tsc -p tsconfig.build.json && bun scripts/finalize-build.ts",
+    "build:test": "bun scripts/clean.ts .test-dist && tsc -p tsconfig.test.json",
+    "check": "bun run typecheck && bun run check:package && bun run check:repository-policy",
+    "check:package": "bun scripts/verify-package.ts",
+    "check:repository-policy": "bun scripts/verify-repository-policy.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun run test:node",
+    "test:node": "bun run build:test && bun scripts/run-node-tests.ts",
+    "test:coverage": "bun run build:test && bun scripts/run-node-tests.ts --coverage",
+    "binary:build": "bun scripts/build-binary.ts",
+    "binary:check": "bun scripts/verify-binary.ts",
+    "binary:cross-check": "bun scripts/verify-cross-binaries.ts",
+    "pack:check": "bun run build && bun scripts/verify-pack.ts",
+    "repo:protect": "bun scripts/configure-repository.ts --apply",
+    "prepack": "bun run build"
+  },
+  "engines": {
+    "bun": ">=1.3.14",
+    "node": ">=22.14"
+  },
+  "packageManager": "bun@1.3.14",
+  "files": [
+    "dist/bin/ruk.js",
+    "dist/src",
+    "README.md",
+    "BENCHMARK.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "git",
+    "worktree",
+    "monorepo",
+    "agents",
+    "bun",
+    "pnpm"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xenoviz/ruk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xenoviz/ruk/issues"
+  },
+  "homepage": "https://github.com/xenoviz/ruk#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "7.0.2"
+  }
+}
