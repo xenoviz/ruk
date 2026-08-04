@@ -224,8 +224,6 @@ locking, state, or dependency behavior.
 - `main` is governed by a checked-in ruleset requiring reviewed pull requests,
   code-owner approval, linear history, resolved discussions, and passing CI.
 
-Report vulnerabilities according to [SECURITY.md](./SECURITY.md).
-
 ## License
 
 MIT © Xenoviz

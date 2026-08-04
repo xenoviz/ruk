@@ -45,7 +45,6 @@ if (
 if (pkg["packageManager"] !== "bun@1.3.14") throw new Error("packageManager must pin Bun 1.3.14");
 for (const file of [
   "README.md",
-  "SECURITY.md",
   "LICENSE",
   "bin/ruk.ts",
   "bin/ruk-standalone.ts",
