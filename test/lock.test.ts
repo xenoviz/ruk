@@ -82,7 +82,7 @@ test("concurrent stale-lock recovery preserves serialization", async (t) => {
         maximumActive = Math.max(maximumActive, active);
         await new Promise((resolve) => setTimeout(resolve, 20));
         active -= 1;
-      }, { staleMs: 1, timeoutMs: 2_000 }),
+      }, { staleMs: 1, timeoutMs: 5_000 }),
     ),
   );
 

@@ -2,6 +2,8 @@ node_modules/
 coverage/
 dist/
 .test-dist/
+website/.vitepress/cache/
+website/.vitepress/dist/
 artifacts/
 *.tgz
 .DS_Store

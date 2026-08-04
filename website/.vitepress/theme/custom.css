@@ -1,0 +1,113 @@
+:root {
+  --vp-c-brand-1: #176b47;
+  --vp-c-brand-2: #145a3d;
+  --vp-c-brand-3: #104a33;
+  --vp-c-brand-soft: rgba(23, 107, 71, 0.14);
+  --vp-c-bg: #fbfaf5;
+  --vp-c-bg-alt: #f3f1e8;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-bg-soft: #f0eee5;
+  --vp-c-divider: rgba(31, 58, 46, 0.16);
+  --vp-c-gutter: rgba(31, 58, 46, 0.1);
+  --vp-c-text-1: #173228;
+  --vp-c-text-2: #496057;
+  --vp-c-text-3: #687a72;
+  --vp-code-color: #145a3d;
+  --vp-home-hero-name-color: var(--vp-c-brand-1);
+  --vp-font-family-base: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --vp-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.dark {
+  --vp-c-brand-1: #73d4a5;
+  --vp-c-brand-2: #54b98a;
+  --vp-c-brand-3: #3d9f73;
+  --vp-c-brand-soft: rgba(115, 212, 165, 0.14);
+  --vp-c-bg: #0d1914;
+  --vp-c-bg-alt: #12231b;
+  --vp-c-bg-elv: #172a21;
+  --vp-c-bg-soft: #16271f;
+  --vp-c-divider: rgba(184, 225, 204, 0.15);
+  --vp-c-gutter: rgba(184, 225, 204, 0.08);
+  --vp-c-text-1: #e3f2ea;
+  --vp-c-text-2: #acc5b8;
+  --vp-c-text-3: #829d8f;
+  --vp-code-color: #87ddb3;
+}
+
+.VPNavBarTitle .title::after {
+  content: "රුක්";
+  margin-left: 0.55rem;
+  color: var(--vp-c-brand-1);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.VPHero .name,
+.VPHero .text {
+  letter-spacing: -0.035em;
+}
+
+.VPHero .tagline {
+  max-width: 38rem;
+}
+
+.VPHero .actions .VPButton.brand {
+  border-color: var(--vp-c-brand-1);
+  background: var(--vp-c-brand-1);
+}
+
+.VPHero .actions .VPButton.brand:hover {
+  border-color: var(--vp-c-brand-2);
+  background: var(--vp-c-brand-2);
+}
+
+.dark .VPHero .actions .VPButton.brand {
+  border-color: #176b47;
+  background: #176b47;
+  color: #ffffff;
+}
+
+.dark .VPHero .actions .VPButton.brand:hover {
+  border-color: #145a3d;
+  background: #145a3d;
+}
+
+.DocSearch-Button-Keys {
+  display: none !important;
+}
+
+.VPFeature {
+  border-color: var(--vp-c-divider) !important;
+  background: var(--vp-c-bg-soft) !important;
+}
+
+.VPFeature:hover {
+  border-color: var(--vp-c-brand-1) !important;
+}
+
+.vp-doc h2 {
+  border-top-color: var(--vp-c-divider);
+}
+
+.vp-doc div[class*="language-"] {
+  border: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc .custom-block.danger {
+  border-color: #b6463b;
+}
+
+.vp-doc .custom-block.warning {
+  border-color: #a66a16;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
