@@ -19,6 +19,9 @@
     "binary:build": "bun scripts/build-binary.ts",
     "binary:check": "bun scripts/verify-binary.ts",
     "binary:cross-check": "bun scripts/verify-cross-binaries.ts",
+    "docs:dev": "vitepress dev website",
+    "docs:build": "vitepress build website",
+    "docs:preview": "vitepress preview website",
     "pack:check": "bun run build && bun scripts/verify-pack.ts",
     "repo:protect": "bun scripts/configure-repository.ts --apply",
     "prepack": "bun run build"
@@ -58,6 +61,7 @@
   },
   "devDependencies": {
     "@types/node": "22.20.1",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitepress": "1.6.4"
   }
 }

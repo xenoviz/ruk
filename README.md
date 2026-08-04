@@ -5,6 +5,9 @@ an independent worktree manager: no Treehouse runtime or service is required.
 
 The name comes from `රුක්`—tree. The command is pronounced “rook”.
 
+[Read the documentation](https://xenoviz.github.io/ruk/) for installation,
+agent workflows, configuration, command reference, and troubleshooting.
+
 ## Why
 
 Twenty agents working in a large monorepo should not require twenty complete

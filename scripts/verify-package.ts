@@ -37,9 +37,10 @@ if (
   !isRecord(developmentDependencies) ||
   developmentDependencies["typescript"] !== "7.0.2" ||
   developmentDependencies["@types/node"] !== "22.20.1" ||
-  Object.keys(developmentDependencies).length !== 2
+  developmentDependencies["vitepress"] !== "1.6.4" ||
+  Object.keys(developmentDependencies).length !== 3
 ) {
-  throw new Error("Only the pinned TypeScript toolchain may be a development dependency");
+  throw new Error("Development dependencies must match the pinned TypeScript and documentation toolchains");
 }
 if (pkg["packageManager"] !== "bun@1.3.14") throw new Error("packageManager must pin Bun 1.3.14");
 for (const file of [
