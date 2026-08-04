@@ -272,7 +272,7 @@ preparation records. Dry runs do not delete; the current worktree is skipped.
 - Ruk executes Git, package managers, repository manifests, and lifecycle scripts
   with the current user's permissions. A repository is executable input, so the
   security model assumes trusted repositories and dependency changes.
-  ([security policy](../../SECURITY.md#L13-L21))
+  ([process execution](../../src/process.ts#L56-L91))
 
 ## Update and release model
 
@@ -324,10 +324,9 @@ version.
 
 Client-side checksum verification establishes asset integrity, while GitHub
 attestations establish build provenance. The updater does not itself verify an
-attestation; the security policy tells users needing publisher verification to
-verify it separately.
+attestation.
 ([architecture](../architecture.md#L34-L39),
-[security policy](../../SECURITY.md#L23-L33))
+[update verification](../../src/update.ts#L351-L399))
 
 ## Test, CI, and repository posture
 
@@ -415,12 +414,6 @@ Current explicit ceilings are:
 - release cleanup is intentionally lossy after assignment work is saved: ignored
   files are always removed, and `--force` also discards tracked/untracked edits;
   ([agent contract](../agent-interface.md#L72-L80))
-- shared-store compatibility is repository-specific. The supplied two-run,
-  twenty-worktree Bun benchmark found major speed/disk gains, but isolated
-  layouts also exposed undeclared dependencies and conflicted with the sampled
-  repository's root-only `node_modules` policy. This is evidence for the managed
-  fallback, not broad proof that shared mode is safe.
-  ([benchmark](../../BENCHMARK.md#L1-L34))
 
 ## Questions and tensions for Wayfinder
 
@@ -483,7 +476,7 @@ current boundaries create product or architecture choices.
    manifest-pinned digest and canonical URL, while provenance attestation
    verification remains a separate user action. Wayfinder should decide whether
    that is the intended long-term trust boundary.
-   ([security policy](../../SECURITY.md#L23-L33),
+   ([architecture](../architecture.md#L19-L39),
    [update verification](../../src/update.ts#L351-L399))
 10. **How broad should release validation become?** CI deeply tests the Node
     distribution and exercises one native binary per host, while cross-targets

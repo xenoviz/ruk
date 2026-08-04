@@ -35,8 +35,6 @@
     "dist/bin/ruk.js",
     "dist/src",
     "README.md",
-    "BENCHMARK.md",
-    "SECURITY.md",
     "LICENSE"
   ],
   "keywords": [
