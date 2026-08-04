@@ -14,7 +14,7 @@ strings. Consumers must ignore unknown object fields.
   "expiresAt": "2026-08-04T05:00:00.000Z",
   "reused": false,
   "fingerprint": "sha256 dependency fingerprint",
-  "mode": "managed-install"
+  "mode": "bun-global-store"
 }
 ```
 

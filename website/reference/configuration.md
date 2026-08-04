@@ -6,11 +6,12 @@ Create `.rukrc.json` in the repository root. Ruk rejects unknown keys.
 
 ```json
 {
-  "dependencyMode": "managed"
+  "dependencyMode": "shared"
 }
 ```
 
-Accepted values are `managed` and `shared`. Managed mode is the default.
+Accepted values are `managed` and `shared`. Bun and pnpm default to `shared`;
+other detected executables default to `managed`.
 
 ## `installCommand`
 

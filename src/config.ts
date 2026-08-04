@@ -36,12 +36,17 @@ function parseEnvironmentCommand(value: string | undefined): string[] | null {
   }
 }
 
-function dependencyMode(value: unknown, source: string): DependencyMode {
-  const mode = value ?? "managed";
+function dependencyMode(value: unknown, source: string): DependencyMode | null {
+  if (value == null) return null;
+  const mode = value;
   if (typeof mode !== "string" || !DEPENDENCY_MODES.has(mode as DependencyMode)) {
     throw new Error(`${source} must be either \"managed\" or \"shared\"`);
   }
   return mode as DependencyMode;
+}
+
+function resolvedDependencyMode(name: string, configured: DependencyMode | null): DependencyMode {
+  return configured ?? (name === "bun" || name === "pnpm" ? "shared" : "managed");
 }
 
 export async function loadConfig(root: string): Promise<RukConfig> {
@@ -90,10 +95,11 @@ export async function detectPackageManager(root: string, config: RukConfig): Pro
   if (config.installCommand) {
     const executable = config.installCommand[0];
     if (!executable) throw new Error("installCommand cannot be empty");
+    const name = path.basename(executable).replace(/\.exe$/i, "");
     return {
-      name: path.basename(executable).replace(/\.exe$/i, ""),
+      name,
       command: config.installCommand,
-      dependencyMode: config.dependencyMode,
+      dependencyMode: resolvedDependencyMode(name, config.dependencyMode),
     };
   }
 
@@ -115,7 +121,7 @@ export async function detectPackageManager(root: string, config: RukConfig): Pro
   } else {
     command = [name, (await firstExisting(root, ["package-lock.json"])) ? "ci" : "install"];
   }
-  return { name, command, dependencyMode: config.dependencyMode };
+  return { name, command, dependencyMode: resolvedDependencyMode(name, config.dependencyMode) };
 }
 
 export async function packageManagerVersion(manager: PackageManager, root: string): Promise<string> {

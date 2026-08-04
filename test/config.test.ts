@@ -12,12 +12,37 @@ async function directory(t: TestContext): Promise<string> {
   return root;
 }
 
-test("configuration is safe and managed by default", async (t) => {
+test("configuration defers the dependency default to package-manager detection", async (t) => {
   const root = await directory(t);
   assert.deepEqual(await loadConfig(root), {
     installCommand: null,
-    dependencyMode: "managed",
+    dependencyMode: null,
   });
+});
+
+test("supported package managers use shared dependencies by default", async (t) => {
+  const root = await directory(t);
+  const bun = await detectPackageManager(root, {
+    dependencyMode: null,
+    installCommand: ["bun", "install", "--frozen-lockfile"],
+  });
+  const pnpm = await detectPackageManager(root, {
+    dependencyMode: null,
+    installCommand: ["pnpm", "install", "--frozen-lockfile"],
+  });
+  const npm = await detectPackageManager(root, {
+    dependencyMode: null,
+    installCommand: ["npm", "ci"],
+  });
+  const managedBun = await detectPackageManager(root, {
+    dependencyMode: "managed",
+    installCommand: ["bun", "install", "--frozen-lockfile"],
+  });
+
+  assert.equal(bun.dependencyMode, "shared");
+  assert.equal(pnpm.dependencyMode, "shared");
+  assert.equal(npm.dependencyMode, "managed");
+  assert.equal(managedBun.dependencyMode, "managed");
 });
 
 test("configuration validates modes, commands, and unknown keys", async (t) => {

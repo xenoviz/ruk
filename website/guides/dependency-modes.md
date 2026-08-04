@@ -3,23 +3,11 @@
 Every workspace keeps its own writable dependency projection. Ruk never points
 multiple workspaces at one writable `node_modules` directory.
 
-## Managed mode
-
-Managed mode is the default and uses the repository's normal install layout.
-
-```json
-{
-  "dependencyMode": "managed"
-}
-```
-
-Choose managed mode unless the repository has passed its complete checks under
-an isolated shared-store layout.
-
 ## Shared mode
 
-Shared mode keeps workspace links and package-manager metadata local while
-allowing Bun or pnpm to reuse immutable package content from a global store.
+Shared mode is the default for Bun 1.3.14 or newer and pnpm 10.12.1 or newer.
+It keeps workspace links and package-manager metadata local while reusing
+immutable package content from a global store.
 
 ```json
 {
@@ -27,14 +15,28 @@ allowing Bun or pnpm to reuse immutable package content from a global store.
 }
 ```
 
-Ruk currently supports shared mode with Bun 1.3.14 or newer and pnpm 10.12.1 or
-newer. Unsupported managers and versions fail instead of silently falling back.
+No configuration is required to select this default.
+
+## Managed mode
+
+Managed mode uses the repository's normal install layout. npm, Yarn, and custom
+installers whose executable is not Bun or pnpm use it automatically because Ruk
+does not provide a shared backend for them.
+
+```json
+{
+  "dependencyMode": "managed"
+}
+```
+
+Set it explicitly when a Bun or pnpm repository is incompatible with the
+isolated shared-store layout.
 
 ::: warning Installation success is not validation
 An isolated layout can expose undeclared transitive dependencies, TypeScript
 resolution assumptions, or root-only `node_modules` policies. Run the full test,
-type-check, build, bundler, and lifecycle-script suite before enabling shared
-mode.
+type-check, build, bundler, and lifecycle-script suite before relying on shared
+mode in automation.
 :::
 
 ## Custom installer

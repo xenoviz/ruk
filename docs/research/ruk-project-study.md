@@ -48,7 +48,7 @@ and a manifest-gated release process.
 | **Repository root** | The current worktree's top-level path, discovered with `git rev-parse --show-toplevel`. ([source](../../src/git.ts#L11-L20)) |
 | **Git common directory** | The shared Git administrative directory returned by `git rev-parse --git-common-dir`; Ruk stores cross-worktree state beneath it. ([source](../../src/git.ts#L11-L20), [state paths](../../src/state.ts#L15-L22)) |
 | **Dependency projection** | Workspace-local `node_modules` directories created by the package manager. Even shared mode shares package content, not writable workspace links or metadata. ([README](../../README.md#L129-L157), [projection discovery](../../src/dependencies.ts#L53-L73)) |
-| **Managed mode** | The default dependency mode. Ruk runs the repository's normal install layout and does not enable a global virtual store. ([configuration](../../src/config.ts#L39-L67), [test](../../test/dependencies.test.ts#L111-L128)) |
+| **Managed mode** | The fallback for npm, Yarn, and custom installers, or an explicit opt-out for Bun and pnpm. Ruk runs the repository's normal install layout and does not enable a global virtual store. ([configuration](../../src/config.ts), [test](../../test/dependencies.test.ts#L111-L128)) |
 | **Shared mode** | An opt-in mode for Bun or pnpm that enables their global/virtual content store while retaining local projections. It requires Bun 1.3.14+ or pnpm 10.12.1+. ([implementation](../../src/dependencies.ts#L19-L51), [backend setup](../../src/dependencies.ts#L81-L118)) |
 | **Dependency fingerprint** | A SHA-256 identity over dependency-related files plus package-manager command/version/mode, runtime/ABI, OS, and architecture. ([source](../../src/fingerprint.ts#L9-L57)) |
 | **Preparation record / tree record** | Cached evidence that a path was successfully prepared for a fingerprint and has particular projection paths. It is an optimization, not the source of truth. ([types](../../src/types.ts#L34-L41), [architecture](../architecture.md#L75-L83)) |
@@ -132,7 +132,8 @@ the documented acquire response.
 2. Without a custom command, Ruk prefers `packageManager` from `package.json`,
    then infers Bun/pnpm/Yarn/npm from lockfiles, and finally defaults to npm. It
    requires the executable on `PATH` and chooses frozen/locked installs where
-   supported (`npm ci` when `package-lock.json` exists).
+   supported (`npm ci` when `package-lock.json` exists). Supported Bun and pnpm
+   versions use shared mode by default; other managers retain managed installs.
    ([detection](../../src/config.ts#L69-L118), [tests](../../test/config.test.ts#L74-L116))
 3. Ruk acquires a per-workspace directory lock, computes the fingerprint, and
    validates the shared backend version when applicable. If recorded fingerprint
@@ -239,9 +240,10 @@ preparation records. Dry runs do not delete; the current worktree is skipped.
 
 ### Git and destructive-operation boundaries
 
-- Ruk never shares one writable workspace-level `node_modules`; managed mode is
-  the default, unsupported shared backends fail, and preparation is recorded only
-  after installation succeeds.
+- Ruk never shares one writable workspace-level `node_modules`; supported Bun
+  and pnpm versions default to shared immutable package content, unsupported
+  managers retain managed installs, and preparation is recorded only after
+  installation succeeds.
   ([architecture invariants](../architecture.md#L62-L73))
 - The current workspace cannot remove itself. Ordinary `remove` also refuses
   pooled records, ensuring lifecycle-aware cleanup goes through `release` or
@@ -417,7 +419,7 @@ Current explicit ceilings are:
   twenty-worktree Bun benchmark found major speed/disk gains, but isolated
   layouts also exposed undeclared dependencies and conflicted with the sampled
   repository's root-only `node_modules` policy. This is evidence for the managed
-  default, not broad proof that shared mode is safe.
+  fallback, not broad proof that shared mode is safe.
   ([benchmark](../../BENCHMARK.md#L1-L34))
 
 ## Questions and tensions for Wayfinder

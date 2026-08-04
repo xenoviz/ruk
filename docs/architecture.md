@@ -62,7 +62,8 @@ module instead of accumulating in the CLI.
 ## Safety invariants
 
 - Never share one writable `node_modules` directory between workspaces.
-- Managed dependency layout is the default.
+- Shared immutable package storage is the default for supported Bun and pnpm
+  versions; unsupported managers retain their managed layout.
 - Shared mode must fail when the package manager/backend is unsupported.
 - A workspace is recorded as prepared only after installation succeeds.
 - Preparation of the same workspace is serialized.
