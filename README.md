@@ -15,9 +15,10 @@ copies of every package. They also must not share one writable `node_modules`
 directory: workspace symlinks can point into the wrong branch, and one install
 can break every active agent.
 
-Ruk keeps each workspace's link projection local. When explicitly enabled, it
-shares only the package manager's content-addressed package store. Dependency
-inputs are fingerprinted so a prepared workspace can skip unchanged installs.
+Ruk keeps each workspace's link projection local and, with supported Bun and
+pnpm versions, shares only the package manager's content-addressed store.
+Dependency inputs are fingerprinted so a prepared workspace can skip unchanged
+installs.
 
 ## Status
 
@@ -29,8 +30,8 @@ Ruk is an early release with a deliberately small, tested surface:
 - fingerprint root and workspace manifests, lockfiles, package-manager config,
   patches, runtime, platform, architecture, and install strategy;
 - serialize preparation of the same workspace;
-- use managed installs safely by default;
-- opt into Bun or pnpm global-store projections after repository validation.
+- share immutable package content by default with supported Bun and pnpm versions;
+- allow repositories to opt out when an isolated layout is incompatible.
 
 Lifecycle coordination is local to one host. Runtime namespace allocation is
 not provided. Garbage collection acts only on Ruk-managed records; it does not
@@ -41,7 +42,7 @@ discover or remove arbitrary orphan worktrees or processes.
 - Git
 - the repository's declared package manager
 - Node.js 22.14 or newer when installing Ruk from npm
-- Bun 1.3.14+ or pnpm 10.12.1+ when shared mode is enabled
+- Bun 1.3.14+ or pnpm 10.12.1+ for the default shared mode
 
 ## Install
 
@@ -131,19 +132,8 @@ detection.
 
 ## Dependency modes
 
-Ruk uses ordinary managed installs by default. This preserves the repository's
-existing dependency layout:
-
-```json
-{
-  "dependencyMode": "managed"
-}
-```
-
-Save configuration as `.rukrc.json` in the repository root.
-
-After the repository's complete check and build suite passes with an isolated
-layout, shared mode can be enabled:
+Ruk defaults to shared package content for supported Bun and pnpm versions.
+Workspace links and package-manager metadata remain local:
 
 ```json
 {
@@ -151,13 +141,25 @@ layout, shared mode can be enabled:
 }
 ```
 
+No configuration is required for this default. Save `.rukrc.json` in the
+repository root only when overriding it. npm, Yarn, and other detected
+executables use managed mode unless explicitly configured otherwise.
+
+If a repository is incompatible with an isolated shared-store layout, opt out:
+
+```json
+{
+  "dependencyMode": "managed"
+}
+```
+
 Shared Bun mode sets `BUN_INSTALL_GLOBAL_STORE=1` and uses `--linker isolated`.
 Shared pnpm mode enables its global virtual store. External package contents
 are shared; workspace links and package-manager metadata remain local.
 
-Never enable shared mode merely because installation succeeds. Type checks,
-builds, tests, bundlers, lifecycle scripts, and repository package policies
-must pass first.
+Run type checks, builds, tests, bundlers, lifecycle scripts, and repository
+package-policy checks before relying on the default in automation. Use managed
+mode if any check depends on a traditional dependency layout.
 
 For a custom deterministic installer:
 

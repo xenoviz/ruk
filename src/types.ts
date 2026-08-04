@@ -5,7 +5,7 @@ export type PackageManagerName = "bun" | "pnpm" | "npm" | "yarn" | string;
 
 export interface RukConfig {
   installCommand: string[] | null;
-  dependencyMode: DependencyMode;
+  dependencyMode: DependencyMode | null;
 }
 
 export interface PackageManager {

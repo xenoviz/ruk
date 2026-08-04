@@ -27,7 +27,7 @@ The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
   "expiresAt": "2026-08-04T05:00:00.000Z",
   "reused": false,
   "fingerprint": "sha256 dependency fingerprint",
-  "mode": "managed-install"
+  "mode": "bun-global-store"
 }
 ```
 

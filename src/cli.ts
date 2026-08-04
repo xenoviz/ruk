@@ -60,8 +60,8 @@ Usage:
   ruk gc [--max-age <minutes>] [--apply] [--force-expired] [--json]
   ruk update [--check] [--json]
 
-Ruk uses safe managed installs by default. Set dependencyMode to "shared" in
-.rukrc.json only after validating the repository with its normal CI suite.
+Ruk shares immutable package content by default with supported Bun and pnpm
+versions. Set dependencyMode to "managed" if a repository needs its normal layout.
 `;
 
 interface ParsedOptions {
