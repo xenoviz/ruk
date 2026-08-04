@@ -3,6 +3,9 @@
 Use Ruk's JSON output as the boundary between the workspace coordinator and the
 agent. Do not scrape human-readable output.
 
+For a ready-made instruction package, use the maintained
+[Ruk workspace skill](/skills/).
+
 ## Required lifecycle
 
 ```text

@@ -20,6 +20,7 @@ export default defineConfig({
     nav: [
       { text: "Guide", link: "/getting-started/" },
       { text: "Agent use", link: "/guides/agent-integration" },
+      { text: "Skills", link: "/skills/" },
       { text: "Reference", link: "/reference/cli" },
     ],
     sidebar: [
@@ -39,6 +40,10 @@ export default defineConfig({
           { text: "Assignments and renewal", link: "/guides/assignments" },
           { text: "Garbage collection", link: "/guides/garbage-collection" },
         ],
+      },
+      {
+        text: "Skills",
+        items: [{ text: "Ruk workspace skill", link: "/skills/" }],
       },
       {
         text: "Reference",

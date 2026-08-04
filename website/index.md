@@ -44,6 +44,7 @@ new fencing token even when Ruk reuses the same workspace.
 
 - **Operating Ruk yourself?** Start with [your first workspace](/getting-started/).
 - **Writing agent automation?** Use the [agent integration guide](/guides/agent-integration).
+- **Using agent skills?** Add the maintained [Ruk workspace skill](/skills/).
 - **Looking for a flag or JSON field?** Open the [CLI reference](/reference/cli)
   or [JSON contracts](/reference/json).
 
