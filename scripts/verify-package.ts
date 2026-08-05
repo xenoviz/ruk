@@ -42,6 +42,10 @@ if (
 ) {
   throw new Error("Development dependencies must match the pinned TypeScript and documentation toolchains");
 }
+const overrides = pkg["overrides"];
+if (!isRecord(overrides) || overrides["vite"] !== "6.4.3" || Object.keys(overrides).length !== 1) {
+  throw new Error("Package overrides must pin the audited Vite documentation toolchain");
+}
 if (pkg["packageManager"] !== "bun@1.3.14") throw new Error("packageManager must pin Bun 1.3.14");
 for (const file of [
   "README.md",
