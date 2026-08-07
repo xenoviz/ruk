@@ -45,6 +45,7 @@ import { withDirectoryLock } from "./lock.js";
 import { portEnvironment } from "./ports.js";
 import {
   ProcessIdentityUnavailableError,
+  processIdentity,
   requireProcessIdentity,
   run,
   terminateTrackedProcess,
@@ -346,7 +347,12 @@ const delay = (milliseconds: number): Promise<void> =>
 async function processExited(record: TrackedProcessRecord, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   do {
-    if (!(await trackedProcessExists(record))) return true;
+    if (process.platform === "win32") {
+      const identity = await processIdentity(record.pid);
+      if (!identity || identity !== record.startedAt) return true;
+    } else if (!(await trackedProcessExists(record))) {
+      return true;
+    }
     await delay(50);
   } while (Date.now() < deadline);
   return false;
@@ -694,9 +700,9 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
   const tree = state.trees[treeKey(repository.root)];
   if (
     !lifecycle?.assignment ||
-    !tree?.projectionFingerprint ||
+    !tree ||
     tree.fingerprint !== (await dependencyFingerprint({ root: repository.root, manager: value.manager })).fingerprint ||
-    !(await dependenciesPresent(repository.root, tree.projections))
+    !(await dependencyProjectionsAreValid(repository.root, tree))
   ) {
     await sync(repository.root, io);
     state = await readState(paths);
@@ -779,7 +785,7 @@ async function warm(args: readonly string[], cwd: string, io: CliIo) {
       if (workspace.lifecycle !== "available") continue;
       if (worktreeHeads.get(treeKey(workspace.path)) !== targetHead) continue;
       const record = initial.trees[treeKey(workspace.path)];
-      if (!record || !(await dependenciesPresent(workspace.path, record.projections))) continue;
+      if (!record || !(await dependencyProjectionsAreValid(workspace.path, record))) continue;
       const value = await context(workspace.path);
       const current = await dependencyFingerprint({ root: value.repository.root, manager: value.manager });
       if (record.fingerprint === current.fingerprint) available += 1;

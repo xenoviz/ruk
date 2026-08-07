@@ -126,14 +126,15 @@ output. Expired assigned or returning workspaces are only reported unless both
 
 `ruk list --json` and `ruk status --json` include `lifecycle`, `assignmentId`,
 and `expiresAt`; assignment fields are null when no assignment is active.
-`ruk run -- ...` records the child process only when invoked inside an assigned
-managed workspace. Use the returned acquire path as the working directory.
+`ruk run -- ...` validates dependency inputs and projection integrity, then
+records the child process only when invoked inside an assigned managed
+workspace. Use the returned acquire path as the working directory.
 
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
 retains the assignment when the command leaves a dirty tree, cleanup fails, or
 the launched process cannot be identified while descendants remain.
-`ruk warm --count <n> --json` ensures that the pool has the requested number of
-available prepared workspaces.
+`ruk warm --count <n> --json` counts only integrity-valid projections and
+ensures that the pool has the requested number of available prepared workspaces.
 
 `ruk stats --json` returns aggregate acquisition, reuse, preparation, failure,
 and timing counters. `--disk` adds an on-demand scan; `estimatedBytesAvoided`

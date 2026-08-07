@@ -109,10 +109,9 @@ export async function withDirectoryLock<T>(
         }
       } catch (statError) {
         if (
-          isErrnoException(statError) &&
-          (statError.code === "ENOENT" || statError.code === "EEXIST" || statError.code === "ENOTEMPTY" || statError.code === "EPERM" || statError.code === "EBUSY")
-        ) continue;
-        throw statError;
+          !isErrnoException(statError) ||
+          !["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM", "EBUSY"].includes(statError.code ?? "")
+        ) throw statError;
       }
       if (abandoned) continue;
       if (Date.now() - started > timeoutMs) {

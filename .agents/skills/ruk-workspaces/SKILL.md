@@ -28,7 +28,9 @@ Inspect that process tree before forcing release. Use `ruk shell <branch>` for
 an interactive assigned shell; commit intended work before exit so normal
 release can succeed. Release integrity-validates recorded dependency projections:
 unchanged projections stay warm, while modified projections are discarded and
-rebuilt from the package store on the next acquisition.
+rebuilt from the package store before the next assigned command. Warm capacity
+counts only projections whose dependency inputs and integrity fingerprint still
+validate.
 
 Use `ruk warm --count <n> --json` before a known burst of agents. The count is
 the desired number of available prepared workspaces, not the number to add.

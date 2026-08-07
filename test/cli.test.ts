@@ -179,6 +179,16 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.notEqual(reused.assignmentId, acquired.assignmentId);
   assert.equal(await fs.readFile(counter, "utf8"), installsBeforeReuse);
 
+  await fs.writeFile(path.join(reused.path, "node_modules", "fixture", "ready"), "tampered");
+  const installsBeforeRunRepair = Number(await fs.readFile(counter, "utf8"));
+  const repairedRun = await run(
+    process.execPath,
+    [cli, "run", "--", process.execPath, "-e", "process.stdout.write(require('fs').readFileSync('node_modules/fixture/ready','utf8'))"],
+    { cwd: reused.path },
+  );
+  assert.match(repairedRun.stdout, /yes/);
+  assert.equal(Number(await fs.readFile(counter, "utf8")), installsBeforeRunRepair + 1);
+
   const staleRelease = await run(process.execPath, [cli, "release", acquired.assignmentId, "--json"], {
     cwd: root,
     allowFailure: true,
@@ -222,7 +232,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     env: registryEnvironment,
   });
 
-  await fs.rm(path.join(reused.path, "node_modules"), { recursive: true, force: true });
+  await fs.writeFile(path.join(reused.path, "node_modules", "fixture", "ready"), "tampered");
   const rewarmed = JSON.parse((await run(
     process.execPath,
     [cli, "warm", "--count", "1", "--json"],
@@ -251,7 +261,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     const childPidFile = path.join(parent, "background-child.pid");
     const background = await run(
       process.execPath,
-      [cli, "exec", "agent/background", "sh", "-c", 'sleep 60 & echo $! > "$1"', "sh", childPidFile],
+      [cli, "exec", "agent/background", "sh", "-c", 'sleep 60 & echo $! > "$1"; sleep 1', "sh", childPidFile],
       { cwd: root },
     );
     assert.match(background.stderr, /Released/);
