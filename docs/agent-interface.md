@@ -126,6 +126,8 @@ output. Expired assigned or returning workspaces are only reported unless both
 
 `ruk list --json` and `ruk status --json` include `lifecycle`, `assignmentId`,
 and `expiresAt`; assignment fields are null when no assignment is active.
+Status reports `projection-changed` with a `ruk sync` recovery when recorded
+projection contents or linked package targets no longer match their fingerprint.
 `ruk run -- ...` validates dependency inputs and projection integrity, then
 records the child process only when invoked inside an assigned managed
 workspace. Use the returned acquire path as the working directory.

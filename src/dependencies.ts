@@ -92,17 +92,25 @@ async function hashProjectionEntry(
   entry: string,
   label: string,
   hash: ReturnType<typeof crypto.createHash>,
+  visitedDirectories: Set<string>,
 ): Promise<void> {
   const stat = await fs.lstat(entry);
   if (stat.isSymbolicLink()) {
     hashFields(hash, "symlink", label, await fs.readlink(entry));
+    await hashProjectionEntry(await fs.realpath(entry), `${label}/@target`, hash, visitedDirectories);
     return;
   }
   if (stat.isDirectory()) {
     hashFields(hash, "directory", label, String(stat.mode & 0o777));
+    const real = await fs.realpath(entry);
+    if (visitedDirectories.has(real)) {
+      hashFields(hash, "visited-directory", label, real);
+      return;
+    }
+    visitedDirectories.add(real);
     const entries = (await fs.readdir(entry)).sort();
     for (const name of entries) {
-      await hashProjectionEntry(path.join(entry, name), `${label}/${name}`, hash);
+      await hashProjectionEntry(path.join(entry, name), `${label}/${name}`, hash, visitedDirectories);
     }
     return;
   }
@@ -119,8 +127,14 @@ async function hashProjectionEntry(
 
 export async function projectionFingerprint(root: string, projections: readonly string[]): Promise<string> {
   const hash = crypto.createHash("sha256");
+  const visitedDirectories = new Set<string>();
   for (const relative of [...projections].sort()) {
-    await hashProjectionEntry(projectionPath(root, relative), relative.replaceAll("\\", "/"), hash);
+    await hashProjectionEntry(
+      projectionPath(root, relative),
+      relative.replaceAll("\\", "/"),
+      hash,
+      visitedDirectories,
+    );
   }
   return hash.digest("hex");
 }

@@ -35,6 +35,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   await fs.writeFile(path.join(root, "package.json"), '{"name":"cli-fixture","dependencies":{"fixture":"1"}}\n');
   await fs.writeFile(path.join(root, "package-lock.json"), "{}\n");
   await fs.writeFile(path.join(root, ".gitignore"), "node_modules/\n");
+  await fs.writeFile(path.join(root, "source.txt"), "clean\n");
   await fs.writeFile(
     path.join(root, ".rukrc.json"),
     `${JSON.stringify({
@@ -180,14 +181,32 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(await fs.readFile(counter, "utf8"), installsBeforeReuse);
 
   await fs.writeFile(path.join(reused.path, "node_modules", "fixture", "ready"), "tampered");
+  await fs.writeFile(path.join(reused.path, "node_modules", "fixture", "poison"), "present");
+  await fs.writeFile(path.join(reused.path, "source.txt"), "dirty\n");
+  const corruptedStatus = JSON.parse((await run(
+    process.execPath,
+    [cli, "status", "--json"],
+    { cwd: reused.path },
+  )).stdout);
+  assert.equal(corruptedStatus.status, "sync-required");
+  assert.equal(corruptedStatus.reason, "projection-changed");
+  const dirtyRelease = await run(process.execPath, [cli, "release", reused.assignmentId, "--json"], {
+    cwd: root,
+    allowFailure: true,
+  });
+  assert.equal(dirtyRelease.code, 1);
+  assert.ok((await readState(paths)).trees[treeKey(reused.path)]);
+  await run("git", ["restore", "source.txt"], { cwd: reused.path });
+  assert.equal((await run("git", ["status", "--porcelain"], { cwd: reused.path })).stdout, "");
   const installsBeforeRunRepair = Number(await fs.readFile(counter, "utf8"));
   const repairedRun = await run(
     process.execPath,
-    [cli, "run", "--", process.execPath, "-e", "process.stdout.write(require('fs').readFileSync('node_modules/fixture/ready','utf8'))"],
+    [cli, "run", "--", process.execPath, "-e", "const fs=require('fs');process.stdout.write((fs.existsSync('node_modules/fixture/poison')?'poison':'clean')+fs.readFileSync('node_modules/fixture/ready','utf8'))"],
     { cwd: reused.path },
   );
-  assert.match(repairedRun.stdout, /yes/);
+  assert.match(repairedRun.stdout, /cleanyes/);
   assert.equal(Number(await fs.readFile(counter, "utf8")), installsBeforeRunRepair + 1);
+  assert.equal((await run("git", ["status", "--porcelain"], { cwd: reused.path })).stdout, "");
 
   const staleRelease = await run(process.execPath, [cli, "release", acquired.assignmentId, "--json"], {
     cwd: root,
@@ -489,6 +508,7 @@ test("CLI exposes stable help, version, JSON, and argument errors", async (t) =>
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const help = await run(process.execPath, [cli, "--help"], { cwd: parent });
   assert.match(help.stdout, /^Ruk —/);
+  assert.match(help.stdout, /ruk create <branch> .*\[--fetch\]/);
   assert.match(help.stdout, /ruk update \[--check\] \[--json\]/);
   const version = await run(process.execPath, [cli, "--version"], { cwd: parent });
   assert.match(version.stdout, /^0\.1\.0\n$/);

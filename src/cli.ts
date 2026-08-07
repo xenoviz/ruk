@@ -62,7 +62,7 @@ const HELP = `Ruk — dependency-aware Git workspaces for parallel coding agents
 
 Usage:
   ruk init [--json]
-  ruk create <branch> [--path <directory>] [--from <ref>] [--detach] [--json]
+  ruk create <branch> [--path <directory>] [--from <ref>] [--fetch] [--detach] [--json]
   ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] [--json]
   ruk renew <assignment-id> [--ttl <minutes>] [--json]
   ruk release <assignment-id> [--force] [--json]
@@ -405,8 +405,8 @@ async function releaseAssignment(
       const projections = tree && (await dependencyProjectionsAreValid(workspace.path, tree))
         ? tree.projections
         : [];
-      if (tree && projections.length === 0) await deleteTreeState(paths, workspace.path);
       await returnWorktree(workspace.path, force, projections);
+      if (tree && projections.length === 0) await deleteTreeState(paths, workspace.path);
       const available = await finishWorkspaceReturn(paths, assignmentId);
       return { workspace: available, cleanedProcesses };
     } catch (error) {
@@ -531,14 +531,17 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     value.repository.root,
     record?.projections ?? ["node_modules"],
   );
-  const ready = record?.fingerprint === current.fingerprint && modulesPresent;
+  const projectionsValid = record ? await dependencyProjectionsAreValid(value.repository.root, record) : false;
+  const ready = record?.fingerprint === current.fingerprint && projectionsValid;
   const reason = ready
     ? null
     : !record
       ? "not-prepared"
       : !modulesPresent
         ? "dependencies-missing"
-        : "fingerprint-changed";
+        : record.fingerprint !== current.fingerprint
+          ? "fingerprint-changed"
+          : "projection-changed";
   const result = {
     path: value.repository.root,
     fingerprint: current.fingerprint,

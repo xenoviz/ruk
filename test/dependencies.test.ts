@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { assertSharedBackendSupported, ensureDependencies } from "../src/dependencies.js";
+import { assertSharedBackendSupported, ensureDependencies, projectionFingerprint } from "../src/dependencies.js";
 import { getRepository } from "../src/git.js";
 import { run } from "../src/process.js";
 import { readState, storePaths } from "../src/state.js";
@@ -93,6 +93,21 @@ test("each worktree gets a local projection while unchanged trees skip reinstall
   assert.equal(metrics.preparationSkips, 1);
   assert.equal(metrics.preparationFailures, 0);
   assert.ok(metrics.totalPreparationMs > 0);
+});
+
+test("projection integrity follows linked package content", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-projection-link-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const target = path.join(root, "store", "package");
+  const projection = path.join(root, "workspace", "node_modules");
+  await fs.mkdir(target, { recursive: true });
+  await fs.mkdir(projection, { recursive: true });
+  await fs.writeFile(path.join(target, "index.js"), "one");
+  await fs.symlink(target, path.join(projection, "package"), process.platform === "win32" ? "junction" : "dir");
+  const before = await projectionFingerprint(path.join(root, "workspace"), ["node_modules"]);
+  await fs.writeFile(path.join(target, "index.js"), "two");
+  const after = await projectionFingerprint(path.join(root, "workspace"), ["node_modules"]);
+  assert.notEqual(after, before);
 });
 
 test("pnpm uses its global virtual store for each local projection", async (t) => {

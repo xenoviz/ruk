@@ -36,7 +36,8 @@ message, `retryable`, and optional recovery details. Successful stdout remains
 one JSON value.
 
 Status reports explicit readiness reasons: `not-prepared`,
-`dependencies-missing`, and `fingerprint-changed`. `--explain` adds the
+`dependencies-missing`, `fingerprint-changed`, and `projection-changed`.
+`--explain` adds the
 recommended recovery action in human output; JSON always includes the reason.
 
 ## Ports

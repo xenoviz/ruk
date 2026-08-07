@@ -30,7 +30,8 @@ release can succeed. Release integrity-validates recorded dependency projections
 unchanged projections stay warm, while modified projections are discarded and
 rebuilt from the package store before the next assigned command. Warm capacity
 counts only projections whose dependency inputs and integrity fingerprint still
-validate.
+validate, including linked package targets. `ruk status --json` reports
+`projection-changed` and recommends `ruk sync` when integrity validation fails.
 
 Use `ruk warm --count <n> --json` before a known burst of agents. The count is
 the desired number of available prepared workspaces, not the number to add.

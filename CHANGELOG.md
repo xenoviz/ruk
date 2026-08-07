@@ -29,6 +29,6 @@ versioning.
   short-lived Windows children that exit before process identity inspection.
 - Integrity-validate recorded dependency projections during pool cleanup so
   unchanged workspaces skip installation while modified projections are
-  discarded before reassignment.
+  discarded before reassignment, including mutations behind package links.
 - Keep background POSIX process groups tracked after their leader exits, make
   port-registry cleanup recoverable, and tolerate concurrent disk-stat races.
