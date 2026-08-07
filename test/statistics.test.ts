@@ -118,3 +118,55 @@ test("disk statistics tolerate unreadable linked targets", async (t) => {
     estimatedBytesAvoided: 0,
   });
 });
+
+test("disk statistics count nested linked targets once", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-stats-nested-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  const parent = path.join(root, "store", "parent");
+  const child = path.join(root, "store", "child");
+  await fs.mkdir(path.join(workspace, "node_modules"), { recursive: true });
+  await fs.mkdir(parent, { recursive: true });
+  await fs.mkdir(child, { recursive: true });
+  await fs.writeFile(path.join(parent, "parent.js"), "12345");
+  await fs.writeFile(path.join(child, "child.js"), "1234567");
+  const type = process.platform === "win32" ? "junction" : "dir";
+  await fs.symlink(child, path.join(parent, "child"), type);
+  await fs.symlink(parent, path.join(workspace, "node_modules", "parent"), type);
+  await fs.symlink(child, path.join(workspace, "node_modules", "child"), type);
+  const now = new Date(0).toISOString();
+  const state: RukState = {
+    version: 3,
+    metrics: emptyMetrics(),
+    workspaces: {
+      [treeKey(workspace)]: {
+        path: workspace,
+        managed: true,
+        branch: "(warm)",
+        lifecycle: "available",
+        operationId: null,
+        assignment: null,
+        processes: [],
+        createdAt: now,
+        updatedAt: now,
+        availableAt: now,
+        failure: null,
+      },
+    },
+    trees: {
+      [treeKey(workspace)]: {
+        path: workspace,
+        fingerprint: "fingerprint",
+        mode: "managed-install",
+        projections: ["node_modules"],
+        branch: "(detached)",
+        updatedAt: now,
+      },
+    },
+  };
+  assert.deepEqual(await diskStatistics(state), {
+    projectionBytes: 0,
+    linkedTargetBytes: 12,
+    estimatedBytesAvoided: 0,
+  });
+});

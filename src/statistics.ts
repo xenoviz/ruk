@@ -35,6 +35,7 @@ async function entrySize(entry: string, visited: Set<string>): Promise<number> {
 async function scanProjection(
   directory: string,
   targets: Map<string, { size: number; references: number }>,
+  visitedTargets: Set<string>,
 ): Promise<number> {
   let entries: string[];
   try {
@@ -60,9 +61,9 @@ async function scanProjection(
       }
       const target = targets.get(real);
       if (target) target.references += 1;
-      else targets.set(real, { size: await entrySize(real, new Set()), references: 1 });
+      else targets.set(real, { size: await entrySize(real, visitedTargets), references: 1 });
     } else if (stat.isDirectory()) {
-      localBytes += await scanProjection(entry, targets);
+      localBytes += await scanProjection(entry, targets, visitedTargets);
     } else {
       localBytes += stat.size;
     }
@@ -72,11 +73,12 @@ async function scanProjection(
 
 export async function diskStatistics(state: RukState): Promise<DiskStatistics> {
   const targets = new Map<string, { size: number; references: number }>();
+  const visitedTargets = new Set<string>();
   let projectionBytes = 0;
   for (const workspace of Object.values(state.workspaces)) {
     const tree = state.trees[treeKey(workspace.path)];
     for (const projection of tree?.projections ?? ["node_modules"]) {
-      projectionBytes += await scanProjection(path.join(workspace.path, projection), targets);
+      projectionBytes += await scanProjection(path.join(workspace.path, projection), targets, visitedTargets);
     }
   }
   const linkedTargetBytes = [...targets.values()].reduce((total, target) => total + target.size, 0);

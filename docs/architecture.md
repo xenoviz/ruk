@@ -77,9 +77,9 @@ module instead of accumulating in the CLI.
 - The current workspace cannot remove itself.
 - Machine-readable output contains one JSON value on stdout; diagnostics go to
   stderr.
-- Named ports are serialized through a host-level registry and unique among
-  active recorded assignments. They are cooperative reservations, not held
-  sockets.
+- Named ports are serialized through a stable per-user host registry and unique
+  among active recorded assignments. They are cooperative reservations, not
+  held sockets.
 - Metrics are bounded counters; ordinary commands never append an event log or
   scan workspace disk usage.
 
@@ -124,9 +124,9 @@ transitions and preserve ownership whenever normal release is unsafe. Explicit
 `--fetch` is the only workspace operation in this layer that contacts a Git
 remote.
 
-Garbage collection checks abandoned warm preparations while holding the same
-warm lock used for creation, then uses the operation ID and update timestamp to
-fence collection.
+Garbage collection can recover abandoned warm and acquire preparations. Warm
+and per-workspace locks prevent collection from racing live preparation; the
+operation ID and update timestamp fence the final transition.
 
 See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
 for transitions, fencing, GC boundaries, and non-goals.

@@ -37,7 +37,7 @@ export interface AssignmentQuery {
   now?: string;
 }
 
-export type GcCandidateReason = "available" | "failed" | "expired-assignment" | "abandoned-warm-preparation";
+export type GcCandidateReason = "available" | "failed" | "expired-assignment" | "abandoned-preparation";
 
 export interface GcCandidate {
   workspace: WorkspaceRecord;
@@ -438,7 +438,7 @@ export async function identifyGcCandidates(
   paths: StorePaths,
   olderThan: string,
   now?: string,
-  includeAbandonedWarm = false,
+  includeAbandonedPreparations = false,
 ): Promise<GcCandidate[]> {
   const state = await readState(paths);
   const cutoff = Date.parse(timestamp(olderThan, "olderThan"));
@@ -446,12 +446,12 @@ export async function identifyGcCandidates(
   const candidates: GcCandidate[] = [];
   for (const workspace of Object.values(state.workspaces)) {
     if (
-      includeAbandonedWarm &&
+      includeAbandonedPreparations &&
       workspace.lifecycle === "preparing" &&
-      workspace.branch === "(warm)" &&
-      workspace.operationId !== null
+      workspace.operationId !== null &&
+      Date.parse(workspace.updatedAt) <= cutoff
     ) {
-      candidates.push({ workspace, reason: "abandoned-warm-preparation", requiresForce: false });
+      candidates.push({ workspace, reason: "abandoned-preparation", requiresForce: false });
     } else if (
       workspace.operationId === null &&
       workspace.lifecycle === "available" &&
@@ -484,16 +484,16 @@ export async function beginWorkspaceCollection(
     const resolved = path.resolve(workspacePath);
     const workspace = state.workspaces[treeKey(resolved)];
     if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
-    const abandonedWarm = workspace.lifecycle === "preparing" && workspace.branch === "(warm)";
-    if (!abandonedWarm && workspace.lifecycle !== "available" && workspace.lifecycle !== "failed") {
+    const abandonedPreparation = workspace.lifecycle === "preparing";
+    if (!abandonedPreparation && workspace.lifecycle !== "available" && workspace.lifecycle !== "failed") {
       throw new Error(`Workspace ${resolved} is not safe to collect`);
     }
-    if ((!abandonedWarm && workspace.operationId !== null) || workspace.updatedAt !== expectedUpdatedAt) {
+    if ((!abandonedPreparation && workspace.operationId !== null) || workspace.updatedAt !== expectedUpdatedAt) {
       throw new Error(`Workspace ${resolved} changed before collection`);
     }
-    if (abandonedWarm) {
+    if (abandonedPreparation) {
       workspace.lifecycle = "failed";
-      workspace.failure = "Warm preparation was abandoned";
+      workspace.failure = "Workspace preparation was abandoned";
     }
     workspace.operationId = crypto.randomUUID();
     workspace.updatedAt = timestamp(now, "now");

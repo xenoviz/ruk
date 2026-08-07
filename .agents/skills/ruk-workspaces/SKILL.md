@@ -45,15 +45,16 @@ only when an on-demand filesystem scan is acceptable.
 
 Named ports are cooperative host-local reservations. `--port app` returns an
 `app` field and makes `RUK_PORT_APP` available to `ruk run`, `exec`, and
-`shell`. The registry is owner-only and fails closed on unsafe or corrupt state.
+`shell`. The stable per-user registry is owner-only and fails closed on unsafe
+or corrupt state, regardless of per-process temporary-directory settings.
 Ruk does not hold the socket against unrelated processes.
 
 Use `ruk gc --json` to preview collection. Apply only when requested with
 `ruk gc --apply --json`. Add `--force-expired` only with explicit authority to
 reclaim expired assignments; expiry alone does not make them safe to remove.
 Forced collection revalidates expiry atomically before changing lifecycle state.
-GC fences interrupted warm preparations with the warm lock before collecting
-them.
+GC recovers interrupted warm and acquire preparations after the age cutoff;
+workspace and warm locks prevent collection from racing live preparation.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read

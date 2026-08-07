@@ -16,7 +16,9 @@ interface HostPortRegistry {
   ports: Record<string, HostPortReservation>;
 }
 
-const hostPortRoot = path.join(os.tmpdir(), `ruk-host-${process.getuid?.() ?? "user"}`);
+const hostPortRoot = process.platform === "win32"
+  ? path.join(os.homedir(), ".ruk-host")
+  : path.join("/tmp", `ruk-host-${process.getuid?.() ?? "user"}`);
 
 function isReservation(value: unknown): value is HostPortReservation {
   return isRecord(value) && typeof value["assignmentId"] === "string" && typeof value["statePath"] === "string";
@@ -67,16 +69,16 @@ async function writeHostPortRegistry(file: string, registry: HostPortRegistry): 
   }
 }
 
-async function ensureHostPortRoot(): Promise<void> {
+async function ensureHostPortRoot(root: string): Promise<void> {
   try {
-    await fs.mkdir(hostPortRoot, { mode: 0o700 });
+    await fs.mkdir(root, { mode: 0o700 });
   } catch (error) {
     if (!isErrnoException(error) || error.code !== "EEXIST") throw error;
   }
-  const stat = await fs.lstat(hostPortRoot);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Unsafe Ruk host port directory ${hostPortRoot}`);
+  const stat = await fs.lstat(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Unsafe Ruk host port directory ${root}`);
   if (process.platform !== "win32" && (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)) {
-    throw new Error(`Unsafe Ruk host port directory ${hostPortRoot}`);
+    throw new Error(`Unsafe Ruk host port directory ${root}`);
   }
 }
 
@@ -87,10 +89,11 @@ export async function withHostPortRegistry<T>(
     release(assignmentId: string): void;
     commit(): Promise<void>;
   }) => T | Promise<T>,
+  root = hostPortRoot,
 ): Promise<T> {
-  await ensureHostPortRoot();
-  const file = path.join(hostPortRoot, "ports.json");
-  return withDirectoryLock(path.join(hostPortRoot, "ports.lock"), async () => {
+  await ensureHostPortRoot(root);
+  const file = path.join(root, "ports.json");
+  return withDirectoryLock(path.join(root, "ports.lock"), async () => {
     const registry = await readHostPortRegistry(file);
     for (const [port, reservation] of Object.entries(registry.ports)) {
       if (!(await reservationIsActive(Number(port), reservation))) delete registry.ports[port];

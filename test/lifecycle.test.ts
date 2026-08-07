@@ -257,7 +257,7 @@ test("GC selects stale safe records and reports expired assignments without recl
   await assign(paths, path.join(root, "active"), T1, T3);
   await prepare(paths, path.join(root, "preparing"), T0);
 
-  const candidates = await identifyGcCandidates(paths, T1, T2);
+  const candidates = await identifyGcCandidates(paths, T1, T2, true);
   assert.deepEqual(
     candidates.map(({ workspace, reason, requiresForce }) => ({
       name: path.basename(workspace.path),
@@ -268,6 +268,7 @@ test("GC selects stale safe records and reports expired assignments without recl
       { name: "available", reason: "available", requiresForce: false },
       { name: "expired", reason: "expired-assignment", requiresForce: true },
       { name: "failed", reason: "failed", requiresForce: false },
+      { name: "preparing", reason: "abandoned-preparation", requiresForce: false },
     ],
   );
   assert.equal((await findAssignments(paths, { id: expired.assignment!.id, now: T2 }))[0]?.expired, true);

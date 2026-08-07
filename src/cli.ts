@@ -249,93 +249,90 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
     hostname: os.hostname(),
     branch,
   };
-  let workspace = await reserveAvailableWorkspace(paths, { ...assignmentBase, expiresAt: expiresIn(ttl) });
-  const reused = workspace !== null;
-  let operationId: string | null = null;
-  let dependenciesReady = false;
-
-  if (!workspace) {
-    const destination = path.join(
-      path.dirname(repository.root),
-      `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
-    );
-    workspace = await recordPreparingWorkspace(paths, { path: destination, branch });
-    operationId = workspace.operationId;
-  }
-
-  try {
-    if (!reused) {
-      await addWorktree({
-        cwd: repository.root,
-        destination: workspace.path,
+  const reserved = await reserveAvailableWorkspace(paths, { ...assignmentBase, expiresAt: expiresIn(ttl) });
+  const reused = reserved !== null;
+  const destination = reserved?.path ?? path.join(
+    path.dirname(repository.root),
+    `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
+  );
+  return withDirectoryLock(`${treeLockPath(paths, destination)}.acquire`, async () => {
+    let workspace = reserved ?? await recordPreparingWorkspace(paths, { path: destination, branch });
+    let operationId = reused ? null : workspace.operationId;
+    let dependenciesReady = false;
+    try {
+      if (!reused) {
+        await addWorktree({
+          cwd: repository.root,
+          destination: workspace.path,
+          branch,
+          startPoint,
+          detach: true,
+          stdio: options.json ? "pipe" : "inherit",
+        });
+        await lockWorktree(repository.root, workspace.path);
+      }
+      await assignWorktree({
+        repository: repository.root,
+        workspace: workspace.path,
         branch,
         startPoint,
-        detach: true,
-        stdio: options.json ? "pipe" : "inherit",
       });
-      await lockWorktree(repository.root, workspace.path);
-    }
-    await assignWorktree({
-      repository: repository.root,
-      workspace: workspace.path,
-      branch,
-      startPoint,
-    });
-    const prepared = await sync(workspace.path, io, options.json ?? false, false);
-    dependenciesReady = true;
-    if (operationId) {
-      workspace = await markWorkspaceAssigned(paths, workspace.path, operationId, {
-        ...assignmentBase,
-        expiresAt: expiresIn(ttl),
-      });
-      operationId = null;
-    } else {
-      workspace = await renewAssignment(paths, workspace.assignment!.id, expiresIn(ttl));
-    }
-    if (options.ports?.length) {
-      workspace = await allocateAssignmentPorts(paths, workspace.assignment!.id, options.ports);
-    }
-    workspace = await recordSuccessfulAcquisition(paths, workspace.assignment!.id, reused);
-    const result = {
-      status: "assigned",
-      assignmentId: workspace.assignment!.id,
-      path: workspace.path,
-      branch,
-      expiresAt: workspace.assignment!.expiresAt,
-      reused,
-      fingerprint: prepared.fingerprint,
-      mode: prepared.mode,
-      ports: workspace.assignment!.ports,
-    };
-    if (emit && options.json) io.stdout.write(jsonLine(result));
-    else if (emit) {
-      io.stdout.write(`Assigned ${workspace.path}\nAssignment: ${result.assignmentId}\nExpires: ${result.expiresAt}\n`);
-      for (const [name, port] of Object.entries(result.ports)) io.stdout.write(`${name}: ${port}\n`);
-    }
-    return result;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    let returning = false;
-    try {
+      const prepared = await sync(workspace.path, io, options.json ?? false, false);
+      dependenciesReady = true;
       if (operationId) {
-        await markWorkspaceFailed(paths, workspace.path, operationId, message);
-      } else if (workspace.assignment) {
-        await beginWorkspaceReturn(paths, workspace.assignment.id);
-        returning = true;
-        const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
-        if (!dependenciesReady) await deleteTreeState(paths, workspace.path);
-        await returnWorktree(workspace.path, true, dependenciesReady ? projections : []);
-        await finishWorkspaceReturn(paths, workspace.assignment.id);
+        workspace = await markWorkspaceAssigned(paths, workspace.path, operationId, {
+          ...assignmentBase,
+          expiresAt: expiresIn(ttl),
+        });
+        operationId = null;
+      } else {
+        workspace = await renewAssignment(paths, workspace.assignment!.id, expiresIn(ttl));
       }
-    } catch (cleanupError) {
-      if (returning) {
-        const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-        try { await cancelWorkspaceReturn(paths, workspace.assignment!.id, cleanupMessage); } catch { /* Preserve both failures. */ }
+      if (options.ports?.length) {
+        workspace = await allocateAssignmentPorts(paths, workspace.assignment!.id, options.ports);
       }
-      throw new AggregateError([error, cleanupError], `Workspace acquisition failed and cleanup also failed for ${workspace.path}`);
+      workspace = await recordSuccessfulAcquisition(paths, workspace.assignment!.id, reused);
+      const result = {
+        status: "assigned",
+        assignmentId: workspace.assignment!.id,
+        path: workspace.path,
+        branch,
+        expiresAt: workspace.assignment!.expiresAt,
+        reused,
+        fingerprint: prepared.fingerprint,
+        mode: prepared.mode,
+        ports: workspace.assignment!.ports,
+      };
+      if (emit && options.json) io.stdout.write(jsonLine(result));
+      else if (emit) {
+        io.stdout.write(`Assigned ${workspace.path}\nAssignment: ${result.assignmentId}\nExpires: ${result.expiresAt}\n`);
+        for (const [name, port] of Object.entries(result.ports)) io.stdout.write(`${name}: ${port}\n`);
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      let returning = false;
+      try {
+        if (operationId) {
+          await markWorkspaceFailed(paths, workspace.path, operationId, message);
+        } else if (workspace.assignment) {
+          await beginWorkspaceReturn(paths, workspace.assignment.id);
+          returning = true;
+          const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
+          await returnWorktree(workspace.path, true, dependenciesReady ? projections : []);
+          if (!dependenciesReady) await deleteTreeState(paths, workspace.path);
+          await finishWorkspaceReturn(paths, workspace.assignment.id);
+        }
+      } catch (cleanupError) {
+        if (returning) {
+          const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          try { await cancelWorkspaceReturn(paths, workspace.assignment!.id, cleanupMessage); } catch { /* Preserve both failures. */ }
+        }
+        throw new AggregateError([error, cleanupError], `Workspace acquisition failed and cleanup also failed for ${workspace.path}`);
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }
 
 async function renew(args: readonly string[], cwd: string, io: CliIo) {
@@ -366,12 +363,7 @@ const delay = (milliseconds: number): Promise<void> =>
 async function processExited(record: TrackedProcessRecord, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   do {
-    if (process.platform === "win32") {
-      const identity = await processIdentity(record.pid);
-      if (!identity || identity !== record.startedAt) return true;
-    } else if (!(await trackedProcessExists(record))) {
-      return true;
-    }
+    if (!(await trackedProcessExists(record))) return true;
     await delay(50);
   } while (Date.now() < deadline);
   return false;
@@ -619,26 +611,27 @@ async function collectWorkspace(
   workspace: WorkspaceRecord,
   stdio: "pipe" | "inherit" = "inherit",
 ): Promise<void> {
-  await withDirectoryLock(treeLockPath(paths, workspace.path), async () => {
-    const collecting = await beginWorkspaceCollection(paths, workspace.path, workspace.updatedAt);
-    let gitRemoved = false;
-    try {
-      const worktrees = await listWorktrees(repository.root);
-      const managedPath = await canonicalPath(workspace.path);
-      if (await Promise.all(worktrees.map((entry) => canonicalPath(entry.path))).then((entries) => entries.includes(managedPath))) {
-        await unlockWorktree(repository.root, workspace.path);
-        await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true, stdio });
+  await withDirectoryLock(`${treeLockPath(paths, workspace.path)}.acquire`, () =>
+    withDirectoryLock(treeLockPath(paths, workspace.path), async () => {
+      const collecting = await beginWorkspaceCollection(paths, workspace.path, workspace.updatedAt);
+      let gitRemoved = false;
+      try {
+        const worktrees = await listWorktrees(repository.root);
+        const managedPath = await canonicalPath(workspace.path);
+        if (await Promise.all(worktrees.map((entry) => canonicalPath(entry.path))).then((entries) => entries.includes(managedPath))) {
+          await unlockWorktree(repository.root, workspace.path);
+          await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true, stdio });
+        }
+        gitRemoved = true;
+        await deleteWorkspaceRecord(paths, workspace.path, collecting.operationId!);
+        await deleteTreeState(paths, workspace.path);
+      } catch (error) {
+        if (!gitRemoved) {
+          try { await cancelWorkspaceCollection(paths, workspace.path, collecting.operationId!); } catch { /* Preserve the original failure. */ }
+        }
+        throw error;
       }
-      gitRemoved = true;
-      await deleteWorkspaceRecord(paths, workspace.path, collecting.operationId!);
-      await deleteTreeState(paths, workspace.path);
-    } catch (error) {
-      if (!gitRemoved) {
-        try { await cancelWorkspaceCollection(paths, workspace.path, collecting.operationId!); } catch { /* Preserve the original failure. */ }
-      }
-      throw error;
-    }
-  });
+    }, { staleMs: 0 }), { staleMs: 0 });
 }
 
 async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
@@ -668,7 +661,7 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
       removed.push({
         path: candidate.workspace.path,
         lifecycle: candidate.workspace.lifecycle,
-        reason: candidate.reason === "abandoned-warm-preparation" ? "abandoned warm preparation" : "older than max age",
+        reason: candidate.reason === "abandoned-preparation" ? "abandoned preparation" : "older than max age",
       });
     }
     if (options.forceExpired) {
@@ -686,7 +679,7 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
       removed.push({
         path: candidate.workspace.path,
         lifecycle: candidate.workspace.lifecycle,
-        reason: candidate.reason === "abandoned-warm-preparation" ? "abandoned warm preparation" : "older than max age",
+        reason: candidate.reason === "abandoned-preparation" ? "abandoned preparation" : "older than max age",
       });
     }
   }

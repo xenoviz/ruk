@@ -38,3 +38,6 @@ versioning.
   cleanup, serialize warming with acquisition, and secure the host registry.
 - Track interactive shell descendants by POSIX session on Linux and by their
   isolated controlling terminal on macOS.
+- Recover interrupted acquire preparations, keep failed-reuse projection
+  metadata, retain surviving Windows process records, stabilize host port
+  reservations, and deduplicate nested linked targets in disk statistics.

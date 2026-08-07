@@ -245,30 +245,6 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal((await racedRun).code, 1);
   await assert.rejects(fs.access(path.join(raced.path, "race.txt")));
 
-  const registryTemp = path.join(parent, "registry-temp");
-  await fs.mkdir(registryTemp);
-  const registryEnvironment = { ...process.env, TMPDIR: registryTemp, TMP: registryTemp, TEMP: registryTemp };
-  const ported = JSON.parse((await run(
-    process.execPath,
-    [cli, "acquire", "agent/port-cleanup", "--port", "app", "--json"],
-    { cwd: root, env: registryEnvironment },
-  )).stdout);
-  const registryFile = path.join(registryTemp, `ruk-host-${process.getuid?.() ?? "user"}`, "ports.json");
-  await fs.writeFile(registryFile, "invalid");
-  await run(process.execPath, [cli, "release", ported.assignmentId, "--json"], {
-    cwd: root,
-    env: registryEnvironment,
-  });
-  const withoutPorts = JSON.parse((await run(
-    process.execPath,
-    [cli, "acquire", "agent/no-port-cleanup", "--json"],
-    { cwd: root, env: registryEnvironment },
-  )).stdout);
-  await run(process.execPath, [cli, "release", withoutPorts.assignmentId, "--json"], {
-    cwd: root,
-    env: registryEnvironment,
-  });
-
   await fs.writeFile(path.join(reused.path, "node_modules", "fixture", "ready"), "tampered");
   const rewarmed = JSON.parse((await run(
     process.execPath,
@@ -524,7 +500,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(JSON.parse(failed.stderr).status, "error");
 });
 
-test("gc recovers an abandoned warm preparation", async (t) => {
+test("gc recovers an interrupted acquire preparation", async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-abandoned-warm-"));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const root = path.join(parent, "repo");
@@ -540,7 +516,7 @@ test("gc recovers an abandoned warm preparation", async (t) => {
   const repository = await getRepository(root);
   await recordPreparingWorkspace(storePaths(repository.commonDir), {
     path: abandoned,
-    branch: "(warm)",
+    branch: "agent/interrupted",
     now: "2026-01-01T00:00:00.000Z",
   });
 
