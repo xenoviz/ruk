@@ -610,48 +610,60 @@ async function remove(args: readonly string[], cwd: string) {
   });
 }
 
+async function collectWorkspaceWithAcquisitionLock(
+  repository: Awaited<ReturnType<typeof getRepository>>,
+  paths: StorePaths,
+  workspace: WorkspaceRecord,
+  stdio: "pipe" | "inherit" = "inherit",
+): Promise<void> {
+  await withDirectoryLock(treeLockPath(paths, workspace.path), async () => {
+    const collecting = await beginWorkspaceCollection(paths, workspace.path, workspace.updatedAt);
+    let gitRemoved = false;
+    let unlocked = false;
+    try {
+      const worktrees = await listWorktrees(repository.root);
+      const managedPath = await canonicalPath(workspace.path);
+      if (await Promise.all(worktrees.map((entry) => canonicalPath(entry.path))).then((entries) => entries.includes(managedPath))) {
+        await unlockWorktree(repository.root, workspace.path);
+        unlocked = true;
+        await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true, stdio });
+      }
+      gitRemoved = true;
+      await deleteWorkspaceRecord(paths, workspace.path, collecting.operationId!);
+      await deleteTreeState(paths, workspace.path);
+    } catch (error) {
+      if (!gitRemoved) {
+        let cleanupError: unknown;
+        if (unlocked) {
+          try { await lockWorktree(repository.root, workspace.path); } catch (failure) { cleanupError = failure; }
+        }
+        if (!cleanupError) {
+          try {
+            await cancelWorkspaceCollection(paths, workspace.path, collecting.operationId!);
+          } catch (failure) {
+            cleanupError = failure;
+          }
+        }
+        if (cleanupError) {
+          throw new AggregateError([error, cleanupError], `Workspace collection failed and recovery also failed for ${workspace.path}`);
+        }
+      }
+      throw error;
+    }
+  }, { staleMs: 0 });
+}
+
 async function collectWorkspace(
   repository: Awaited<ReturnType<typeof getRepository>>,
   paths: StorePaths,
   workspace: WorkspaceRecord,
   stdio: "pipe" | "inherit" = "inherit",
 ): Promise<void> {
-  await withDirectoryLock(`${treeLockPath(paths, workspace.path)}.acquire`, () =>
-    withDirectoryLock(treeLockPath(paths, workspace.path), async () => {
-      const collecting = await beginWorkspaceCollection(paths, workspace.path, workspace.updatedAt);
-      let gitRemoved = false;
-      let unlocked = false;
-      try {
-        const worktrees = await listWorktrees(repository.root);
-        const managedPath = await canonicalPath(workspace.path);
-        if (await Promise.all(worktrees.map((entry) => canonicalPath(entry.path))).then((entries) => entries.includes(managedPath))) {
-          await unlockWorktree(repository.root, workspace.path);
-          unlocked = true;
-          await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true, stdio });
-        }
-        gitRemoved = true;
-        await deleteWorkspaceRecord(paths, workspace.path, collecting.operationId!);
-        await deleteTreeState(paths, workspace.path);
-      } catch (error) {
-        if (!gitRemoved) {
-          let cleanupError: unknown;
-          if (unlocked) {
-            try { await lockWorktree(repository.root, workspace.path); } catch (failure) { cleanupError = failure; }
-          }
-          if (!cleanupError) {
-            try {
-              await cancelWorkspaceCollection(paths, workspace.path, collecting.operationId!);
-            } catch (failure) {
-              cleanupError = failure;
-            }
-          }
-          if (cleanupError) {
-            throw new AggregateError([error, cleanupError], `Workspace collection failed and recovery also failed for ${workspace.path}`);
-          }
-        }
-        throw error;
-      }
-    }, { staleMs: 0 }), { staleMs: 0 });
+  await withDirectoryLock(
+    `${treeLockPath(paths, workspace.path)}.acquire`,
+    () => collectWorkspaceWithAcquisitionLock(repository, paths, workspace, stdio),
+    { staleMs: 0 },
+  );
 }
 
 async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
@@ -683,10 +695,33 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   if (options.apply) {
     for (const candidate of safeCandidates) {
       if (await canonicalPath(candidate.workspace.path) === current) continue;
-      const workspace = candidate.reason === "abandoned-acquisition"
-        ? (await releaseAssignment(repository, candidate.workspace.assignment!.id, true)).workspace
-        : candidate.workspace;
-      await collectWorkspace(repository, paths, workspace, options.json ? "pipe" : "inherit");
+      if (candidate.reason === "abandoned-acquisition") {
+        const collected = await withDirectoryLock(
+          `${treeLockPath(paths, candidate.workspace.path)}.acquire`,
+          async () => {
+            const currentCandidate = (await identifyGcCandidates(paths, cutoff, undefined, true)).find(
+              (entry) =>
+                entry.reason === "abandoned-acquisition" &&
+                treeKey(entry.workspace.path) === treeKey(candidate.workspace.path) &&
+                entry.workspace.operationId === candidate.workspace.operationId &&
+                entry.workspace.assignment?.id === candidate.workspace.assignment?.id,
+            );
+            if (!currentCandidate) return false;
+            const released = await releaseAssignment(repository, currentCandidate.workspace.assignment!.id, true);
+            await collectWorkspaceWithAcquisitionLock(
+              repository,
+              paths,
+              released.workspace,
+              options.json ? "pipe" : "inherit",
+            );
+            return true;
+          },
+          { staleMs: 0 },
+        );
+        if (!collected) continue;
+      } else {
+        await collectWorkspace(repository, paths, candidate.workspace, options.json ? "pipe" : "inherit");
+      }
       removed.push({
         path: candidate.workspace.path,
         lifecycle: candidate.workspace.lifecycle,
@@ -736,6 +771,7 @@ async function execute(
   io: CliIo,
   detached = true,
   sessionMarker?: string,
+  forwardInterrupt = false,
 ): Promise<number> {
   const separator = args.indexOf("--");
   const command = separator < 0 ? [...args] : args.slice(separator + 1);
@@ -774,53 +810,67 @@ async function execute(
   const assignmentId = lifecycle.assignment.id;
   const environment = { ...process.env, ...portEnvironment(lifecycle.assignment.ports) };
   const tracking: { record?: TrackedProcessRecord } = {};
+  let interruptPending = false;
+  const forwardSignal = () => {
+    interruptPending = true;
+    const groupId = tracking.record?.groupId;
+    if (!groupId) return;
+    interruptPending = false;
+    try { process.kill(-groupId, "SIGINT"); } catch { /* The command may already have exited. */ }
+  };
   let execution!: ReturnType<typeof run>;
-  await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
-    const current = (await readState(paths)).workspaces[treeKey(repository.root)];
-    if (current?.lifecycle !== "assigned" || current.assignment?.id !== assignmentId) {
-      throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
-    }
-    let registered!: () => void;
-    const registration = new Promise<void>((resolve) => { registered = resolve; });
-    execution = run(program!, programArgs, {
-      cwd: repository.root,
-      env: environment,
-      stdio: "inherit",
-      allowFailure: true,
-      detached,
-      onSpawn: async (pid) => {
-        const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
-        const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
-        if (!startedAt) {
+  if (forwardInterrupt && process.platform !== "win32") process.on("SIGINT", forwardSignal);
+  try {
+    await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
+      const current = (await readState(paths)).workspaces[treeKey(repository.root)];
+      if (current?.lifecycle !== "assigned" || current.assignment?.id !== assignmentId) {
+        throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
+      }
+      let registered!: () => void;
+      const registration = new Promise<void>((resolve) => { registered = resolve; });
+      execution = run(program!, programArgs, {
+        cwd: repository.root,
+        env: environment,
+        stdio: "inherit",
+        allowFailure: true,
+        detached,
+        onSpawn: async (pid) => {
+          const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
+          const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
+          if (!startedAt) {
+            registered();
+            return;
+          }
+          const record: TrackedProcessRecord = {
+            pid: session?.pid ?? pid,
+            ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
+            ...(session?.sessionId === undefined
+              ? {}
+              : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
+            ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
+            command: [...command],
+            startedAt,
+          };
+          await addAssignmentProcess(paths, assignmentId, record);
+          tracking.record = record;
+          if (interruptPending) forwardSignal();
           registered();
-          return;
-        }
-        const record: TrackedProcessRecord = {
-          pid: session?.pid ?? pid,
-          ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
-          ...(session?.sessionId === undefined
-            ? {}
-            : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
-          ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
-          command: [...command],
-          startedAt,
-        };
-        await addAssignmentProcess(paths, assignmentId, record);
-        tracking.record = record;
-        registered();
-      },
+        },
+      });
+      await Promise.race([registration, execution.then(() => undefined)]);
     });
-    await Promise.race([registration, execution.then(() => undefined)]);
-  });
-  const result = await execution;
-  if (tracking.record && !(await trackedProcessExists(tracking.record))) {
-    try {
-      await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
-    } catch {
-      // Release may already have consumed the tracked record.
+    const result = await execution;
+    if (tracking.record && !(await trackedProcessExists(tracking.record))) {
+      try {
+        await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
+      } catch {
+        // Release may already have consumed the tracked record.
+      }
     }
+    return result.code;
+  } finally {
+    if (forwardInterrupt && process.platform !== "win32") process.off("SIGINT", forwardSignal);
   }
-  return result.code;
 }
 
 async function warm(args: readonly string[], cwd: string, io: CliIo) {
@@ -930,11 +980,12 @@ async function runAssignedAndRelease(
   io: CliIo,
   detached = true,
   sessionMarker?: string,
+  forwardInterrupt = false,
 ): Promise<number> {
   let code = 1;
   let commandError: unknown;
   try {
-    code = await execute(["--", ...command], assigned.path, io, detached, sessionMarker);
+    code = await execute(["--", ...command], assigned.path, io, detached, sessionMarker, forwardInterrupt);
   } catch (error) {
     commandError = error;
   }
@@ -995,7 +1046,7 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
   io.stderr.write(`Shell workspace: ${assigned.path}\nAssignment: ${assigned.assignmentId}\n`);
   const ignoreInterrupt = () => {};
   const previousShell = process.env["RUK_SHELL"];
-  if (process.platform !== "win32") process.on("SIGINT", ignoreInterrupt);
+  if (process.platform !== "win32" && sessionMarker) process.on("SIGINT", ignoreInterrupt);
   if (sessionMarker) {
     process.env["RUK_SHELL"] = executable;
     process.env["RUK_SHELL_SESSION_FILE"] = sessionMarker;
@@ -1008,9 +1059,10 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
       io,
       process.platform !== "win32" && !sessionMarker,
       sessionMarker,
+      process.platform !== "win32" && !sessionMarker,
     );
   } finally {
-    if (process.platform !== "win32") process.off("SIGINT", ignoreInterrupt);
+    if (process.platform !== "win32" && sessionMarker) process.off("SIGINT", ignoreInterrupt);
     if (sessionMarker) {
       if (previousShell === undefined) delete process.env["RUK_SHELL"];
       else process.env["RUK_SHELL"] = previousShell;

@@ -44,3 +44,5 @@ versioning.
 - Fence acquisition handoff and collection recovery, re-lock failed removals,
   fail closed on process-enumeration errors, and preserve EOF for
   non-interactive POSIX shells.
+- Serialize abandoned-acquisition recovery with live handoff, preserve its
+  retry marker after failed cleanup, and forward non-interactive shell signals.

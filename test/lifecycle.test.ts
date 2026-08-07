@@ -147,6 +147,31 @@ test("return transitions retain ownership until tracked processes are removed", 
   assert.equal(available.assignment, null);
 });
 
+test("failed return restores an interrupted acquisition marker", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspacePath = path.join(root, "workspace");
+  const preparing = await prepare(paths, workspacePath);
+  const assigned = await markWorkspaceAssigned(paths, workspacePath, preparing.operationId!, {
+    owner: "agent",
+    hostname: "host",
+    expiresAt: T2,
+    now: T0,
+  });
+
+  const returning = await beginWorkspaceReturn(paths, assigned.assignment!.id, T1);
+  assert.equal(returning.operationId, assigned.operationId);
+  const cancelled = await cancelWorkspaceReturn(paths, assigned.assignment!.id, "cleanup failed", T2);
+  assert.equal(cancelled.operationId, assigned.operationId);
+  assert.equal(
+    (await identifyGcCandidates(paths, T2, T2, true)).some(({ reason }) => reason === "abandoned-acquisition"),
+    true,
+  );
+
+  await beginWorkspaceReturn(paths, assigned.assignment!.id, T2);
+  const available = await finishWorkspaceReturn(paths, assigned.assignment!.id, T3);
+  assert.equal(available.operationId, null);
+});
+
 test("only one concurrent caller reserves an available workspace", async (t) => {
   const { root, paths } = await fixture(t);
   await makeAvailable(paths, path.join(root, "workspace"));

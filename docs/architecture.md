@@ -118,7 +118,8 @@ after their leader exits so background children can still be cleaned safely.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
-cleanup. Non-interactive shells do not allocate a PTY.
+cleanup. Non-interactive shells do not allocate a PTY and explicitly forward
+wrapper interrupts to their detached process group.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
@@ -129,8 +130,9 @@ remote.
 Garbage collection can recover abandoned preparation, acquisition handoff, and
 collection operations. Warm, acquisition, and per-workspace locks prevent
 recovery from racing live work; operation IDs and update timestamps fence final
-transitions. Failed removal is re-locked before a workspace becomes available,
-and post-removal state remains retryable.
+transitions. Acquisition recovery revalidates under the handoff lock, and a
+failed recovery restores its acquisition marker. Failed removal is re-locked
+before a workspace becomes available, and post-removal state remains retryable.
 
 See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
 for transitions, fencing, GC boundaries, and non-goals.

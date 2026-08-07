@@ -5,7 +5,13 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { getRepository } from "../src/git.js";
-import { beginWorkspaceReturn, finishWorkspaceReturn, markWorkspaceAssigned, recordPreparingWorkspace } from "../src/lifecycle.js";
+import {
+  beginWorkspaceReturn,
+  finishWorkspaceReturn,
+  markWorkspaceAssigned,
+  recordPreparingWorkspace,
+  recordSuccessfulAcquisition,
+} from "../src/lifecycle.js";
 import { withDirectoryLock } from "../src/lock.js";
 import { run } from "../src/process.js";
 import { readState, storePaths, treeKey, treeLockPath } from "../src/state.js";
@@ -288,6 +294,32 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   });
   assert.match(shellResult.stderr, /Released/);
   if (process.platform !== "win32") {
+    const interruptProbe = path.join(parent, "interrupt-probe.sh");
+    const interruptMarker = path.join(parent, "interrupt-received");
+    const interruptReady = path.join(parent, "interrupt-ready");
+    await fs.writeFile(
+      interruptProbe,
+      "#!/bin/sh\ntrap 'printf received > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 130' INT\nprintf ready > \"$RUK_TEST_INTERRUPT_READY\"\nwhile :; do sleep 60 & wait $!; done\n",
+    );
+    await fs.chmod(interruptProbe, 0o755);
+    const interruptedShell = await run(process.execPath, [cli, "shell", "agent/interrupted-shell"], {
+      cwd: root,
+      allowFailure: true,
+      env: {
+        ...process.env,
+        RUK_SHELL: interruptProbe,
+        RUK_TEST_INTERRUPT_MARKER: interruptMarker,
+        RUK_TEST_INTERRUPT_READY: interruptReady,
+      },
+      onSpawn: async (pid) => {
+        await waitFor(async () => fs.access(interruptReady).then(() => true, () => false));
+        process.kill(pid, "SIGINT");
+      },
+    });
+    assert.equal(interruptedShell.code, 130);
+    assert.equal(await fs.readFile(interruptMarker, "utf8"), "received");
+    assert.match(interruptedShell.stderr, /Released/);
+
     const shellProbe = path.join(parent, "shell-probe.sh");
     const shellChildPid = path.join(parent, "shell-child.pid");
     await fs.writeFile(
@@ -501,6 +533,35 @@ test("gc recovers an interrupted acquire handoff", async (t) => {
   await run("git", ["worktree", "add", "--detach", abandoned, "HEAD"], { cwd: root });
   const repository = await getRepository(root);
   const paths = storePaths(repository.commonDir);
+  const live = path.join(parent, "live");
+  await run("git", ["worktree", "add", "--detach", live, "HEAD"], { cwd: root });
+  const livePreparation = await recordPreparingWorkspace(paths, {
+    path: live,
+    branch: "agent/live",
+    now: "2026-01-01T00:00:00.000Z",
+  });
+  const liveAssignment = await markWorkspaceAssigned(paths, live, livePreparation.operationId!, {
+    owner: "live-agent",
+    hostname: "host",
+    expiresAt: "2030-01-01T00:00:00.000Z",
+    now: "2026-01-01T00:00:00.000Z",
+  });
+  let blockedGc!: ReturnType<typeof run>;
+  await withDirectoryLock(`${treeLockPath(paths, live)}.acquire`, async () => {
+    blockedGc = run(process.execPath, [cli, "gc", "--max-age", "0", "--apply", "--json"], { cwd: root });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await fs.access(live);
+    await recordSuccessfulAcquisition(
+      paths,
+      liveAssignment.assignment!.id,
+      liveAssignment.operationId!,
+      true,
+    );
+  });
+  const liveGc = JSON.parse((await blockedGc).stdout);
+  assert.equal(liveGc.removed.some((entry: { path: string }) => path.resolve(entry.path) === path.resolve(live)), false);
+  await run(process.execPath, [cli, "release", liveAssignment.assignment!.id, "--json"], { cwd: root });
+
   const preparing = await recordPreparingWorkspace(paths, {
     path: abandoned,
     branch: "agent/interrupted",

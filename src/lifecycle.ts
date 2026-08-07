@@ -300,7 +300,6 @@ export async function beginWorkspaceReturn(
       throw new Error(`Assignment ${assignmentId} was renewed before collection`);
     }
     workspace.lifecycle = "returning";
-    workspace.operationId = null;
     workspace.failure = null;
     workspace.updatedAt = timestamp(now, "now");
     return workspace;
@@ -322,6 +321,7 @@ export async function finishWorkspaceReturn(
     hasPorts = Object.keys(workspace.assignment!.ports).length > 0;
     const returnedAt = timestamp(now, "now");
     workspace.lifecycle = "available";
+    workspace.operationId = null;
     workspace.assignment = null;
     workspace.updatedAt = returnedAt;
     workspace.availableAt = returnedAt;
