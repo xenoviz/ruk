@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addWorktree, assignWorktree, currentBranch, fetchRemote, returnWorktree } from "../src/git.js";
+import { addWorktree, assignWorktree, currentBranch, fetchDefaultRemote, fetchRemote, returnWorktree } from "../src/git.js";
 import { run } from "../src/process.js";
 
 test("pooled worktree assignment and return preserve branch safety", async (t) => {
@@ -81,4 +81,13 @@ test("fetch recognizes fully qualified remote-tracking refs", async (t) => {
   assert.equal(await fetchRemote(root, "refs/remotes/upstream/main"), "upstream");
   await run("git", ["remote", "remove", "upstream"], { cwd: root });
   await assert.rejects(fetchRemote(root, "refs/remotes/upstream/main"), /Git remote upstream does not exist/);
+});
+
+test("default fetch rejects multiple remotes when origin is absent", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-git-ambiguous-remote-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await run("git", ["init", "-q", root]);
+  await run("git", ["remote", "add", "upstream", path.join(root, "upstream.git")], { cwd: root });
+  await run("git", ["remote", "add", "backup", path.join(root, "backup.git")], { cwd: root });
+  await assert.rejects(fetchDefaultRemote(root), /Multiple Git remotes.*--from/);
 });

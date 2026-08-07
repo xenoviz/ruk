@@ -332,23 +332,37 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(failedShort.code, 1);
   assert.match(failedShort.stderr, /Released/);
 
+  const releaseRetained = async (stderr: string) => {
+    if (/Released/.test(stderr)) return;
+    assert.match(stderr, /could not be identified/);
+    const assignmentId = /Release: ruk release ([0-9a-f-]+)/i.exec(stderr)?.[1];
+    assert.ok(assignmentId);
+    await waitFor(async () => (await run(
+      process.execPath,
+      [cli, "release", assignmentId, "--json"],
+      { cwd: root, allowFailure: true },
+    )).code === 0);
+  };
   if (process.platform !== "win32") {
     const childPidFile = path.join(parent, "background-child.pid");
     const background = await run(
       process.execPath,
-      [cli, "exec", "agent/background", "sh", "-c", 'sleep 60 & echo $! > "$1"; sleep 1', "sh", childPidFile],
-      { cwd: root },
+      [cli, "exec", "agent/background", "sh", "-c", 'sleep 3 & echo $! > "$1"; sleep 1', "sh", childPidFile],
+      { cwd: root, allowFailure: true },
     );
-    assert.match(background.stderr, /Released/);
+    assert.equal(background.code, 1);
+    assert.match(background.stderr, /Workspace retained/);
     const childPid = Number(await fs.readFile(childPidFile, "utf8"));
     await waitFor(() => processStopped(childPid));
+    await releaseRetained(background.stderr);
   }
 
   const shellResult = await run(process.execPath, [cli, "shell", "agent/shell"], {
     cwd: root,
-    env: { ...process.env, RUK_SHELL: process.execPath },
+    allowFailure: true,
+    env: { ...process.env, RUK_SHELL: process.platform === "win32" ? process.execPath : "/usr/bin/true" },
   });
-  assert.match(shellResult.stderr, /Released/);
+  await releaseRetained(shellResult.stderr);
   if (process.platform !== "win32") {
     const interruptProbe = path.join(parent, "interrupt-probe.sh");
     const interruptMarker = path.join(parent, "interrupt-received");
@@ -374,7 +388,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     });
     assert.equal(interruptedShell.code, 130);
     assert.equal(await fs.readFile(interruptMarker, "utf8"), "received");
-    assert.match(interruptedShell.stderr, /Released/);
+    await releaseRetained(interruptedShell.stderr);
 
     const interruptCommand = async (args: string[], commandCwd: string) => {
       await Promise.all([fs.rm(interruptMarker, { force: true }), fs.rm(interruptReady, { force: true })]);
@@ -411,7 +425,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     );
     assert.equal(interruptedExec.code, 130);
     assert.equal(await fs.readFile(interruptMarker, "utf8"), "received");
-    assert.match(interruptedExec.stderr, /Released/);
+    await releaseRetained(interruptedExec.stderr);
 
     const shellProbe = path.join(parent, "shell-probe.sh");
     const shellChildPid = path.join(parent, "shell-child.pid");

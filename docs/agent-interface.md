@@ -149,11 +149,15 @@ recorded POSIX process group.
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
 retains the assignment when the command leaves a dirty tree, cleanup fails, or
 the launched process cannot be identified while descendants remain.
+Leaderless detached groups retain the assignment until their known descendants
+exit; Ruk does not signal a group whose original leader cannot be verified.
 `ruk warm --count <n> --json` counts only integrity-valid projections and
 ensures that the pool has the requested number of available prepared workspaces;
 acquisition uses the same capacity lock.
 Statistics count both assigned and returning workspaces as active assignments.
 Available capacity excludes workspaces fenced by an in-progress collection.
+Allocated ports are probed through a dual-stack IPv6 wildcard when supported,
+with an IPv4 fallback on hosts without IPv6.
 
 `ruk stats --json` returns aggregate acquisition, reuse, preparation, failure,
 and timing counters. `--disk` adds an on-demand scan; `estimatedBytesAvoided`

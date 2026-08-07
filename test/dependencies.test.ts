@@ -6,7 +6,7 @@ import test from "node:test";
 import { assertSharedBackendSupported, ensureDependencies, projectionFingerprint } from "../src/dependencies.js";
 import { getRepository } from "../src/git.js";
 import { run } from "../src/process.js";
-import { readState, storePaths } from "../src/state.js";
+import { readState, setTreeState, storePaths } from "../src/state.js";
 import type { PackageManager } from "../src/types.js";
 
 interface DependencyFixture {
@@ -108,6 +108,29 @@ test("projection integrity follows linked package content", async (t) => {
   await fs.writeFile(path.join(target, "index.js"), "two");
   const after = await projectionFingerprint(path.join(root, "workspace"), ["node_modules"]);
   assert.notEqual(after, before);
+});
+
+test("dependency cleanup rejects a symlinked projection ancestor", async (t) => {
+  const fixture = await createFixture();
+  t.after(() => fs.rm(fixture.parent, { recursive: true, force: true }));
+  const repository = await getRepository(fixture.root);
+  await ensureDependencies({ repository, manager: fixture.manager });
+  const paths = storePaths(repository.commonDir);
+  const treeRecord = Object.values((await readState(paths)).trees)[0]!;
+  const { path: _treePath, ...tree } = treeRecord;
+  const outside = path.join(fixture.parent, "outside");
+  await fs.mkdir(path.join(outside, "node_modules"), { recursive: true });
+  await fs.writeFile(path.join(outside, "node_modules", "sentinel"), "keep");
+  await fs.mkdir(path.join(fixture.root, "packages"));
+  await fs.symlink(outside, path.join(fixture.root, "packages", "app"), process.platform === "win32" ? "junction" : "dir");
+  await setTreeState(paths, treeRecord.path, { ...tree, projections: ["packages/app/node_modules"] });
+  await fs.writeFile(path.join(fixture.root, "package.json"), '{"name":"fixture","dependencies":{"demo":"2"}}\n');
+
+  await assert.rejects(
+    ensureDependencies({ repository, manager: fixture.manager }),
+    /symlinked ancestor/,
+  );
+  assert.equal(await fs.readFile(path.join(outside, "node_modules", "sentinel"), "utf8"), "keep");
 });
 
 test("pnpm uses its global virtual store for each local projection", async (t) => {

@@ -25,7 +25,7 @@ For a short clean job, use `ruk exec <branch> -- <command>` to acquire, run,
 and release automatically. If the command leaves changes or cleanup fails, Ruk
 retains the assignment and prints the exact recovery ID. It also retains the
 assignment when child identity cannot be established while descendants remain;
-surviving POSIX process groups remain tracked even after their leader exits;
+leaderless POSIX process groups retain the assignment rather than being signaled;
 failed registration also terminates the detached group after a short-lived leader exits.
 Ruk fences the assignment again immediately before launching a command.
 Managed detached `run` and `exec` commands forward interrupts to their POSIX
@@ -56,6 +56,7 @@ Named ports are cooperative host-local reservations. `--port app` returns an
 `shell`. The stable per-user registry is owner-only and fails closed on unsafe
 or corrupt state, regardless of per-process temporary-directory settings.
 Ruk does not hold the socket against unrelated processes.
+Allocation probes dual-stack IPv6 when the host supports it and falls back to IPv4.
 
 Use `ruk gc --json` to preview collection. Apply only when requested with
 `ruk gc --apply --json`. Add `--force-expired` only with explicit authority to
@@ -74,3 +75,4 @@ When a JSON command fails, parse the JSON error from stderr and use its stable
 `code` and `retryable` fields; process-enumeration failures are retryable
 `RESOURCE_BUSY` errors, and stdout contains no success record. JSON-mode
 dependency installers have their output discarded to keep memory bounded.
+Shared-backend version failures are retryable dependency-preparation errors.

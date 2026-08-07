@@ -135,21 +135,31 @@ export function portEnvironment(ports: Readonly<Record<string, number>>): NodeJS
   return Object.fromEntries(Object.entries(ports).map(([name, port]) => [portEnvironmentName(name), String(port)]));
 }
 
+async function bindAvailablePort(host: string, ipv6Only?: boolean): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen({ port: 0, host, ...(ipv6Only === undefined ? {} : { ipv6Only }) }, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Could not inspect allocated port")));
+        return;
+      }
+      server.close((error) => error ? reject(error) : resolve(address.port));
+    });
+  });
+}
+
 export async function availablePort(excluded: ReadonlySet<number>): Promise<number> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const port = await new Promise<number>((resolve, reject) => {
-      const server = net.createServer();
-      server.unref();
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          server.close(() => reject(new Error("Could not inspect allocated port")));
-          return;
-        }
-        server.close((error) => error ? reject(error) : resolve(address.port));
-      });
-    });
+    let port: number;
+    try {
+      port = await bindAvailablePort("::", false);
+    } catch (error) {
+      if (!isErrnoException(error) || !["EAFNOSUPPORT", "EADDRNOTAVAIL"].includes(error.code ?? "")) throw error;
+      port = await bindAvailablePort("127.0.0.1");
+    }
     if (!excluded.has(port)) return port;
   }
   throw new Error("Could not allocate an available port");

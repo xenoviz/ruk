@@ -12,6 +12,15 @@ test("structured failures expose stable automation categories", () => {
   });
   assert.equal(errorRecord(new Error("Could not allocate an available port")).code, "PORT_UNAVAILABLE");
   assert.equal(errorRecord(new Error("Dependency installation failed")).code, "DEPENDENCY_PREPARATION_FAILED");
+  assert.deepEqual(
+    errorRecord(new Error("bun 1.3.14 or newer is required for Ruk's shared dependency backend")),
+    {
+      status: "error",
+      code: "DEPENDENCY_PREPARATION_FAILED",
+      message: "bun 1.3.14 or newer is required for Ruk's shared dependency backend",
+      retryable: true,
+    },
+  );
   assert.deepEqual(errorRecord(new ProcessIdentityUnavailableError(42)), {
     status: "error",
     code: "RESOURCE_BUSY",

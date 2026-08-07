@@ -150,7 +150,18 @@ export async function dependencyProjectionsAreValid(root: string, record: TreeRe
 
 async function removeDependencyProjections(root: string, projections: readonly string[]): Promise<void> {
   for (const relative of projections) {
-    await fs.rm(projectionPath(root, relative), { recursive: true, force: true });
+    const target = projectionPath(root, relative);
+    for (let ancestor = path.dirname(target); ancestor !== path.resolve(root); ancestor = path.dirname(ancestor)) {
+      try {
+        if ((await fs.lstat(ancestor)).isSymbolicLink()) {
+          throw new Error(`Dependency projection has a symlinked ancestor: ${relative}`);
+        }
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") break;
+        throw error;
+      }
+    }
+    await fs.rm(target, { recursive: true, force: true });
   }
 }
 

@@ -113,8 +113,8 @@ return a workspace that has since been reassigned. Leases expire for reporting;
 reclaiming expired assignments requires an explicit forced GC operation.
 Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
-release stops and retains the assignment. POSIX process groups remain tracked
-after their leader exits so background children can still be cleaned safely.
+release stops and retains the assignment. Leaderless POSIX process groups fail
+closed because their numeric IDs can be reused.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
@@ -129,6 +129,7 @@ reassignment or an initially unassigned pool slot instead of adopting another
 agent's lease. Explicit `--fetch` is
 the only workspace operation in this layer that contacts a Git remote, and an
 explicit remote name must exist.
+Default fetch rejects multiple remotes when `origin` is absent.
 
 Garbage collection can recover abandoned preparation, acquisition handoff, and
 collection operations. Warm, acquisition, and per-workspace locks prevent

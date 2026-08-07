@@ -51,6 +51,9 @@ export async function fetchRemote(cwd: string, startPoint = "origin/main"): Prom
 
 export async function fetchDefaultRemote(cwd: string): Promise<string> {
   const remotes = (await run("git", ["remote"], { cwd })).stdout.split(/\r?\n/).filter(Boolean);
+  if (!remotes.includes("origin") && remotes.length > 1) {
+    throw new Error("Multiple Git remotes exist; use --from to select one explicitly");
+  }
   const remote = remotes.includes("origin") ? "origin" : remotes[0];
   if (!remote) throw new Error("Git remote does not exist");
   const result = await run("git", ["ls-remote", "--symref", remote, "HEAD"], { cwd });

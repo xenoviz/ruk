@@ -228,3 +228,27 @@ test("leaderless POSIX sessions fail closed before termination", async (t) => {
     else process.env["PATH"] = originalPath;
   }
 });
+
+test("leaderless detached groups fail closed before termination", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process groups are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-group-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nif [ \"$1\" = \"-e\" ]; then printf '424243 1 424242 S\\n'; exit 0; fi\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  try {
+    await assert.rejects(
+      terminateTrackedProcess({
+        pid: 424_242,
+        groupId: 424_242,
+        startedAt: "original-group",
+      }, true),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+  }
+});

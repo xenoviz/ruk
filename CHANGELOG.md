@@ -56,3 +56,5 @@ versioning.
   from warm capacity, and serialize forced-expiry cleanup with live handoff.
 - Block release during acquisition handoff, forward detached command interrupts,
   and fail closed on leaderless sessions or unreadable live lock identities.
+- Reject symlinked projection ancestors, leaderless reused groups, and ambiguous
+  default remotes; probe dual-stack ports and classify backend version failures.
