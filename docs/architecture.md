@@ -115,6 +115,8 @@ Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. POSIX process groups remain tracked
 after their leader exits so background children can still be cleaned safely.
+Interactive shells use their isolated session ID on Linux and controlling
+terminal on macOS, where `ps` does not expose the POSIX session ID.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same

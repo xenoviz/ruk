@@ -68,6 +68,7 @@ export interface TrackedProcessRecord {
   groupId?: number;
   sessionId?: number;
   sessionStartedAt?: string;
+  terminalId?: string;
   command?: string[];
   startedAt: string;
 }

@@ -124,7 +124,7 @@ test("return transitions retain ownership until tracked processes are removed", 
   await addAssignmentProcess(
     paths,
     assignmentId,
-    { pid: 42, groupId: 42, command: ["node", "server.js"], startedAt: "process-identity" },
+    { pid: 42, terminalId: "ttys001", command: ["node", "server.js"], startedAt: "process-identity" },
     T1,
   );
   const returning = await beginWorkspaceReturn(paths, assignmentId, T1);

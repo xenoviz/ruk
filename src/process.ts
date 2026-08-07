@@ -248,34 +248,47 @@ export async function processDescendantsExist(pid: number): Promise<boolean> {
 
 interface PosixProcess {
   pid: number;
-  sessionId: number;
+  sessionId?: number;
+  terminalId?: string;
   state: string;
 }
 
 async function posixProcesses(): Promise<PosixProcess[]> {
-  const sessionField = process.platform === "darwin" ? "sess" : "sid";
-  const result = await run("ps", ["-eo", `pid=,${sessionField}=,stat=`], { allowFailure: true });
+  const scopeField = process.platform === "darwin" ? "tty" : "sid";
+  const result = await run("ps", ["-eo", `pid=,${scopeField}=,stat=`], { allowFailure: true });
   if (result.code !== 0) return [];
   return result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
-    .filter((entry) => entry.length === 3 && entry.slice(0, 2).map(Number).every(Number.isSafeInteger))
-    .map(([pid, sessionId, state]) => ({
-      pid: Number(pid),
-      sessionId: Number(sessionId),
-      state: state!,
-    }));
+    .filter((entry) => entry.length === 3 && Number.isSafeInteger(Number(entry[0])))
+    .flatMap(([rawPid, scope, state]): PosixProcess[] => {
+      const pid = Number(rawPid);
+      if (process.platform === "darwin") return [{ pid, terminalId: scope!, state: state! }];
+      const sessionId = Number(scope);
+      return Number.isSafeInteger(sessionId) ? [{ pid, sessionId, state: state! }] : [];
+    });
 }
 
 export async function requireChildProcessSession(
   pid: number,
   marker: string,
-): Promise<{ sessionId: number; sessionStartedAt: string }> {
+): Promise<{
+  pid: number;
+  startedAt: string;
+  sessionId?: number;
+  sessionStartedAt?: string;
+  terminalId?: string;
+}> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
-      const [rawSessionId, ...identity] = (await fs.readFile(marker, "utf8")).trim().split(/\r?\n/);
+      const [rawSessionId, rawIdentity, rawTerminalId] = (await fs.readFile(marker, "utf8")).trim().split(/\r?\n/);
       const sessionId = Number(rawSessionId?.trim());
-      const sessionStartedAt = identity.join(" ").trim().replace(/\s+/g, " ");
+      const sessionStartedAt = rawIdentity?.trim().replace(/\s+/g, " ") ?? "";
       if (Number.isSafeInteger(sessionId) && sessionId > 0 && sessionStartedAt) {
-        return { sessionId, sessionStartedAt };
+        const terminalId = rawTerminalId?.trim();
+        if (process.platform === "darwin") {
+          if (terminalId && terminalId !== "??") return { pid: sessionId, startedAt: sessionStartedAt, terminalId };
+        } else {
+          return { pid: sessionId, startedAt: sessionStartedAt, sessionId, sessionStartedAt };
+        }
       }
     } catch (error) {
       if (!isErrnoException(error) || error.code !== "ENOENT") throw error;
@@ -287,6 +300,12 @@ export async function requireChildProcessSession(
 
 async function processSessionExists(sessionId: number): Promise<boolean> {
   return (await posixProcesses()).some((process) => process.sessionId === sessionId && !process.state.startsWith("Z"));
+}
+
+async function processTerminalExists(terminalId: string): Promise<boolean> {
+  return (await posixProcesses()).some((process) =>
+    process.terminalId === terminalId && !process.state.startsWith("Z")
+  );
 }
 
 async function terminateProcessSession(
@@ -312,14 +331,42 @@ async function terminateProcessSession(
   return members.length > 0;
 }
 
+async function terminateProcessTerminal(
+  terminalId: string,
+  leaderPid: number,
+  leaderStartedAt: string,
+  force: boolean,
+): Promise<boolean> {
+  const leaderIdentity = await processIdentity(leaderPid);
+  if (leaderIdentity && leaderIdentity !== leaderStartedAt) {
+    throw new Error(`Refusing to terminate reused process ${leaderPid}`);
+  }
+  const members = (await posixProcesses()).filter((process) =>
+    process.terminalId === terminalId && !process.state.startsWith("Z")
+  );
+  for (const member of members) {
+    if (member.pid === process.pid) throw new Error(`Refusing to terminate current terminal ${terminalId}`);
+    try {
+      process.kill(member.pid, force ? "SIGKILL" : "SIGTERM");
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+  }
+  return members.length > 0;
+}
+
 export async function trackedProcessExists(record: TrackedProcessRecord): Promise<boolean> {
   const identity = await processIdentity(record.pid);
   if (identity) return identity === record.startedAt;
+  if (record.terminalId !== undefined) return processTerminalExists(record.terminalId);
   if (record.sessionId !== undefined) return processSessionExists(record.sessionId);
   return processDescendantsExist(record.groupId ?? record.pid);
 }
 
 export async function terminateTrackedProcess(record: TrackedProcessRecord, force = false): Promise<boolean> {
+  if (record.terminalId !== undefined) {
+    return terminateProcessTerminal(record.terminalId, record.pid, record.startedAt, force);
+  }
   if (record.sessionId !== undefined && record.sessionStartedAt !== undefined) {
     return terminateProcessSession(record.sessionId, record.sessionStartedAt, force);
   }

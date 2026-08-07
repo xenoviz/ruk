@@ -768,15 +768,18 @@ async function execute(
       detached,
       onSpawn: async (pid) => {
         const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
-        const startedAt = session?.sessionStartedAt ?? await requireProcessIdentity(pid);
+        const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
         if (!startedAt) {
           registered();
           return;
         }
         const record: TrackedProcessRecord = {
-          pid: session?.sessionId ?? pid,
+          pid: session?.pid ?? pid,
           ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
-          ...session,
+          ...(session?.sessionId === undefined
+            ? {}
+            : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
+          ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
           command: [...command],
           startedAt,
         };
@@ -959,8 +962,9 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
   const sessionMarker = process.platform === "win32"
     ? undefined
     : path.join((await repositoryContext(assigned.path)).repository.commonDir, "ruk", `shell-${crypto.randomUUID()}`);
-  const sessionField = process.platform === "darwin" ? "sess" : "sid";
-  const wrapper = `sid=$(ps -o ${sessionField}= -p $$); started=$(ps -o lstart= -p "$sid"); printf "%s\\n%s\\n" "$sid" "$started" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`;
+  const wrapper = process.platform === "darwin"
+    ? `started=$(ps -o lstart= -p $$); terminal=$(ps -o tty= -p $$); printf "%s\\n%s\\n%s\\n" "$$" "$started" "$terminal" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`
+    : `sid=$(ps -o sid= -p $$); started=$(ps -o lstart= -p "$sid"); printf "%s\\n%s\\n" "$sid" "$started" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`;
   const command = process.platform === "win32"
     ? [executable]
     : process.platform === "darwin"

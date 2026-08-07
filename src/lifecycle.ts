@@ -373,6 +373,9 @@ export async function addAssignmentProcess(
     if ((processRecord.sessionId === undefined) !== (processRecord.sessionStartedAt === undefined)) {
       throw new Error("sessionId and sessionStartedAt must be provided together");
     }
+    if (processRecord.terminalId !== undefined && (!processRecord.terminalId || processRecord.terminalId === "??")) {
+      throw new Error("terminalId must identify a controlling terminal");
+    }
     if (workspace.processes.some((entry) => entry.pid === processRecord.pid)) {
       throw new Error(`Process ${processRecord.pid} is already tracked`);
     }

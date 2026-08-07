@@ -36,3 +36,5 @@ versioning.
   terminal-attached, and fail closed on corrupt active port reservations.
 - Revalidate forced-GC expiry, restore ownership after failed acquisition
   cleanup, serialize warming with acquisition, and secure the host registry.
+- Track interactive shell descendants by POSIX session on Linux and by their
+  isolated controlling terminal on macOS.

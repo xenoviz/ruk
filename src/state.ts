@@ -119,6 +119,8 @@ function isProcessRecord(value: unknown): value is TrackedProcessRecord {
       (Number.isSafeInteger(value["sessionId"]) && (value["sessionId"] as number) > 0)) &&
     ((value["sessionId"] === undefined && value["sessionStartedAt"] === undefined) ||
       (typeof value["sessionStartedAt"] === "string" && value["sessionStartedAt"].length > 0)) &&
+    (value["terminalId"] === undefined ||
+      (typeof value["terminalId"] === "string" && value["terminalId"].length > 0 && value["terminalId"] !== "??")) &&
     (value["command"] === undefined ||
       (Array.isArray(value["command"]) &&
         value["command"].length > 0 &&

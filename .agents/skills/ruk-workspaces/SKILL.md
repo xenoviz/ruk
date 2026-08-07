@@ -28,7 +28,8 @@ surviving POSIX process groups remain tracked even after their leader exits.
 Ruk fences the assignment again immediately before launching a command.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
 an interactive, terminal-attached assigned shell; its isolated terminal session
-keeps surviving descendants tracked after the shell exits. Commit intended work
+keeps surviving descendants tracked after the shell exits (by session ID on
+Linux and controlling terminal on macOS). Commit intended work
 before exit so normal release can succeed. Release integrity-validates recorded dependency projections:
 unchanged projections stay warm, while modified projections are discarded and
 rebuilt from the package store before the next assigned command. Warm capacity
