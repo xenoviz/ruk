@@ -186,6 +186,14 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.match(short.stdout, /assigned-command/);
   assert.match(short.stderr, /Released/);
 
+  const failedShort = await run(
+    process.execPath,
+    [cli, "exec", "agent/missing-command", "ruk-command-that-does-not-exist"],
+    { cwd: root, allowFailure: true },
+  );
+  assert.equal(failedShort.code, 1);
+  assert.match(failedShort.stderr, /Released/);
+
   const shellResult = await run(process.execPath, [cli, "shell", "agent/shell"], {
     cwd: root,
     env: { ...process.env, RUK_SHELL: process.execPath },

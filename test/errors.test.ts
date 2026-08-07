@@ -14,4 +14,5 @@ test("structured failures expose stable automation categories", () => {
   assert.equal(errorRecord(new Error("unexpected")).code, "OPERATION_FAILED");
   assert.equal(jsonRequested(["status", "--json"]), true);
   assert.equal(jsonRequested(["exec", "branch", "--", "tool", "--json"]), false);
+  assert.equal(jsonRequested(["run", "tool", "--json"]), false);
 });

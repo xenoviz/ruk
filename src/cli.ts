@@ -803,22 +803,41 @@ function retainedAssignment(io: CliIo, result: Awaited<ReturnType<typeof acquire
   );
 }
 
+async function runAssignedAndRelease(
+  assigned: Awaited<ReturnType<typeof acquire>>,
+  command: readonly string[],
+  sourceCwd: string,
+  io: CliIo,
+): Promise<number> {
+  let code = 1;
+  let commandError: unknown;
+  try {
+    code = await execute(["--", ...command], assigned.path, io);
+  } catch (error) {
+    commandError = error;
+  }
+  const { repository } = await repositoryContext(sourceCwd);
+  try {
+    await releaseAssignment(repository, assigned.assignmentId, false);
+    io.stderr.write(`Released ${assigned.path}\n`);
+  } catch (releaseError) {
+    retainedAssignment(io, assigned, releaseError);
+    if (commandError) {
+      throw new AggregateError([commandError, releaseError], "Command failed and its workspace could not be released");
+    }
+    return code === 0 ? 1 : code;
+  }
+  if (commandError) throw commandError;
+  return code;
+}
+
 async function executeAssigned(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
   const { acquireArgs, command } = splitExecArguments(args);
   if (acquireArgs.length === 0) throw new Error("exec requires a branch");
   if (command.length === 0) throw new Error("exec requires a command");
   const assigned = await acquire(acquireArgs, cwd, io, false);
   io.stderr.write(`Assigned ${assigned.path} (${assigned.assignmentId})\n`);
-  const code = await execute(["--", ...command], assigned.path, io);
-  const { repository } = await repositoryContext(cwd);
-  try {
-    await releaseAssignment(repository, assigned.assignmentId, false);
-    io.stderr.write(`Released ${assigned.path}\n`);
-    return code;
-  } catch (error) {
-    retainedAssignment(io, assigned, error);
-    return code === 0 ? 1 : code;
-  }
+  return runAssignedAndRelease(assigned, command, cwd, io);
 }
 
 async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
@@ -837,16 +856,7 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
   const executable = process.env["RUK_SHELL"] ?? process.env["SHELL"] ??
     (process.platform === "win32" ? process.env["COMSPEC"] ?? "cmd.exe" : "/bin/sh");
   io.stderr.write(`Shell workspace: ${assigned.path}\nAssignment: ${assigned.assignmentId}\n`);
-  const code = await execute(["--", executable], assigned.path, io);
-  const { repository } = await repositoryContext(cwd);
-  try {
-    await releaseAssignment(repository, assigned.assignmentId, false);
-    io.stderr.write(`Released ${assigned.path}\n`);
-    return code;
-  } catch (error) {
-    retainedAssignment(io, assigned, error);
-    return code === 0 ? 1 : code;
-  }
+  return runAssignedAndRelease(assigned, [executable], cwd, io);
 }
 
 async function stats(args: readonly string[], cwd: string, io: CliIo) {

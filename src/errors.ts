@@ -27,6 +27,7 @@ export function errorRecord(error: unknown): ErrorRecord {
 }
 
 export function jsonRequested(argv: readonly string[]): boolean {
+  if (["run", "exec", "shell"].includes(argv[0] ?? "")) return false;
   const separator = argv.indexOf("--");
   return argv.slice(0, separator < 0 ? argv.length : separator).includes("--json");
 }
