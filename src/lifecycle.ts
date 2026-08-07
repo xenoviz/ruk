@@ -160,8 +160,6 @@ export async function reserveAvailableWorkspace(
           left.path.localeCompare(right.path),
       )[0];
     if (!workspace) return null;
-    state.metrics.acquisitions += 1;
-    state.metrics.workspaceReuses += 1;
     return assign(workspace, input);
   });
 }
@@ -179,8 +177,21 @@ export async function markWorkspaceAssigned(
     requireLifecycle(workspace, "preparing");
     if (workspace.operationId !== operationId) throw new Error("Preparation operation does not match");
     workspace.operationId = null;
-    state.metrics.acquisitions += 1;
     return assign(workspace, input);
+  });
+}
+
+export async function recordSuccessfulAcquisition(
+  paths: StorePaths,
+  assignmentId: string,
+  reused: boolean,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    state.metrics.acquisitions += 1;
+    if (reused) state.metrics.workspaceReuses += 1;
+    return workspace;
   });
 }
 

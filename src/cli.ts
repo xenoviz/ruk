@@ -34,6 +34,7 @@ import {
   markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
+  recordSuccessfulAcquisition,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
@@ -220,7 +221,8 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
   requirePositionals(positional, 1, "acquire requires exactly one branch name");
   const branch = positional[0]!;
   const { repository } = await repositoryContext(cwd);
-  await fetchIfRequested(repository.root, options.from ?? "origin/main", options.fetch ?? false);
+  const startPoint = options.from ?? (options.fetch ? "origin/main" : "HEAD");
+  await fetchIfRequested(repository.root, startPoint, options.fetch ?? false);
   const paths = storePaths(repository.commonDir);
   const ttl = minutes(options.ttl, 480, "--ttl");
   const assignmentBase = {
@@ -248,7 +250,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
         cwd: repository.root,
         destination: workspace.path,
         branch,
-        startPoint: options.from ?? "HEAD",
+        startPoint,
         detach: true,
         stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
       });
@@ -258,7 +260,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
       repository: repository.root,
       workspace: workspace.path,
       branch,
-      startPoint: options.from ?? "HEAD",
+      startPoint,
     });
     const prepared = await sync(workspace.path, io, options.json ?? false, false);
     dependenciesReady = true;
@@ -274,6 +276,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
     if (options.ports?.length) {
       workspace = await allocateAssignmentPorts(paths, workspace.assignment!.id, options.ports);
     }
+    workspace = await recordSuccessfulAcquisition(paths, workspace.assignment!.id, reused);
     const result = {
       status: "assigned",
       assignmentId: workspace.assignment!.id,
@@ -730,15 +733,20 @@ async function warm(args: readonly string[], cwd: string, io: CliIo) {
   const count = Number(options.count);
   if (!Number.isSafeInteger(count) || count < 1) throw new Error("--count must be a positive integer");
   const { repository } = await repositoryContext(cwd);
-  const startPoint = options.from ?? "HEAD";
-  await fetchIfRequested(repository.root, options.from ?? "origin/main", options.fetch ?? false);
+  const startPoint = options.from ?? (options.fetch ? "origin/main" : "HEAD");
+  await fetchIfRequested(repository.root, startPoint, options.fetch ?? false);
+  const targetHead = (await run("git", ["rev-parse", startPoint], { cwd: repository.root })).stdout.trim();
   const paths = storePaths(repository.commonDir);
   // ponytail: one host-wide warm lock; reserve per-slot if concurrent warming needs higher throughput.
   return withDirectoryLock(path.join(paths.root, "warm.lock"), async () => {
     const initial = await readState(paths);
+    const worktreeHeads = new Map(
+      (await listWorktrees(repository.root)).map((worktree) => [treeKey(worktree.path), worktree.head]),
+    );
     let available = 0;
     for (const workspace of Object.values(initial.workspaces)) {
       if (workspace.lifecycle !== "available") continue;
+      if (worktreeHeads.get(treeKey(workspace.path)) !== targetHead) continue;
       const record = initial.trees[treeKey(workspace.path)];
       if (!record || !(await dependenciesPresent(workspace.path, record.projections))) continue;
       const value = await context(workspace.path);

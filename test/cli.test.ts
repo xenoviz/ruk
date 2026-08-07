@@ -266,8 +266,9 @@ import path from "node:path";
 const pkg = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8"));
 const value = pkg.dependencies.fixture;
 await fs.mkdir(path.join(process.cwd(), "node_modules", "fixture"), { recursive: true });
-await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"), value === "2" ? "corrupt" : "ready");
-if (value === "2") process.exit(1);
+const failing = value === "2" && process.env.RUK_TEST_FAIL_INSTALL === "1";
+await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"), failing ? "corrupt" : "ready");
+if (failing) process.exit(1);
 `,
   );
   await fs.writeFile(path.join(root, "package.json"), '{"dependencies":{"fixture":"1"}}\n');
@@ -289,11 +290,22 @@ if (value === "2") process.exit(1);
   await run("git", ["switch", "-q", "main"], { cwd: root });
 
   await run(process.execPath, [cli, "warm", "--count", "1", "--from", "agent/a", "--json"], { cwd: root });
+  const warmedForB = JSON.parse((await run(
+    process.execPath,
+    [cli, "warm", "--count", "1", "--from", "agent/b", "--json"],
+    { cwd: root },
+  )).stdout);
+  assert.equal(warmedForB.created.length, 1);
   const failed = await run(process.execPath, [cli, "acquire", "agent/b", "--json"], {
     cwd: root,
     allowFailure: true,
+    env: { ...process.env, RUK_TEST_FAIL_INSTALL: "1" },
   });
   assert.equal(failed.code, 1);
+  const repository = await getRepository(root);
+  const failedState = await readState(storePaths(repository.commonDir));
+  assert.equal(failedState.metrics.acquisitions, 0);
+  assert.equal(failedState.metrics.workspaceReuses, 0);
 
   const recovered = JSON.parse((await run(process.execPath, [cli, "acquire", "agent/a", "--json"], {
     cwd: root,
@@ -302,7 +314,56 @@ if (value === "2") process.exit(1);
     await fs.readFile(path.join(recovered.path, "node_modules", "fixture", "ready"), "utf8"),
     "ready",
   );
+  const recoveredState = await readState(storePaths(repository.commonDir));
+  assert.equal(recoveredState.metrics.acquisitions, 1);
+  assert.equal(recoveredState.metrics.workspaceReuses, 1);
   await run(process.execPath, [cli, "release", recovered.assignmentId, "--json"], { cwd: root });
+});
+
+test("--fetch without --from starts from the fetched default branch", { timeout: 60_000 }, async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-fetch-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const remote = path.join(parent, "remote.git");
+  const seed = path.join(parent, "seed");
+  const root = path.join(parent, "repo");
+  const installer = path.join(parent, "install.mjs");
+  await fs.writeFile(
+    installer,
+    `import fs from "node:fs/promises";
+import path from "node:path";
+await fs.mkdir(path.join(process.cwd(), "node_modules", "fixture"), { recursive: true });
+await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"), "yes");
+`,
+  );
+  await fs.mkdir(seed);
+  await fs.writeFile(path.join(seed, "package.json"), '{"dependencies":{"fixture":"1"}}\n');
+  await fs.writeFile(path.join(seed, "package-lock.json"), "{}\n");
+  await fs.writeFile(path.join(seed, ".gitignore"), "node_modules/\n");
+  await fs.writeFile(
+    path.join(seed, ".rukrc.json"),
+    `${JSON.stringify({ dependencyMode: "managed", installCommand: [process.execPath, installer] })}\n`,
+  );
+  await fs.writeFile(path.join(seed, "version.txt"), "old\n");
+  await run("git", ["init", "-q", "-b", "main"], { cwd: seed });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: seed });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: seed });
+  await run("git", ["add", "."], { cwd: seed });
+  await run("git", ["commit", "-qm", "initial"], { cwd: seed });
+  await run("git", ["init", "--bare", "-q", remote], { cwd: parent });
+  await run("git", ["remote", "add", "origin", remote], { cwd: seed });
+  await run("git", ["push", "-q", "-u", "origin", "main"], { cwd: seed });
+  await run("git", ["clone", "-q", "--branch", "main", remote, root], { cwd: parent });
+  await fs.writeFile(path.join(seed, "version.txt"), "new\n");
+  await run("git", ["commit", "-qam", "advance main"], { cwd: seed });
+  await run("git", ["push", "-q"], { cwd: seed });
+
+  const acquired = JSON.parse((await run(
+    process.execPath,
+    [cli, "acquire", "agent/fetched", "--fetch", "--json"],
+    { cwd: root },
+  )).stdout);
+  assert.equal((await fs.readFile(path.join(acquired.path, "version.txt"), "utf8")).trim(), "new");
+  await run(process.execPath, [cli, "release", acquired.assignmentId, "--json"], { cwd: root });
 });
 
 test("CLI exposes stable help, version, JSON, and argument errors", async (t) => {

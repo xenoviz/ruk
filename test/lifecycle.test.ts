@@ -18,6 +18,7 @@ import {
   markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
+  recordSuccessfulAcquisition,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
@@ -177,6 +178,8 @@ test("warm workspaces become available and named ports remain unique", async (t)
     allocateAssignmentPorts(paths, first!.assignment!.id, ["web-app", "web_app"], allocator),
     /unique after normalization/,
   );
+  await recordSuccessfulAcquisition(paths, first!.assignment!.id, true);
+  await recordSuccessfulAcquisition(paths, second.assignment!.id, false);
 
   const state = await readState(paths);
   assert.equal(state.metrics.acquisitions, 2);
