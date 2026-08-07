@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import type { StdioOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isErrnoException } from "./types.js";
 
 export interface RunOptions {
   cwd?: string;
@@ -17,6 +18,16 @@ export interface RunResult {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+}
+
+export class ProcessIdentityUnavailableError extends Error {
+  readonly pid: number;
+
+  constructor(pid: number) {
+    super(`Process ${pid} could not be identified, so its workspace cannot be released safely`);
+    this.name = "ProcessIdentityUnavailableError";
+    this.pid = pid;
+  }
 }
 
 function environmentValue(environment: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -170,6 +181,68 @@ export async function processIdentity(pid: number): Promise<string | null> {
   }
   const result = await run("ps", ["-o", "lstart=", "-p", String(pid)], { allowFailure: true });
   return result.code === 0 && result.stdout.trim() ? result.stdout.trim().replace(/\s+/g, " ") : null;
+}
+
+export async function requireProcessIdentity(
+  pid: number,
+  identify: (pid: number) => Promise<string | null> = processIdentity,
+  descendantsExist: (pid: number) => Promise<boolean> = processDescendantsExist,
+): Promise<string | null> {
+  const identity = await identify(pid);
+  if (!identity) {
+    let hasDescendants: boolean;
+    try {
+      hasDescendants = await descendantsExist(pid);
+    } catch {
+      throw new ProcessIdentityUnavailableError(pid);
+    }
+    if (hasDescendants) throw new ProcessIdentityUnavailableError(pid);
+  }
+  return identity;
+}
+
+export async function processDescendantsExist(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (process.platform === "win32") {
+    const powershell = path.join(
+      environmentValue(process.env, "SYSTEMROOT") ?? "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const result = await run(
+      powershell,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$pending=@(${pid});$found=$false;$all=@(Get-CimInstance Win32_Process);while($pending.Count){$children=@($all|Where-Object{$pending -contains [int]$_.ParentProcessId});if(!$children.Count){break};$found=$true;$pending=@($children|ForEach-Object{[int]$_.ProcessId})};if($found){'1'}`,
+      ],
+      { allowFailure: true },
+    );
+    return result.code !== 0 || result.stdout.trim() === "1";
+  }
+  const result = await run("ps", ["-eo", "pid=,ppid="], { allowFailure: true });
+  if (result.code === 0) {
+    const processes = result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number));
+    const parents = new Set([pid]);
+    let found = false;
+    while (true) {
+      const children = processes.filter(([child, parent]) => child && parent && parents.has(parent) && !parents.has(child));
+      if (children.length === 0) break;
+      found = true;
+      for (const [child] of children) parents.add(child!);
+    }
+    if (found) return true;
+  }
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return !(isErrnoException(error) && error.code === "ESRCH");
+  }
 }
 
 export async function killProcessTree(

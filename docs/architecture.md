@@ -55,7 +55,8 @@ Ruk has five deliberately separate concerns:
 4. `state.js` records preparation metadata under the common Git directory.
 5. `update.js` owns release discovery, installer delegation, integrity checks,
    and executable replacement.
-6. `ports.js` performs short-lived OS port probes and environment-name mapping.
+6. `ports.js` performs short-lived OS port probes, coordinates a host-level
+   reservation registry, and maps names into environment variables.
 7. `statistics.js` derives aggregate and optional on-demand disk measurements.
 
 `cli.js` composes these modules. Business rules should remain in the closest
@@ -74,8 +75,9 @@ module instead of accumulating in the CLI.
 - The current workspace cannot remove itself.
 - Machine-readable output contains one JSON value on stdout; diagnostics go to
   stderr.
-- Named ports are unique among active recorded assignments. They are
-  cooperative reservations, not held sockets.
+- Named ports are serialized through a host-level registry and unique among
+  active recorded assignments. They are cooperative reservations, not held
+  sockets.
 - Metrics are bounded counters; ordinary commands never append an event log or
   scan workspace disk usage.
 
@@ -108,13 +110,18 @@ Each assignment has an immutable assignment ID so delayed automation cannot
 return a workspace that has since been reassigned. Leases expire for reporting;
 reclaiming expired assignments requires an explicit forced GC operation.
 Process cleanup is limited to children recorded through `ruk run` for the
-assignment.
+assignment. If identity lookup fails while descendants remain, automatic
+release stops and retains the assignment.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
 transitions and preserve ownership whenever normal release is unsafe. Explicit
 `--fetch` is the only workspace operation in this layer that contacts a Git
 remote.
+
+Garbage collection checks abandoned warm preparations while holding the same
+warm lock used for creation, then uses the operation ID and update timestamp to
+fence collection.
 
 See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
 for transitions, fencing, GC boundaries, and non-goals.

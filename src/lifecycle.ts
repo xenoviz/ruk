@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { availablePort, portEnvironmentName } from "./ports.js";
+import { availablePort, portEnvironmentName, releaseHostPorts, withHostPortRegistry } from "./ports.js";
 import { readState, treeKey, updateState } from "./state.js";
 import type {
   AssignmentRecord,
@@ -36,7 +36,7 @@ export interface AssignmentQuery {
   now?: string;
 }
 
-export type GcCandidateReason = "available" | "failed" | "expired-assignment";
+export type GcCandidateReason = "available" | "failed" | "expired-assignment" | "abandoned-warm-preparation";
 
 export interface GcCandidate {
   workspace: WorkspaceRecord;
@@ -205,12 +205,13 @@ export async function allocateAssignmentPorts(
   if (new Set(environmentNames).size !== environmentNames.length) {
     throw new Error("Port names must be unique after normalization");
   }
-  return updateState(paths, async (state) => {
+  return withHostPortRegistry((host) => updateState(paths, async (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "assigned");
-    const excluded = new Set(
-      Object.values(state.workspaces).flatMap((entry) => Object.values(entry.assignment?.ports ?? {})),
-    );
+    const excluded = new Set([
+      ...host.reserved,
+      ...Object.values(state.workspaces).flatMap((entry) => Object.values(entry.assignment?.ports ?? {})),
+    ]);
     const ports: Record<string, number> = Object.create(null);
     for (const name of names) {
       const port = await allocate(excluded);
@@ -219,10 +220,12 @@ export async function allocateAssignmentPorts(
       }
       excluded.add(port);
       ports[name] = port;
+      host.reserve(port, assignmentId, paths.state);
     }
+    await host.commit();
     workspace.assignment!.ports = ports;
     return workspace;
-  });
+  }));
 }
 
 export async function markWorkspaceFailed(
@@ -288,7 +291,7 @@ export async function finishWorkspaceReturn(
   assignmentId: string,
   now?: string,
 ): Promise<WorkspaceRecord> {
-  return updateState(paths, (state) => {
+  const workspace = await updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "returning");
     if (workspace.processes.length > 0) {
@@ -301,6 +304,8 @@ export async function finishWorkspaceReturn(
     workspace.availableAt = returnedAt;
     return workspace;
   });
+  await releaseHostPorts(assignmentId);
+  return workspace;
 }
 
 export async function cancelWorkspaceReturn(
@@ -404,6 +409,7 @@ export async function identifyGcCandidates(
   paths: StorePaths,
   olderThan: string,
   now?: string,
+  includeAbandonedWarm = false,
 ): Promise<GcCandidate[]> {
   const state = await readState(paths);
   const cutoff = Date.parse(timestamp(olderThan, "olderThan"));
@@ -411,6 +417,13 @@ export async function identifyGcCandidates(
   const candidates: GcCandidate[] = [];
   for (const workspace of Object.values(state.workspaces)) {
     if (
+      includeAbandonedWarm &&
+      workspace.lifecycle === "preparing" &&
+      workspace.branch === "(warm)" &&
+      workspace.operationId !== null
+    ) {
+      candidates.push({ workspace, reason: "abandoned-warm-preparation", requiresForce: false });
+    } else if (
       workspace.operationId === null &&
       workspace.lifecycle === "available" &&
       Date.parse(workspace.availableAt!) <= cutoff
@@ -442,11 +455,16 @@ export async function beginWorkspaceCollection(
     const resolved = path.resolve(workspacePath);
     const workspace = state.workspaces[treeKey(resolved)];
     if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
-    if (workspace.lifecycle !== "available" && workspace.lifecycle !== "failed") {
+    const abandonedWarm = workspace.lifecycle === "preparing" && workspace.branch === "(warm)";
+    if (!abandonedWarm && workspace.lifecycle !== "available" && workspace.lifecycle !== "failed") {
       throw new Error(`Workspace ${resolved} is not safe to collect`);
     }
-    if (workspace.operationId !== null || workspace.updatedAt !== expectedUpdatedAt) {
+    if ((!abandonedWarm && workspace.operationId !== null) || workspace.updatedAt !== expectedUpdatedAt) {
       throw new Error(`Workspace ${resolved} changed before collection`);
+    }
+    if (abandonedWarm) {
+      workspace.lifecycle = "failed";
+      workspace.failure = "Warm preparation was abandoned";
     }
     workspace.operationId = crypto.randomUUID();
     workspace.updatedAt = timestamp(now, "now");

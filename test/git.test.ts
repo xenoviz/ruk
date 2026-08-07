@@ -28,12 +28,16 @@ test("pooled worktree assignment and return preserve branch safety", async (t) =
   await fs.writeFile(path.join(workspace, "ignored-secret.txt"), "secret\n");
   await fs.mkdir(path.join(workspace, "node_modules", "fixture"), { recursive: true });
   await fs.writeFile(path.join(workspace, "node_modules", "fixture", "ready"), "yes\n");
+  const nestedProjection = path.join(workspace, "packages", "pkg[old]", "node_modules", "fixture");
+  await fs.mkdir(nestedProjection, { recursive: true });
+  await fs.writeFile(path.join(nestedProjection, "ready"), "nested\n");
   await assert.rejects(returnWorktree(workspace), /uncommitted changes/);
-  await returnWorktree(workspace, true, ["node_modules"]);
+  await returnWorktree(workspace, true, ["node_modules", "packages/pkg[old]/node_modules"]);
   assert.equal(await currentBranch(workspace), "(detached)");
   assert.equal((await fs.readFile(path.join(workspace, "tracked.txt"), "utf8")).trim(), "clean");
   await assert.rejects(fs.access(path.join(workspace, "ignored-secret.txt")));
   assert.equal(await fs.readFile(path.join(workspace, "node_modules", "fixture", "ready"), "utf8"), "yes\n");
+  assert.equal(await fs.readFile(path.join(nestedProjection, "ready"), "utf8"), "nested\n");
 });
 
 test("fetch is explicit and updates the selected remote", async (t) => {

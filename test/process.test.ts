@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { commandExists, killProcessTree, processIdentity, run } from "../src/process.js";
+import { commandExists, killProcessTree, processIdentity, requireProcessIdentity, run } from "../src/process.js";
 
 test("process runner captures output and preserves non-zero results when requested", async () => {
   const success = await run(process.execPath, ["-e", "process.stdout.write('ok')"]);
@@ -21,6 +21,14 @@ test("process runner captures output and preserves non-zero results when request
 
 test("command detection recognizes the active Node executable", async () => {
   assert.equal(await commandExists(process.execPath), true);
+});
+
+test("missing process identity fails closed", async () => {
+  await assert.rejects(
+    requireProcessIdentity(42, async () => null, async () => true),
+    /cannot be released safely/,
+  );
+  assert.equal(await requireProcessIdentity(42, async () => null, async () => false), null);
 });
 
 test("process runner executes Windows command shims without shell injection", async (t) => {

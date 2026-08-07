@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { getRepository } from "../src/git.js";
+import { recordPreparingWorkspace } from "../src/lifecycle.js";
 import { run } from "../src/process.js";
 import { readState, storePaths, treeKey } from "../src/state.js";
 
@@ -364,6 +365,52 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   )).stdout);
   assert.equal((await fs.readFile(path.join(acquired.path, "version.txt"), "utf8")).trim(), "new");
   await run(process.execPath, [cli, "release", acquired.assignmentId, "--json"], { cwd: root });
+
+  const createdPath = path.join(parent, "created");
+  const created = JSON.parse((await run(
+    process.execPath,
+    [cli, "create", "agent/created", "--path", createdPath, "--fetch", "--json"],
+    { cwd: root },
+  )).stdout);
+  assert.equal((await fs.readFile(path.join(created.path, "version.txt"), "utf8")).trim(), "new");
+  await run(process.execPath, [cli, "remove", created.path, "--force"], { cwd: root });
+
+  const failed = await run(
+    process.execPath,
+    [cli, "create", "agent/missing", "--from", "missing-ref", "--json"],
+    { cwd: root, allowFailure: true },
+  );
+  assert.equal(failed.code, 1);
+  assert.equal(JSON.parse(failed.stderr).status, "error");
+});
+
+test("gc recovers an abandoned warm preparation", async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-abandoned-warm-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "repo");
+  const abandoned = path.join(parent, "abandoned");
+  await fs.mkdir(root);
+  await run("git", ["init", "-q", "-b", "main"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: root });
+  await fs.writeFile(path.join(root, "tracked.txt"), "fixture\n");
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "fixture"], { cwd: root });
+  await run("git", ["worktree", "add", "--detach", abandoned, "HEAD"], { cwd: root });
+  const repository = await getRepository(root);
+  await recordPreparingWorkspace(storePaths(repository.commonDir), {
+    path: abandoned,
+    branch: "(warm)",
+    now: "2026-01-01T00:00:00.000Z",
+  });
+
+  const collected = JSON.parse((await run(
+    process.execPath,
+    [cli, "gc", "--max-age", "0", "--apply", "--json"],
+    { cwd: root },
+  )).stdout);
+  assert.equal(collected.removed.some((entry: { path: string }) => path.resolve(entry.path) === path.resolve(abandoned)), true);
+  await assert.rejects(fs.access(abandoned));
 });
 
 test("CLI exposes stable help, version, JSON, and argument errors", async (t) => {

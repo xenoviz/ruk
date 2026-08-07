@@ -129,7 +129,8 @@ and `expiresAt`; assignment fields are null when no assignment is active.
 managed workspace. Use the returned acquire path as the working directory.
 
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
-retains the assignment when the command leaves a dirty tree or cleanup fails.
+retains the assignment when the command leaves a dirty tree, cleanup fails, or
+the launched process cannot be identified while descendants remain.
 `ruk warm --count <n> --json` ensures that the pool has the requested number of
 available prepared workspaces.
 

@@ -64,8 +64,9 @@ performs the filesystem scan during ordinary commands.
 
 All state changes use the existing common-directory lock and atomic state
 replacement. Assignment IDs continue to fence renew, release, process records,
-ports, and recovery. An interrupted warm or preparation operation becomes a
-failed managed workspace and remains eligible for normal garbage collection.
+ports, and recovery. Garbage collection acquires the warm lock before treating
+an interrupted warm preparation as abandoned, then fences removal with its
+operation ID and update timestamp.
 
 The implementation reuses the existing lifecycle, Git, dependency, process,
 and state modules. It introduces no service, background process, arbitrary

@@ -41,7 +41,7 @@ export async function fetchRemote(cwd: string, startPoint = "origin/main"): Prom
   const remotes = (await run("git", ["remote"], { cwd })).stdout.split(/\r?\n/).filter(Boolean);
   const remote = remotes.includes(candidate) ? candidate : "origin";
   if (!remotes.includes(remote)) throw new Error(`Git remote ${remote} does not exist`);
-  await run("git", ["fetch", "--prune", remote], { cwd, stdio: "inherit" });
+  await run("git", ["fetch", "--prune", remote], { cwd });
   return remote;
 }
 
@@ -122,7 +122,10 @@ export async function returnWorktree(
   if (force) {
     await run("git", ["reset", "--hard", "HEAD"], { cwd });
   }
-  const exclusions = preservedProjections.flatMap((projection) => ["-e", `/${projection.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "")}/`]);
+  const exclusions = preservedProjections.flatMap((projection) => {
+    const normalized = projection.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    return ["-e", `/${normalized.replace(/[\\*?\[\]]/g, "\\$&")}/`];
+  });
   await run("git", ["clean", "-ffdx", ...exclusions], { cwd });
   await run("git", ["switch", "--detach"], { cwd });
 }

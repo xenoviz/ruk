@@ -202,6 +202,21 @@ test("named port reservations preserve prototype-like names", async (t) => {
   assert.equal(persisted.assignment!.ports["__proto__"], 4100);
 });
 
+test("named ports remain unique across repositories", async (t) => {
+  const { root, paths } = await fixture(t);
+  const otherPaths = storePaths(path.join(root, "other-repository"));
+  const first = await assign(paths, path.join(root, "first"));
+  const second = await assign(otherPaths, path.join(root, "second"));
+  const allocator = async (excluded: ReadonlySet<number>) => excluded.has(4100) ? 4101 : 4100;
+
+  const [firstPorts, secondPorts] = await Promise.all([
+    allocateAssignmentPorts(paths, first.assignment!.id, ["app"], allocator),
+    allocateAssignmentPorts(otherPaths, second.assignment!.id, ["app"], allocator),
+  ]);
+
+  assert.notEqual(firstPorts.assignment!.ports["app"], secondPorts.assignment!.ports["app"]);
+});
+
 test("GC selects stale safe records and reports expired assignments without reclaiming them", async (t) => {
   const { root, paths } = await fixture(t);
   const available = await makeAvailable(paths, path.join(root, "available"), T1);

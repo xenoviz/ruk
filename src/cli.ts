@@ -42,7 +42,7 @@ import {
 } from "./lifecycle.js";
 import { withDirectoryLock } from "./lock.js";
 import { portEnvironment } from "./ports.js";
-import { killProcessTree, processIdentity, run } from "./process.js";
+import { killProcessTree, ProcessIdentityUnavailableError, processIdentity, requireProcessIdentity, run } from "./process.js";
 import { deleteTreeState, readState, storePaths, treeKey, treeLockPath } from "./state.js";
 import { diskStatistics, usageStatistics } from "./statistics.js";
 import type { CliIo, DependencyReporter, StorePaths, TrackedProcessRecord, WorkspaceRecord } from "./types.js";
@@ -154,10 +154,8 @@ async function context(cwd: string) {
 function dependencyReporter(io: CliIo, json: boolean): DependencyReporter {
   return json
     ? {
-        write: (message: string) => {
-          io.stderr.write(message);
-        },
-        stdio: ["ignore", io.stderr, io.stderr],
+        write: () => {},
+        stdio: "pipe",
       }
     : {
         write: (message: string) => {
@@ -252,7 +250,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
         branch,
         startPoint,
         detach: true,
-        stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
+        stdio: options.json ? "pipe" : "inherit",
       });
       await lockWorktree(repository.root, workspace.path);
     }
@@ -430,7 +428,8 @@ async function create(args: readonly string[], cwd: string, io: CliIo) {
   requirePositionals(positional, 1, "create requires exactly one branch name");
   const branch = positional[0]!;
   const { repository, manager } = await context(cwd);
-  await fetchIfRequested(repository.root, options.from ?? "origin/main", options.fetch ?? false);
+  const startPoint = options.from ?? (options.fetch ? "origin/main" : "HEAD");
+  await fetchIfRequested(repository.root, startPoint, options.fetch ?? false);
   const backend = await dependencyFingerprint({ root: repository.root, manager });
   if (manager.dependencyMode === "shared") assertSharedBackendSupported(backend.manager);
   const destination = path.resolve(
@@ -442,9 +441,9 @@ async function create(args: readonly string[], cwd: string, io: CliIo) {
     cwd: repository.root,
     destination,
     branch,
-    startPoint: options.from ?? "HEAD",
+    startPoint,
     detach: options.detach ?? false,
-    stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
+    stdio: options.json ? "pipe" : "inherit",
   });
 
   try {
@@ -461,7 +460,7 @@ async function create(args: readonly string[], cwd: string, io: CliIo) {
         cwd: repository.root,
         destination,
         force: true,
-        stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
+        stdio: options.json ? "pipe" : "inherit",
       });
     } catch (cleanupError) {
       throw new AggregateError(
@@ -582,6 +581,7 @@ async function collectWorkspace(
   repository: Awaited<ReturnType<typeof getRepository>>,
   paths: StorePaths,
   workspace: WorkspaceRecord,
+  stdio: "pipe" | "inherit" = "inherit",
 ): Promise<void> {
   await withDirectoryLock(treeLockPath(paths, workspace.path), async () => {
     const collecting = await beginWorkspaceCollection(paths, workspace.path, workspace.updatedAt);
@@ -591,7 +591,7 @@ async function collectWorkspace(
       const managedPath = await canonicalPath(workspace.path);
       if (await Promise.all(worktrees.map((entry) => canonicalPath(entry.path))).then((entries) => entries.includes(managedPath))) {
         await unlockWorktree(repository.root, workspace.path);
-        await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true });
+        await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true, stdio });
       }
       gitRemoved = true;
       await deleteWorkspaceRecord(paths, workspace.path, collecting.operationId!);
@@ -616,7 +616,11 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   const paths = storePaths(repository.commonDir);
   const cutoff = new Date(Date.now() - minutes(options.maxAge, 1440, "--max-age", true) * 60_000).toISOString();
   const current = await canonicalPath(repository.root);
-  const candidates = await identifyGcCandidates(paths, cutoff);
+  const candidates = await withDirectoryLock(
+    path.join(paths.root, "warm.lock"),
+    () => identifyGcCandidates(paths, cutoff, undefined, true),
+    { staleMs: 0 },
+  );
   const expiredCandidates = candidates.filter((candidate) => candidate.requiresForce);
   const safeCandidates = candidates.filter((candidate) => !candidate.requiresForce);
   const removed: Array<{ path: string; lifecycle: string; reason: string }> = [];
@@ -624,22 +628,30 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   if (options.apply) {
     for (const candidate of safeCandidates) {
       if (await canonicalPath(candidate.workspace.path) === current) continue;
-      await collectWorkspace(repository, paths, candidate.workspace);
-      removed.push({ path: candidate.workspace.path, lifecycle: candidate.workspace.lifecycle, reason: "older than max age" });
+      await collectWorkspace(repository, paths, candidate.workspace, options.json ? "pipe" : "inherit");
+      removed.push({
+        path: candidate.workspace.path,
+        lifecycle: candidate.workspace.lifecycle,
+        reason: candidate.reason === "abandoned-warm-preparation" ? "abandoned warm preparation" : "older than max age",
+      });
     }
     if (options.forceExpired) {
       for (const candidate of expiredCandidates) {
         if (await canonicalPath(candidate.workspace.path) === current) continue;
         const assignmentId = candidate.workspace.assignment!.id;
         const released = await releaseAssignment(repository, assignmentId, true);
-        await collectWorkspace(repository, paths, released.workspace);
+        await collectWorkspace(repository, paths, released.workspace, options.json ? "pipe" : "inherit");
         removed.push({ path: candidate.workspace.path, lifecycle: candidate.workspace.lifecycle, reason: "expired assignment (forced)" });
       }
     }
   } else {
     for (const candidate of safeCandidates) {
       if (await canonicalPath(candidate.workspace.path) === current) continue;
-      removed.push({ path: candidate.workspace.path, lifecycle: candidate.workspace.lifecycle, reason: "older than max age" });
+      removed.push({
+        path: candidate.workspace.path,
+        lifecycle: candidate.workspace.lifecycle,
+        reason: candidate.reason === "abandoned-warm-preparation" ? "abandoned warm preparation" : "older than max age",
+      });
     }
   }
 
@@ -694,9 +706,8 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
       allowFailure: true,
       detached: true,
       onSpawn: async (pid) => {
-        const startedAt = await processIdentity(pid);
+        const startedAt = await requireProcessIdentity(pid);
         if (!startedAt) {
-          // A short-lived child may exit before Windows can report its start time.
           registered();
           return;
         }
@@ -768,7 +779,7 @@ async function warm(args: readonly string[], cwd: string, io: CliIo) {
           branch: "(warm)",
           startPoint,
           detach: true,
-          stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
+          stdio: options.json ? "pipe" : "inherit",
         });
         await lockWorktree(repository.root, destination);
         await sync(destination, io, options.json ?? false, false);
@@ -837,6 +848,10 @@ async function runAssignedAndRelease(
     code = await execute(["--", ...command], assigned.path, io);
   } catch (error) {
     commandError = error;
+  }
+  if (commandError instanceof ProcessIdentityUnavailableError) {
+    retainedAssignment(io, assigned, commandError);
+    throw commandError;
   }
   const { repository } = await repositoryContext(sourceCwd);
   try {
