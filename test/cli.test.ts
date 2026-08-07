@@ -235,6 +235,34 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(await fs.readFile(path.join(repaired.path, "node_modules", "fixture", "ready"), "utf8"), "yes");
   await run(process.execPath, [cli, "release", repaired.assignmentId, "--json"], { cwd: root });
 
+  await fs.writeFile(path.join(repaired.path, "node_modules", "fixture", "ready"), "stale-caller");
+  let staleRun!: ReturnType<typeof run>;
+  let staleReplacement!: Awaited<ReturnType<typeof reserveAvailableWorkspace>>;
+  await withDirectoryLock(treeLockPath(paths, repaired.path), async () => {
+    staleRun = run(
+      process.execPath,
+      [cli, "run", "--", process.execPath, "-e", "require('fs').writeFileSync('stale.txt','ran')"],
+      { cwd: repaired.path, allowFailure: true },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    staleReplacement = await reserveAvailableWorkspace(paths, {
+      owner: "replacement",
+      hostname: "host",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      branch: "agent/replacement",
+    });
+    assert.ok(staleReplacement);
+    staleReplacement = await recordSuccessfulAcquisition(
+      paths,
+      staleReplacement.assignment!.id,
+      staleReplacement.operationId!,
+      true,
+    );
+  });
+  assert.equal((await staleRun).code, 1);
+  await assert.rejects(fs.access(path.join(repaired.path, "stale.txt")));
+  await run(process.execPath, [cli, "release", staleReplacement!.assignment!.id, "--json"], { cwd: root });
+
   let blockedAcquire!: ReturnType<typeof run>;
   await withDirectoryLock(`${treeLockPath(paths, repaired.path)}.acquire`, async () => {
     blockedAcquire = run(process.execPath, [cli, "acquire", "agent/blocked-handoff", "--json"], { cwd: root });
@@ -406,11 +434,15 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   const expiredPlan = JSON.parse((await run(process.execPath, [cli, "gc", "--json"], { cwd: root })).stdout);
   assert.equal(expiredPlan.removed.length, 0);
   assert.equal(expiredPlan.expired[0].assignmentId, expiring.assignmentId);
-  const expiredCollection = JSON.parse((await run(
-    process.execPath,
-    [cli, "gc", "--apply", "--force-expired", "--json"],
-    { cwd: root },
-  )).stdout);
+  let forcedGc!: ReturnType<typeof run>;
+  await withDirectoryLock(`${treeLockPath(paths, expiring.path)}.acquire`, async () => {
+    forcedGc = run(process.execPath, [cli, "gc", "--apply", "--force-expired", "--json"], { cwd: root });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const stillAssigned = (await readState(paths)).workspaces[treeKey(expiring.path)]!;
+    assert.equal(stillAssigned.lifecycle, "assigned");
+    assert.equal(stillAssigned.assignment!.id, expiring.assignmentId);
+  });
+  const expiredCollection = JSON.parse((await forcedGc).stdout);
   assert.equal(expiredCollection.removed[0].reason, "expired assignment (forced)");
   await assert.rejects(fs.access(expiring.path));
 });

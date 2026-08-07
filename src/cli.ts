@@ -754,9 +754,34 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
     if (options.forceExpired) {
       for (const candidate of expiredCandidates) {
         if (await canonicalPath(candidate.workspace.path) === current) continue;
-        const assignmentId = candidate.workspace.assignment!.id;
-        const released = await releaseAssignment(repository, assignmentId, true, new Date().toISOString());
-        await collectWorkspace(repository, paths, released.workspace, options.json ? "pipe" : "inherit");
+        const collected = await withDirectoryLock(
+          `${treeLockPath(paths, candidate.workspace.path)}.acquire`,
+          async () => {
+            const collectionTime = new Date().toISOString();
+            const currentCandidate = (await identifyGcCandidates(paths, cutoff, collectionTime, true)).find(
+              (entry) =>
+                entry.reason === "expired-assignment" &&
+                treeKey(entry.workspace.path) === treeKey(candidate.workspace.path) &&
+                entry.workspace.assignment?.id === candidate.workspace.assignment?.id,
+            );
+            if (!currentCandidate) return false;
+            const released = await releaseAssignment(
+              repository,
+              currentCandidate.workspace.assignment!.id,
+              true,
+              collectionTime,
+            );
+            await collectWorkspaceWithAcquisitionLock(
+              repository,
+              paths,
+              released.workspace,
+              options.json ? "pipe" : "inherit",
+            );
+            return true;
+          },
+          { staleMs: 0 },
+        );
+        if (!collected) continue;
         removed.push({ path: candidate.workspace.path, lifecycle: candidate.workspace.lifecycle, reason: "expired assignment (forced)" });
       }
     }
@@ -806,6 +831,13 @@ async function execute(
   const paths = storePaths(repository.commonDir);
   let state = await readState(paths);
   let lifecycle = state.workspaces[treeKey(repository.root)];
+  if (lifecycle && (
+    lifecycle.lifecycle !== "assigned" ||
+    !lifecycle.assignment ||
+    lifecycle.operationId !== null
+  )) {
+    throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
+  }
   const expectedAssignmentId = lifecycle?.assignment?.id;
   const tree = state.trees[treeKey(repository.root)];
   if (
@@ -819,6 +851,9 @@ async function execute(
     lifecycle = state.workspaces[treeKey(repository.root)];
     if (expectedAssignmentId && lifecycle?.assignment?.id !== expectedAssignmentId) {
       throw new Error(`Assignment ${expectedAssignmentId} no longer owns ${repository.root}`);
+    }
+    if (!expectedAssignmentId && lifecycle) {
+      throw new Error(`Workspace ${repository.root} became managed during dependency synchronization`);
     }
   }
   if (!lifecycle) {
@@ -924,7 +959,7 @@ async function warm(args: readonly string[], cwd: string, io: CliIo) {
     );
     let available = 0;
     for (const workspace of Object.values(initial.workspaces)) {
-      if (workspace.lifecycle !== "available") continue;
+      if (workspace.lifecycle !== "available" || workspace.operationId !== null) continue;
       if (worktreeHeads.get(treeKey(workspace.path)) !== targetHead) continue;
       const record = initial.trees[treeKey(workspace.path)];
       if (!record || !(await dependencyProjectionsAreValid(workspace.path, record))) continue;

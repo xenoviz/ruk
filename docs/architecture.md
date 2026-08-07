@@ -125,7 +125,8 @@ Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
 transitions and preserve ownership whenever normal release is unsafe. Command
 launch snapshots its original assignment across dependency repair and rejects
-reassignment instead of adopting another agent's lease. Explicit `--fetch` is
+reassignment or an initially unassigned pool slot instead of adopting another
+agent's lease. Explicit `--fetch` is
 the only workspace operation in this layer that contacts a Git remote, and an
 explicit remote name must exist.
 
@@ -136,7 +137,8 @@ transitions. Pool reservations are published only after their handoff lock is
 held. Acquisition recovery revalidates under the same lock, and a failed
 recovery restores its acquisition marker. Failed removal is re-locked before a
 workspace becomes available, and post-removal state remains retryable and is
-excluded from available-capacity statistics.
+excluded from available-capacity statistics and warm counts. Forced-expiry
+release uses the handoff lock before it changes workspace state.
 
 See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
 for transitions, fencing, GC boundaries, and non-goals.

@@ -45,7 +45,7 @@ the desired number of available prepared workspaces, not the number to add;
 acquisition and warm-capacity reservations are serialized.
 Use `ruk stats --json` for recorded reuse and preparation metrics; add `--disk`
 only when an on-demand filesystem scan is acceptable. Available capacity omits
-workspaces fenced by collection.
+workspaces fenced by collection, both in statistics and warm-pool counts.
 
 Named ports are cooperative host-local reservations. `--port app` returns an
 `app` field and makes `RUK_PORT_APP` available to `ruk run`, `exec`, and
@@ -60,7 +60,7 @@ Forced collection revalidates expiry atomically before changing lifecycle state.
 GC recovers interrupted preparations, pre-handoff acquisitions, and collections
 after the age cutoff; it revalidates handoff state under the acquisition lock
 and preserves recovery markers after failed cleanup. Workspace and warm locks
-prevent recovery from racing live operations.
+prevent recovery from racing live operations, including forced expiry cleanup.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read
