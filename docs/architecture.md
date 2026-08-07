@@ -118,8 +118,8 @@ after their leader exits so background children can still be cleaned safely.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
-cleanup. Non-interactive shells do not allocate a PTY and explicitly forward
-wrapper interrupts to their detached process group.
+cleanup, and a leaderless Linux session fails closed. Detached managed commands
+explicitly forward wrapper interrupts to their process group.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
@@ -139,6 +139,8 @@ recovery restores its acquisition marker. Failed removal is re-locked before a
 workspace becomes available, and post-removal state remains retryable and is
 excluded from available-capacity statistics and warm counts. Forced-expiry
 release uses the handoff lock before it changes workspace state.
+Ordinary release cannot cross an active acquisition marker, and an unreadable
+identity for a provably live lock owner never authorizes stale-lock recovery.
 
 See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
 for transitions, fencing, GC boundaries, and non-goals.

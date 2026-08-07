@@ -105,6 +105,15 @@ test("npm auto-detection uses ci with a lockfile and install without one", async
   assert.deepEqual((await detectPackageManager(root, config)).command, ["npm", "ci"]);
 });
 
+test("Bun auto-detection uses a frozen lockfile install", async (t) => {
+  const root = await directory(t);
+  await fs.writeFile(path.join(root, "package.json"), '{"name":"fixture","packageManager":"bun@1.3.14"}\n');
+  await fs.writeFile(path.join(root, "bun.lock"), "");
+  const manager = await detectPackageManager(root, { dependencyMode: null, installCommand: null });
+  assert.deepEqual(manager.command, ["bun", "install", "--frozen-lockfile"]);
+  assert.equal(manager.dependencyMode, "shared");
+});
+
 test("Yarn uses the locked-install flag supported by Classic and Modern", async (t) => {
   const root = await directory(t);
   const bin = path.join(root, "bin");

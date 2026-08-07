@@ -28,10 +28,13 @@ assignment when child identity cannot be established while descendants remain;
 surviving POSIX process groups remain tracked even after their leader exits;
 failed registration also terminates the detached group after a short-lived leader exits.
 Ruk fences the assignment again immediately before launching a command.
+Managed detached `run` and `exec` commands forward interrupts to their POSIX
+process group. Ordinary release is rejected until acquisition handoff finishes.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
 an interactive, terminal-attached assigned shell; its isolated terminal session
 keeps surviving descendants tracked after the shell exits (by session ID on
 Linux and a live, identity-fenced controlling-terminal sentinel on macOS).
+Leaderless Linux session records fail closed rather than signaling a reused ID.
 Non-interactive shell input skips PTY allocation so EOF remains observable and
 forwards interrupts to its detached process group. Commit intended work before
 exit so normal release can succeed. Release integrity-validates recorded dependency projections:
@@ -62,6 +65,7 @@ GC recovers interrupted preparations, pre-handoff acquisitions, and collections
 after the age cutoff; it revalidates handoff state under the acquisition lock
 and preserves recovery markers after failed cleanup. Workspace and warm locks
 prevent recovery from racing live operations, including forced expiry cleanup.
+An unreadable identity for a live lock owner is treated as busy, never stale.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read

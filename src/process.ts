@@ -319,7 +319,9 @@ async function terminateProcessSession(
   force: boolean,
 ): Promise<boolean> {
   const leaderIdentity = await processIdentity(sessionId);
-  if (leaderIdentity && leaderIdentity !== sessionStartedAt) {
+  if (!leaderIdentity && await processSessionExists(sessionId)) throw new ProcessIdentityUnavailableError(sessionId);
+  if (!leaderIdentity) return false;
+  if (leaderIdentity !== sessionStartedAt) {
     throw new Error(`Refusing to terminate reused process session ${sessionId}`);
   }
   const members = (await posixProcesses()).filter((process) =>

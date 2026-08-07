@@ -75,6 +75,7 @@ test("process runner reports and cleans up a tracked process group", async () =>
     },
   });
   while (!identity) await new Promise((resolve) => setTimeout(resolve, 10));
+  await assert.rejects(killProcessTree(pid, true, "wrong-identity"), /reused process ID/);
   assert.equal(await killProcessTree(pid, true, identity), true);
   const result = await running;
   assert.notEqual(result.code, 0);
@@ -163,10 +164,14 @@ test("process runner terminates an attached process tree when tracking registrat
     /tracking failed/,
   );
   assert.ok(childPid > 0);
-  for (let attempt = 0; attempt < 100 && await processIdentity(childPid); attempt += 1) {
+  const childIsActive = async () => {
+    const status = await run("ps", ["-o", "stat=", "-p", String(childPid)], { allowFailure: true });
+    return status.code === 0 && status.stdout.trim() !== "" && !status.stdout.trim().startsWith("Z");
+  };
+  for (let attempt = 0; attempt < 100 && await childIsActive(); attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  assert.equal(await processIdentity(childPid), null);
+  assert.equal(await childIsActive(), false);
 });
 
 test("Windows process identity inspection confirms the current process", async (t) => {
@@ -192,6 +197,31 @@ test("POSIX session inspection failures fail closed", async (t) => {
         startedAt: "missing",
       }),
       /Could not enumerate POSIX processes/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+  }
+});
+
+test("leaderless POSIX sessions fail closed before termination", async (t) => {
+  if (process.platform !== "linux") return t.skip("Linux session IDs are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-session-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nif [ \"$1\" = \"-e\" ]; then printf '424243 424242 S\\n'; exit 0; fi\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  try {
+    await assert.rejects(
+      terminateTrackedProcess({
+        pid: 424_242,
+        sessionId: 424_242,
+        sessionStartedAt: "original-session",
+        startedAt: "original-session",
+      }, true),
+      /cannot be released safely/,
     );
   } finally {
     if (originalPath === undefined) delete process.env["PATH"];

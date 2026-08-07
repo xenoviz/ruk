@@ -54,3 +54,5 @@ versioning.
   reservable warm capacity.
 - Reject commands from unassigned pool slots, exclude collection-fenced slots
   from warm capacity, and serialize forced-expiry cleanup with live handoff.
+- Block release during acquisition handoff, forward detached command interrupts,
+  and fail closed on leaderless sessions or unreadable live lock identities.

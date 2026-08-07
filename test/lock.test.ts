@@ -61,6 +61,41 @@ test("directory lock recovers a stale lock created before owner metadata", async
   assert.equal(entered, true);
 });
 
+test("directory lock preserves a live owner when process identity is unreadable", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX identity probing is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-live-unknown-lock-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const lock = path.join(root, "state.lock");
+  await fs.mkdir(lock);
+  await fs.writeFile(
+    path.join(lock, "owner.json"),
+    JSON.stringify({
+      pid: process.pid,
+      hostname: os.hostname(),
+      token: "live-owner",
+      createdAt: oldDate(),
+      processIdentity: "unreadable-owner",
+    }),
+  );
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const old = new Date(Date.now() - 10_000);
+  await fs.utimes(lock, old, old);
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  try {
+    await assert.rejects(
+      withDirectoryLock(lock, () => undefined, { staleMs: 0, timeoutMs: 50 }),
+      /Timed out waiting for lock/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+  }
+  assert.equal(JSON.parse(await fs.readFile(path.join(lock, "owner.json"), "utf8")).token, "live-owner");
+});
+
 test("concurrent stale-lock recovery preserves serialization", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-stale-lock-race-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

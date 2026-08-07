@@ -355,7 +355,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     const interruptReady = path.join(parent, "interrupt-ready");
     await fs.writeFile(
       interruptProbe,
-      "#!/bin/sh\ntrap 'printf received > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 130' INT\nprintf ready > \"$RUK_TEST_INTERRUPT_READY\"\nwhile :; do sleep 60 & wait $!; done\n",
+      "#!/bin/sh\ntrap 'printf received > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 130' INT\nprintf ready > \"$RUK_TEST_INTERRUPT_READY\"\nwhile :; do sleep 5 & wait $!; done\n",
     );
     await fs.chmod(interruptProbe, 0o755);
     const interruptedShell = await run(process.execPath, [cli, "shell", "agent/interrupted-shell"], {
@@ -375,6 +375,43 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     assert.equal(interruptedShell.code, 130);
     assert.equal(await fs.readFile(interruptMarker, "utf8"), "received");
     assert.match(interruptedShell.stderr, /Released/);
+
+    const interruptCommand = async (args: string[], commandCwd: string) => {
+      await Promise.all([fs.rm(interruptMarker, { force: true }), fs.rm(interruptReady, { force: true })]);
+      return run(process.execPath, [cli, ...args], {
+        cwd: commandCwd,
+        allowFailure: true,
+        env: {
+          ...process.env,
+          RUK_TEST_INTERRUPT_MARKER: interruptMarker,
+          RUK_TEST_INTERRUPT_READY: interruptReady,
+        },
+        onSpawn: async (pid) => {
+          await waitFor(async () => fs.access(interruptReady).then(() => true, () => false));
+          process.kill(pid, "SIGINT");
+        },
+      });
+    };
+    const interruptedRunAssignment = JSON.parse((await run(
+      process.execPath,
+      [cli, "acquire", "agent/interrupted-run", "--json"],
+      { cwd: root },
+    )).stdout);
+    const interruptedRun = await interruptCommand(
+      ["run", "--", interruptProbe],
+      interruptedRunAssignment.path,
+    );
+    assert.equal(interruptedRun.code, 130);
+    assert.equal(await fs.readFile(interruptMarker, "utf8"), "received");
+    await run(process.execPath, [cli, "release", interruptedRunAssignment.assignmentId, "--json"], { cwd: root });
+
+    const interruptedExec = await interruptCommand(
+      ["exec", "agent/interrupted-exec", interruptProbe],
+      root,
+    );
+    assert.equal(interruptedExec.code, 130);
+    assert.equal(await fs.readFile(interruptMarker, "utf8"), "received");
+    assert.match(interruptedExec.stderr, /Released/);
 
     const shellProbe = path.join(parent, "shell-probe.sh");
     const shellChildPid = path.join(parent, "shell-child.pid");

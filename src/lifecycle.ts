@@ -295,11 +295,18 @@ export async function beginWorkspaceReturn(
   assignmentId: string,
   now?: string,
   requireExpiredBy?: string,
+  acquisitionOperationId?: string,
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     if (workspace.lifecycle === "returning") return workspace;
     requireLifecycle(workspace, "assigned");
+    if (workspace.operationId !== null && workspace.operationId !== acquisitionOperationId) {
+      throw new Error(`Assignment ${assignmentId} acquisition is still in progress`);
+    }
+    if (acquisitionOperationId !== undefined && workspace.operationId !== acquisitionOperationId) {
+      throw new Error(`Assignment ${assignmentId} acquisition operation does not match`);
+    }
     if (
       requireExpiredBy &&
       Date.parse(workspace.assignment!.expiresAt) > Date.parse(timestamp(requireExpiredBy, "requireExpiredBy"))

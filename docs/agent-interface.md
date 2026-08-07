@@ -86,6 +86,7 @@ graceful termination or the worktree is dirty. `--force` force-kills surviving
 tracked process trees and discards tracked and untracked changes.
 Failed acquisition cleanup restores assigned ownership so the fenced workspace
 can be discovered and recovered.
+Ordinary release is rejected while an acquisition handoff marker is active.
 Tracked, untracked, and ignored files are removed before a workspace enters the
 pool, except dependency projections recorded and integrity-validated by Ruk.
 Preserving an unchanged projection allows reassignment to skip installation;
@@ -142,6 +143,8 @@ projection contents or linked package targets no longer match their fingerprint.
 rechecks the assignment fence and records the child process only when invoked
 inside an assigned managed workspace. Use the returned acquire path as the
 working directory.
+Detached managed `run` and `exec` commands forward wrapper interrupts to their
+recorded POSIX process group.
 
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
 retains the assignment when the command leaves a dirty tree, cleanup fails, or

@@ -314,7 +314,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
         if (operationId) {
           await markWorkspaceFailed(paths, workspace.path, operationId, message);
         } else if (workspace.assignment) {
-          await beginWorkspaceReturn(paths, workspace.assignment.id);
+          await beginWorkspaceReturn(paths, workspace.assignment.id, undefined, undefined, workspace.operationId!);
           returning = true;
           const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
           await returnWorktree(workspace.path, true, dependenciesReady ? projections : []);
@@ -430,6 +430,7 @@ async function releaseAssignment(
   assignmentId: string,
   force: boolean,
   requireExpiredBy?: string,
+  acquisitionOperationId?: string,
 ): Promise<{ workspace: WorkspaceRecord; cleanedProcesses: number }> {
   const paths = storePaths(repository.commonDir);
   const matches = await findAssignments(paths, { id: assignmentId });
@@ -438,7 +439,13 @@ async function releaseAssignment(
   return withDirectoryLock(treeLockPath(paths, workspacePath), async () => {
     let returning = false;
     try {
-      const workspace = await beginWorkspaceReturn(paths, assignmentId, undefined, requireExpiredBy);
+      const workspace = await beginWorkspaceReturn(
+        paths,
+        assignmentId,
+        undefined,
+        requireExpiredBy,
+        acquisitionOperationId,
+      );
       returning = true;
       const cleanedProcesses = await cleanTrackedProcesses(paths, assignmentId, workspace.processes, force);
       const tree = (await readState(paths)).trees[treeKey(workspace.path)];
@@ -730,7 +737,13 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
                 entry.workspace.assignment?.id === candidate.workspace.assignment?.id,
             );
             if (!currentCandidate) return false;
-            const released = await releaseAssignment(repository, currentCandidate.workspace.assignment!.id, true);
+            const released = await releaseAssignment(
+              repository,
+              currentCandidate.workspace.assignment!.id,
+              true,
+              undefined,
+              currentCandidate.workspace.operationId!,
+            );
             await collectWorkspaceWithAcquisitionLock(
               repository,
               paths,
@@ -819,7 +832,7 @@ async function execute(
   io: CliIo,
   detached = true,
   sessionMarker?: string,
-  forwardInterrupt = false,
+  forwardInterrupt = detached,
 ): Promise<number> {
   const separator = args.indexOf("--");
   const command = separator < 0 ? [...args] : args.slice(separator + 1);
@@ -1046,7 +1059,7 @@ async function runAssignedAndRelease(
   io: CliIo,
   detached = true,
   sessionMarker?: string,
-  forwardInterrupt = false,
+  forwardInterrupt = detached,
 ): Promise<number> {
   let code = 1;
   let commandError: unknown;

@@ -92,7 +92,12 @@ test("preparation and assignment finalizers are fenced by immutable IDs", async 
     now: T0,
   });
   assert.match(first.assignment!.id, /^[0-9a-f-]{36}$/i);
-  await beginWorkspaceReturn(paths, first.assignment!.id, T1);
+  await assert.rejects(beginWorkspaceReturn(paths, first.assignment!.id, T1), /acquisition is still in progress/);
+  await assert.rejects(
+    beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, crypto.randomUUID()),
+    /acquisition is still in progress/,
+  );
+  await beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, first.operationId!);
   await finishWorkspaceReturn(paths, first.assignment!.id, T1);
   const second = await reserveAvailableWorkspace(paths, {
     owner: "other",
@@ -114,6 +119,10 @@ test("renewal requires the exact active assignment", async (t) => {
   assert.equal(renewed.assignment!.renewedAt, T1);
   assert.equal(renewed.assignment!.expiresAt, T3);
   await assert.rejects(renewAssignment(paths, crypto.randomUUID(), T3, T1), /does not exist/);
+  await assert.rejects(
+    beginWorkspaceReturn(paths, workspace.assignment!.id, T2, undefined, crypto.randomUUID()),
+    /acquisition operation does not match/,
+  );
   await assert.rejects(beginWorkspaceReturn(paths, workspace.assignment!.id, T2, T2), /renewed before collection/);
   assert.equal((await readState(paths)).workspaces[treeKey(workspace.path)]!.lifecycle, "assigned");
 });
@@ -158,7 +167,17 @@ test("failed return restores an interrupted acquisition marker", async (t) => {
     now: T0,
   });
 
-  const returning = await beginWorkspaceReturn(paths, assigned.assignment!.id, T1);
+  await assert.rejects(
+    beginWorkspaceReturn(paths, assigned.assignment!.id, T1),
+    /acquisition is still in progress/,
+  );
+  const returning = await beginWorkspaceReturn(
+    paths,
+    assigned.assignment!.id,
+    T1,
+    undefined,
+    assigned.operationId!,
+  );
   assert.equal(returning.operationId, assigned.operationId);
   const cancelled = await cancelWorkspaceReturn(paths, assigned.assignment!.id, "cleanup failed", T2);
   assert.equal(cancelled.operationId, assigned.operationId);
@@ -167,7 +186,7 @@ test("failed return restores an interrupted acquisition marker", async (t) => {
     true,
   );
 
-  await beginWorkspaceReturn(paths, assigned.assignment!.id, T2);
+  await beginWorkspaceReturn(paths, assigned.assignment!.id, T2, undefined, assigned.operationId!);
   const available = await finishWorkspaceReturn(paths, assigned.assignment!.id, T3);
   assert.equal(available.operationId, null);
 });
@@ -186,7 +205,8 @@ test("only one concurrent caller reserves an available workspace", async (t) => 
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(Object.values((await readState(paths)).workspaces)[0]!.lifecycle, "available");
   });
-  await beginWorkspaceReturn(paths, (await blockedReservation)!.assignment!.id, T2);
+  const reserved = (await blockedReservation)!;
+  await beginWorkspaceReturn(paths, reserved.assignment!.id, T2, undefined, reserved.operationId!);
   await finishWorkspaceReturn(paths, (await blockedReservation)!.assignment!.id, T2);
   const results = await Promise.all(
     ["one", "two"].map((owner) =>
