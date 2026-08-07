@@ -48,6 +48,8 @@ versioning.
   retry marker after failed cleanup, and forward non-interactive shell signals.
 - Publish pool reservations only under their handoff lock, preserve assignment
   identity across repair, harden process inspection and registration cleanup,
+  terminate detached descendants after failed registration, classify process
+  enumeration failures as retryable resource contention,
   bound JSON installer output, validate explicit remotes, and report only
   reservable warm capacity.
 - Reject commands from unassigned pool slots, exclude collection-fenced slots

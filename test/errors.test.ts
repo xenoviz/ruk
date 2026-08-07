@@ -18,6 +18,12 @@ test("structured failures expose stable automation categories", () => {
     message: "Process 42 could not be identified, so its workspace cannot be released safely",
     retryable: true,
   });
+  assert.deepEqual(errorRecord(new Error("Could not enumerate POSIX processes: unavailable")), {
+    status: "error",
+    code: "RESOURCE_BUSY",
+    message: "Could not enumerate POSIX processes: unavailable",
+    retryable: true,
+  });
   assert.equal(errorRecord(new Error("unexpected")).code, "OPERATION_FAILED");
   assert.equal(jsonRequested(["status", "--json"]), true);
   assert.equal(jsonRequested(["exec", "branch", "--", "tool", "--json"]), false);

@@ -115,9 +115,7 @@ export async function run(
         spawnError = error;
         try {
           const expectedIdentity = await spawnedIdentity;
-          const killed = expectedIdentity
-            ? await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity)
-            : false;
+          const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
           if (!killed) child.kill("SIGKILL");
         } catch {
           child.kill("SIGKILL");
@@ -432,8 +430,15 @@ export async function killProcessTree(
   return true;
 }
 
-async function terminateSpawnedProcess(pid: number, detached: boolean, expectedIdentity: string): Promise<boolean> {
-  if (process.platform === "win32" || detached) return killProcessTree(pid, true, expectedIdentity);
+async function terminateSpawnedProcess(pid: number, detached: boolean, expectedIdentity: string | null): Promise<boolean> {
+  if (process.platform === "win32") return expectedIdentity ? killProcessTree(pid, true, expectedIdentity) : false;
+  if (detached) {
+    const identity = await processIdentity(pid);
+    if (identity && expectedIdentity && identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
+    try { process.kill(-pid, "SIGKILL"); return true; } catch (error) { if (!isMissingProcess(error)) throw error; }
+    return false;
+  }
+  if (!expectedIdentity) return false;
   const identity = await processIdentity(pid);
   if (!identity) return false;
   if (identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);

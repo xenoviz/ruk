@@ -16,7 +16,7 @@ const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
   [/assignment .* does not exist|expected assigned|preparation operation does not match/i, "ASSIGNMENT_CONFLICT", false],
   [/uncommitted changes|workspace .* dirty/i, "WORKSPACE_DIRTY", false],
   [/port .* unavailable|allocate an available port|allocator returned/i, "PORT_UNAVAILABLE", true],
-  [/lock|changed before collection|still has tracked processes|survived graceful termination/i, "RESOURCE_BUSY", true],
+  [/lock|changed before collection|still has tracked processes|survived graceful termination|could not enumerate POSIX processes/i, "RESOURCE_BUSY", true],
   [/install|dependency|node_modules projection|shared dependency backend/i, "DEPENDENCY_PREPARATION_FAILED", true],
   [/git |worktree|branch .* checked out|remote .* does not exist/i, "GIT_OPERATION_FAILED", false],
 ];

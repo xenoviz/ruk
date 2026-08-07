@@ -25,7 +25,8 @@ For a short clean job, use `ruk exec <branch> -- <command>` to acquire, run,
 and release automatically. If the command leaves changes or cleanup fails, Ruk
 retains the assignment and prints the exact recovery ID. It also retains the
 assignment when child identity cannot be established while descendants remain;
-surviving POSIX process groups remain tracked even after their leader exits.
+surviving POSIX process groups remain tracked even after their leader exits;
+failed registration also terminates the detached group after a short-lived leader exits.
 Ruk fences the assignment again immediately before launching a command.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
 an interactive, terminal-attached assigned shell; its isolated terminal session
@@ -66,5 +67,6 @@ Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read
 `docs/agent-interface.md` for exact JSON fields and stdout/stderr rules.
 When a JSON command fails, parse the JSON error from stderr and use its stable
-`code` and `retryable` fields; stdout contains no success record. JSON-mode
+`code` and `retryable` fields; process-enumeration failures are retryable
+`RESOURCE_BUSY` errors, and stdout contains no success record. JSON-mode
 dependency installers have their output discarded to keep memory bounded.

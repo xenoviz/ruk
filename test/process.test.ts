@@ -9,6 +9,7 @@ import {
   processIdentity,
   requireProcessIdentity,
   run,
+  terminateTrackedProcess,
   trackedProcessExists,
 } from "../src/process.js";
 
@@ -28,14 +29,24 @@ test("process runner captures output and preserves non-zero results when request
 
 test("command detection recognizes the active Node executable", async () => {
   assert.equal(await commandExists(process.execPath), true);
+  assert.equal(await commandExists(path.join(os.tmpdir(), "ruk-command-that-does-not-exist")), false);
 });
 
 test("missing process identity fails closed", async () => {
+  assert.equal(await processIdentity(0), null);
   await assert.rejects(
     requireProcessIdentity(42, async () => null, async () => true),
     /cannot be released safely/,
   );
+  await assert.rejects(
+    requireProcessIdentity(42, async () => null, async () => { throw new Error("unavailable"); }),
+    /cannot be released safely/,
+  );
   assert.equal(await requireProcessIdentity(42, async () => null, async () => false), null);
+  assert.equal(await trackedProcessExists({ pid: 999_999, startedAt: "missing" }), false);
+  assert.equal(await terminateTrackedProcess({ pid: process.pid, startedAt: "wrong" }), false);
+  assert.equal(await terminateTrackedProcess({ pid: 999_999, startedAt: "missing" }), false);
+  await assert.rejects(killProcessTree(0), /Refusing to terminate invalid process/);
 });
 
 test("process runner executes Windows command shims without shell injection", async (t) => {
@@ -77,6 +88,49 @@ test("process runner terminates a child when tracking registration fails", async
     }),
     /tracking failed/,
   );
+});
+
+test("process runner terminates a detached group after its leader exits before registration fails", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process groups are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-detached-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workerFile = path.join(root, "worker.pid");
+  const survivedFile = path.join(root, "survived");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const workerScript = `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(survivedFile)},'1'),500);setInterval(()=>{},1000)`;
+  let workerPid = 0;
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  try {
+    await assert.rejects(
+      run(
+        process.execPath,
+        [
+          "-e",
+          `const{spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e',${JSON.stringify(workerScript)}],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(workerFile)},String(child.pid))`,
+        ],
+        {
+          detached: true,
+          onSpawn: async () => {
+            for (let attempt = 0; attempt < 100 && workerPid === 0; attempt += 1) {
+              try { workerPid = Number(await fs.readFile(workerFile, "utf8")); } catch {}
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            throw new Error("tracking failed");
+          },
+        },
+      ),
+      /tracking failed/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+  }
+  assert.ok(workerPid > 0);
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  await assert.rejects(fs.access(survivedFile), { code: "ENOENT" });
 });
 
 test("process runner terminates an attached process tree when tracking registration fails", async (t) => {
