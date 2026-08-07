@@ -5,6 +5,10 @@ export interface ErrorRecord {
   retryable: boolean;
 }
 
+export class DependencyPreparationError extends Error {
+  override readonly name = "DependencyPreparationError";
+}
+
 const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
   [/unknown (?:command|option)|requires|does not accept|must be|exactly one/i, "INVALID_ARGUMENT", false],
   [/assignment .* does not exist|expected assigned|preparation operation does not match/i, "ASSIGNMENT_CONFLICT", false],
@@ -17,7 +21,9 @@ const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
 
 export function errorRecord(error: unknown): ErrorRecord {
   const message = error instanceof Error ? error.message : String(error);
-  const match = CATEGORIES.find(([pattern]) => pattern.test(message));
+  const match = error instanceof DependencyPreparationError
+    ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
+    : CATEGORIES.find(([pattern]) => pattern.test(message));
   return {
     status: "error",
     code: match?.[1] ?? "OPERATION_FAILED",

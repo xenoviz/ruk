@@ -200,7 +200,7 @@ export async function allocateAssignmentPorts(
     const excluded = new Set(
       Object.values(state.workspaces).flatMap((entry) => Object.values(entry.assignment?.ports ?? {})),
     );
-    const ports: Record<string, number> = {};
+    const ports: Record<string, number> = Object.create(null);
     for (const name of names) {
       const port = await allocate(excluded);
       if (!Number.isSafeInteger(port) || port < 1 || port > 65_535 || excluded.has(port)) {

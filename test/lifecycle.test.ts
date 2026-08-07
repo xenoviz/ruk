@@ -183,6 +183,22 @@ test("warm workspaces become available and named ports remain unique", async (t)
   assert.equal(state.metrics.workspaceReuses, 1);
 });
 
+test("named port reservations preserve prototype-like names", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"));
+  const allocated = await allocateAssignmentPorts(
+    paths,
+    workspace.assignment!.id,
+    ["__proto__"],
+    async () => 4100,
+  );
+
+  assert.equal(Object.hasOwn(allocated.assignment!.ports, "__proto__"), true);
+  assert.equal(allocated.assignment!.ports["__proto__"], 4100);
+  const persisted = Object.values((await readState(paths)).workspaces)[0]!;
+  assert.equal(persisted.assignment!.ports["__proto__"], 4100);
+});
+
 test("GC selects stale safe records and reports expired assignments without reclaiming them", async (t) => {
   const { root, paths } = await fixture(t);
   const available = await makeAvailable(paths, path.join(root, "available"), T1);

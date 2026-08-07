@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DependencyPreparationError } from "./errors.js";
 import { commandExists, run } from "./process.js";
 import type { DependencyMode, PackageManager, RukConfig } from "./types.js";
 import { isErrnoException, isRecord } from "./types.js";
@@ -110,7 +111,7 @@ export async function detectPackageManager(root: string, config: RukConfig): Pro
   }
 
   if (!(await commandExists(name))) {
-    throw new Error(`${name} is required but was not found on PATH`);
+    throw new DependencyPreparationError(`${name} is required but was not found on PATH`);
   }
 
   let command;
@@ -127,9 +128,17 @@ export async function detectPackageManager(root: string, config: RukConfig): Pro
 export async function packageManagerVersion(manager: PackageManager, root: string): Promise<string> {
   const executable = manager.command[0];
   if (!executable) throw new Error("Package manager command cannot be empty");
-  const result = await run(executable, ["--version"], {
-    cwd: root,
-    allowFailure: true,
-  });
+  let result;
+  try {
+    result = await run(executable, ["--version"], {
+      cwd: root,
+      allowFailure: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DependencyPreparationError(`Could not inspect ${manager.name} for dependency preparation: ${message}`, {
+      cause: error,
+    });
+  }
   return result.code === 0 ? result.stdout.trim() : "unknown";
 }

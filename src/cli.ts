@@ -231,6 +231,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
   let workspace = await reserveAvailableWorkspace(paths, { ...assignmentBase, expiresAt: expiresIn(ttl) });
   const reused = workspace !== null;
   let operationId: string | null = null;
+  let dependenciesReady = false;
 
   if (!workspace) {
     const destination = path.join(
@@ -260,6 +261,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
       startPoint: options.from ?? "HEAD",
     });
     const prepared = await sync(workspace.path, io, options.json ?? false, false);
+    dependenciesReady = true;
     if (operationId) {
       workspace = await markWorkspaceAssigned(paths, workspace.path, operationId, {
         ...assignmentBase,
@@ -297,7 +299,8 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
       } else if (workspace.assignment) {
         await beginWorkspaceReturn(paths, workspace.assignment.id);
         const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
-        await returnWorktree(workspace.path, true, projections);
+        if (!dependenciesReady) await deleteTreeState(paths, workspace.path);
+        await returnWorktree(workspace.path, true, dependenciesReady ? projections : []);
         await finishWorkspaceReturn(paths, workspace.assignment.id);
       }
     } catch (cleanupError) {
@@ -730,44 +733,55 @@ async function warm(args: readonly string[], cwd: string, io: CliIo) {
   const startPoint = options.from ?? "HEAD";
   await fetchIfRequested(repository.root, options.from ?? "origin/main", options.fetch ?? false);
   const paths = storePaths(repository.commonDir);
-  const initial = await readState(paths);
-  const available = Object.values(initial.workspaces).filter((workspace) => workspace.lifecycle === "available").length;
-  const created: string[] = [];
-
-  for (let index = available; index < count; index += 1) {
-    const destination = path.join(
-      path.dirname(repository.root),
-      `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
-    );
-    const workspace = await recordPreparingWorkspace(paths, { path: destination, branch: "(warm)" });
-    try {
-      await addWorktree({
-        cwd: repository.root,
-        destination,
-        branch: "(warm)",
-        startPoint,
-        detach: true,
-        stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
-      });
-      await lockWorktree(repository.root, destination);
-      await sync(destination, io, options.json ?? false, false);
-      await markWorkspaceAvailable(paths, destination, workspace.operationId!);
-      created.push(destination);
-    } catch (error) {
-      await markWorkspaceFailed(
-        paths,
-        destination,
-        workspace.operationId!,
-        error instanceof Error ? error.message : String(error),
-      );
-      throw error;
+  // ponytail: one host-wide warm lock; reserve per-slot if concurrent warming needs higher throughput.
+  return withDirectoryLock(path.join(paths.root, "warm.lock"), async () => {
+    const initial = await readState(paths);
+    let available = 0;
+    for (const workspace of Object.values(initial.workspaces)) {
+      if (workspace.lifecycle !== "available") continue;
+      const record = initial.trees[treeKey(workspace.path)];
+      if (!record || !(await dependenciesPresent(workspace.path, record.projections))) continue;
+      const value = await context(workspace.path);
+      const current = await dependencyFingerprint({ root: value.repository.root, manager: value.manager });
+      if (record.fingerprint === current.fingerprint) available += 1;
     }
-  }
+    const created: string[] = [];
 
-  const result = { status: "warmed", requested: count, available: available + created.length, created };
-  if (options.json) io.stdout.write(jsonLine(result));
-  else io.stdout.write(`Available workspaces: ${result.available} (${created.length} created)\n`);
-  return result;
+    for (let index = available; index < count; index += 1) {
+      const destination = path.join(
+        path.dirname(repository.root),
+        `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
+      );
+      const workspace = await recordPreparingWorkspace(paths, { path: destination, branch: "(warm)" });
+      try {
+        await addWorktree({
+          cwd: repository.root,
+          destination,
+          branch: "(warm)",
+          startPoint,
+          detach: true,
+          stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
+        });
+        await lockWorktree(repository.root, destination);
+        await sync(destination, io, options.json ?? false, false);
+        await markWorkspaceAvailable(paths, destination, workspace.operationId!);
+        created.push(destination);
+      } catch (error) {
+        await markWorkspaceFailed(
+          paths,
+          destination,
+          workspace.operationId!,
+          error instanceof Error ? error.message : String(error),
+        );
+        throw error;
+      }
+    }
+
+    const result = { status: "warmed", requested: count, available: available + created.length, created };
+    if (options.json) io.stdout.write(jsonLine(result));
+    else io.stdout.write(`Available workspaces: ${result.available} (${created.length} created)\n`);
+    return result;
+  });
 }
 
 function splitExecArguments(args: readonly string[]): { acquireArgs: string[]; command: string[] } {

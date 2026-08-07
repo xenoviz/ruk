@@ -36,7 +36,8 @@ export async function localBranchExists(cwd: string, branch: string): Promise<bo
 
 export async function fetchRemote(cwd: string, startPoint = "origin/main"): Promise<string> {
   const slash = startPoint.indexOf("/");
-  const candidate = slash > 0 ? startPoint.slice(0, slash) : "origin";
+  const candidate = /^refs\/remotes\/([^/]+)\//.exec(startPoint)?.[1] ??
+    (slash > 0 ? startPoint.slice(0, slash) : "origin");
   const remotes = (await run("git", ["remote"], { cwd })).stdout.split(/\r?\n/).filter(Boolean);
   const remote = remotes.includes(candidate) ? candidate : "origin";
   if (!remotes.includes(remote)) throw new Error(`Git remote ${remote} does not exist`);

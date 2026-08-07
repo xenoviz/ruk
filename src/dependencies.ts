@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { currentBranch } from "./git.js";
+import { DependencyPreparationError } from "./errors.js";
 import { dependencyFingerprint } from "./fingerprint.js";
 import { withDirectoryLock } from "./lock.js";
 import { run } from "./process.js";
@@ -115,7 +116,12 @@ async function installDependencies(
   }
 
   reporter.write(`Installing dependencies with ${[command, ...args].join(" ")}...\n`);
-  await run(command, args, { cwd: root, env: environment, stdio: reporter.stdio });
+  try {
+    await run(command, args, { cwd: root, env: environment, stdio: reporter.stdio });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DependencyPreparationError(`Dependency installation failed: ${message}`, { cause: error });
+  }
 }
 
 export interface EnsureDependenciesInput {

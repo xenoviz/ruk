@@ -61,3 +61,18 @@ test("fetch is explicit and updates the selected remote", async (t) => {
   const after = (await run("git", ["rev-parse", "origin/main"], { cwd: clone })).stdout;
   assert.notEqual(after, before);
 });
+
+test("fetch recognizes fully qualified remote-tracking refs", async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-git-qualified-fetch-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "repo");
+  const origin = path.join(parent, "origin.git");
+  const upstream = path.join(parent, "upstream.git");
+  await run("git", ["init", "--bare", "-q", origin]);
+  await run("git", ["init", "--bare", "-q", upstream]);
+  await run("git", ["init", "-q", root]);
+  await run("git", ["remote", "add", "origin", origin], { cwd: root });
+  await run("git", ["remote", "add", "upstream", upstream], { cwd: root });
+
+  assert.equal(await fetchRemote(root, "refs/remotes/upstream/main"), "upstream");
+});

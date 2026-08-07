@@ -25,6 +25,7 @@ import path from "node:path";
 const counter = process.argv[2];
 let count = 0;
 try { count = Number(await fs.readFile(counter, "utf8")); } catch {}
+if (process.env.RUK_TEST_SLOW_INSTALL === "1") await new Promise((resolve) => setTimeout(resolve, 250));
 await fs.writeFile(counter, String(count + 1));
 await fs.mkdir(path.join(process.cwd(), "node_modules", "fixture"), { recursive: true });
 await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"), "yes");
@@ -84,13 +85,13 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(record.status, "prepared");
   await run(process.execPath, [cli, "remove", jsonTree, "--force"], { cwd: root });
 
-  const warmed = JSON.parse((await run(
+  const warmed = await Promise.all([1, 2].map(async () => JSON.parse((await run(
     process.execPath,
     [cli, "warm", "--count", "1", "--json"],
-    { cwd: root },
-  )).stdout);
-  assert.equal(warmed.status, "warmed");
-  assert.equal(warmed.created.length, 1);
+    { cwd: root, env: { ...process.env, RUK_TEST_SLOW_INSTALL: "1" } },
+  )).stdout)));
+  assert.equal(warmed.every((result) => result.status === "warmed"), true);
+  assert.equal(warmed.reduce((total, result) => total + result.created.length, 0), 1);
 
   const acquired = JSON.parse((await run(
     process.execPath,
@@ -178,6 +179,15 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.match(staleRelease.stderr, /does not exist/);
   await run(process.execPath, [cli, "release", reused.assignmentId, "--json"], { cwd: root });
 
+  await fs.rm(path.join(reused.path, "node_modules"), { recursive: true, force: true });
+  const rewarmed = JSON.parse((await run(
+    process.execPath,
+    [cli, "warm", "--count", "1", "--json"],
+    { cwd: root },
+  )).stdout);
+  assert.equal(rewarmed.created.length, 1);
+  assert.equal(rewarmed.available, 1);
+
   const short = await run(
     process.execPath,
     [cli, "exec", "agent/short", process.execPath, "-e", "process.stdout.write('assigned-command')"],
@@ -215,14 +225,14 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     { cwd: root },
   )).stdout);
   assert.equal(planned.status, "planned");
-  assert.equal(planned.removed.length, 1);
+  assert.equal(planned.removed.length, 2);
   const collected = JSON.parse((await run(
     process.execPath,
     [cli, "gc", "--max-age", "0", "--apply", "--json"],
     { cwd: root },
   )).stdout);
   assert.equal(collected.status, "collected");
-  assert.equal(collected.removed.length, 1);
+  assert.equal(collected.removed.length, 2);
   await assert.rejects(fs.access(reused.path));
 
   const expiring = JSON.parse((await run(
@@ -241,6 +251,58 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   )).stdout);
   assert.equal(expiredCollection.removed[0].reason, "expired assignment (forced)");
   await assert.rejects(fs.access(expiring.path));
+});
+
+test("failed preparation invalidates a reused workspace projection", { timeout: 60_000 }, async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-failed-preparation-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "repo");
+  const installer = path.join(parent, "install.mjs");
+  await fs.mkdir(root);
+  await fs.writeFile(
+    installer,
+    `import fs from "node:fs/promises";
+import path from "node:path";
+const pkg = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8"));
+const value = pkg.dependencies.fixture;
+await fs.mkdir(path.join(process.cwd(), "node_modules", "fixture"), { recursive: true });
+await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"), value === "2" ? "corrupt" : "ready");
+if (value === "2") process.exit(1);
+`,
+  );
+  await fs.writeFile(path.join(root, "package.json"), '{"dependencies":{"fixture":"1"}}\n');
+  await fs.writeFile(path.join(root, "package-lock.json"), "{}\n");
+  await fs.writeFile(path.join(root, ".gitignore"), "node_modules/\n");
+  await fs.writeFile(
+    path.join(root, ".rukrc.json"),
+    `${JSON.stringify({ dependencyMode: "managed", installCommand: [process.execPath, installer] })}\n`,
+  );
+  await run("git", ["init", "-q", "-b", "main"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: root });
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "fixture one"], { cwd: root });
+  await run("git", ["branch", "agent/a"], { cwd: root });
+  await run("git", ["switch", "-qc", "agent/b"], { cwd: root });
+  await fs.writeFile(path.join(root, "package.json"), '{"dependencies":{"fixture":"2"}}\n');
+  await run("git", ["commit", "-qam", "fixture two"], { cwd: root });
+  await run("git", ["switch", "-q", "main"], { cwd: root });
+
+  await run(process.execPath, [cli, "warm", "--count", "1", "--from", "agent/a", "--json"], { cwd: root });
+  const failed = await run(process.execPath, [cli, "acquire", "agent/b", "--json"], {
+    cwd: root,
+    allowFailure: true,
+  });
+  assert.equal(failed.code, 1);
+
+  const recovered = JSON.parse((await run(process.execPath, [cli, "acquire", "agent/a", "--json"], {
+    cwd: root,
+  })).stdout);
+  assert.equal(
+    await fs.readFile(path.join(recovered.path, "node_modules", "fixture", "ready"), "utf8"),
+    "ready",
+  );
+  await run(process.execPath, [cli, "release", recovered.assignmentId, "--json"], { cwd: root });
 });
 
 test("CLI exposes stable help, version, JSON, and argument errors", async (t) => {
@@ -274,6 +336,24 @@ test("CLI exposes stable help, version, JSON, and argument errors", async (t) =>
   assert.equal(failure.status, "error");
   assert.equal(failure.code, "INVALID_ARGUMENT");
   assert.equal(failure.retryable, false);
+
+  for (const [name, files] of [
+    ["missing-manager", { "package.json": '{"packageManager":"ruk-missing-manager@1.0.0"}\n' }],
+    [
+      "missing-installer",
+      {
+        "package.json": '{"name":"missing-installer"}\n',
+        ".rukrc.json": '{"dependencyMode":"managed","installCommand":["ruk-missing-installer"]}\n',
+      },
+    ],
+  ] as const) {
+    const root = path.join(parent, name);
+    await fs.mkdir(root);
+    for (const [file, content] of Object.entries(files)) await fs.writeFile(path.join(root, file), content);
+    await run("git", ["init", "-q"], { cwd: root });
+    const result = await run(process.execPath, [cli, "sync", "--json"], { cwd: root, allowFailure: true });
+    assert.equal(JSON.parse(result.stderr).code, "DEPENDENCY_PREPARATION_FAILED");
+  }
 });
 
 async function waitFor(check: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {
