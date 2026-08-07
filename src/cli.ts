@@ -708,7 +708,13 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   return result;
 }
 
-async function execute(args: readonly string[], cwd: string, io: CliIo, detached = true): Promise<number> {
+async function execute(
+  args: readonly string[],
+  cwd: string,
+  io: CliIo,
+  detached = true,
+  sessionMarker?: string,
+): Promise<number> {
   const separator = args.indexOf("--");
   const command = separator < 0 ? [...args] : args.slice(separator + 1);
   if (command.length === 0) throw new Error("run requires a command");
@@ -769,7 +775,7 @@ async function execute(args: readonly string[], cwd: string, io: CliIo, detached
         const record: TrackedProcessRecord = {
           pid,
           ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
-          ...(process.platform !== "win32" && !detached ? await requireChildProcessSession(pid) : {}),
+          ...(sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : {}),
           command: [...command],
           startedAt,
         };
@@ -897,11 +903,12 @@ async function runAssignedAndRelease(
   sourceCwd: string,
   io: CliIo,
   detached = true,
+  sessionMarker?: string,
 ): Promise<number> {
   let code = 1;
   let commandError: unknown;
   try {
-    code = await execute(["--", ...command], assigned.path, io, detached);
+    code = await execute(["--", ...command], assigned.path, io, detached, sessionMarker);
   } catch (error) {
     commandError = error;
   }
@@ -948,18 +955,33 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
   const assigned = await acquire(acquireArgs, cwd, io, false);
   const executable = process.env["RUK_SHELL"] ?? process.env["SHELL"] ??
     (process.platform === "win32" ? process.env["COMSPEC"] ?? "cmd.exe" : "/bin/sh");
+  const sessionMarker = process.platform === "win32"
+    ? undefined
+    : path.join((await repositoryContext(assigned.path)).repository.commonDir, "ruk", `shell-${crypto.randomUUID()}`);
+  const wrapper = 'sid=$(ps -o sid= -p $$); started=$(ps -o lstart= -p "$sid"); printf "%s\\n%s\\n" "$sid" "$started" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"';
   const command = process.platform === "win32"
     ? [executable]
     : process.platform === "darwin"
-      ? ["/usr/bin/script", "-q", "/dev/null", executable]
-      : ["/usr/bin/script", "-qec", `exec '${executable.replaceAll("'", "'\\''")}'`, "/dev/null"];
+      ? ["/usr/bin/script", "-q", "/dev/null", "/bin/sh", "-c", wrapper]
+      : ["/usr/bin/script", "-qec", wrapper, "/dev/null"];
   io.stderr.write(`Shell workspace: ${assigned.path}\nAssignment: ${assigned.assignmentId}\n`);
   const ignoreInterrupt = () => {};
+  const previousShell = process.env["RUK_SHELL"];
   if (process.platform !== "win32") process.on("SIGINT", ignoreInterrupt);
+  if (sessionMarker) {
+    process.env["RUK_SHELL"] = executable;
+    process.env["RUK_SHELL_SESSION_FILE"] = sessionMarker;
+  }
   try {
-    return await runAssignedAndRelease(assigned, command, cwd, io, false);
+    return await runAssignedAndRelease(assigned, command, cwd, io, false, sessionMarker);
   } finally {
     if (process.platform !== "win32") process.off("SIGINT", ignoreInterrupt);
+    if (sessionMarker) {
+      if (previousShell === undefined) delete process.env["RUK_SHELL"];
+      else process.env["RUK_SHELL"] = previousShell;
+      delete process.env["RUK_SHELL_SESSION_FILE"];
+      await fs.rm(sessionMarker, { force: true });
+    }
   }
 }
 

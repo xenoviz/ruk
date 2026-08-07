@@ -248,45 +248,36 @@ export async function processDescendantsExist(pid: number): Promise<boolean> {
 
 interface PosixProcess {
   pid: number;
-  parentPid: number;
   sessionId: number;
   state: string;
 }
 
 async function posixProcesses(): Promise<PosixProcess[]> {
-  const result = await run("ps", ["-eo", "pid=,ppid=,sid=,stat="], { allowFailure: true });
+  const result = await run("ps", ["-eo", "pid=,sid=,stat="], { allowFailure: true });
   if (result.code !== 0) return [];
   return result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
-    .filter((entry) => entry.length === 4 && entry.slice(0, 3).map(Number).every(Number.isSafeInteger))
-    .map(([pid, parentPid, sessionId, state]) => ({
+    .filter((entry) => entry.length === 3 && entry.slice(0, 2).map(Number).every(Number.isSafeInteger))
+    .map(([pid, sessionId, state]) => ({
       pid: Number(pid),
-      parentPid: Number(parentPid),
       sessionId: Number(sessionId),
       state: state!,
     }));
 }
 
-function descendantIds(processes: readonly PosixProcess[], rootPid: number): Set<number> {
-  const descendants = new Set([rootPid]);
-  while (true) {
-    const before = descendants.size;
-    for (const process of processes) if (descendants.has(process.parentPid)) descendants.add(process.pid);
-    if (descendants.size === before) return descendants;
-  }
-}
-
 export async function requireChildProcessSession(
   pid: number,
+  marker: string,
 ): Promise<{ sessionId: number; sessionStartedAt: string }> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const processes = await posixProcesses();
-    const descendants = descendantIds(processes, pid);
-    const leader = processes.find((process) =>
-      process.pid !== pid && descendants.has(process.pid) && process.pid === process.sessionId
-    );
-    if (leader) {
-      const sessionStartedAt = await processIdentity(leader.pid);
-      if (sessionStartedAt) return { sessionId: leader.pid, sessionStartedAt };
+    try {
+      const [rawSessionId, ...identity] = (await fs.readFile(marker, "utf8")).trim().split(/\r?\n/);
+      const sessionId = Number(rawSessionId?.trim());
+      const sessionStartedAt = identity.join(" ").trim().replace(/\s+/g, " ");
+      if (Number.isSafeInteger(sessionId) && sessionId > 0 && sessionStartedAt) {
+        return { sessionId, sessionStartedAt };
+      }
+    } catch (error) {
+      if (!isErrnoException(error) || error.code !== "ENOENT") throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
