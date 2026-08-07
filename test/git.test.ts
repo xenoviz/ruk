@@ -16,7 +16,7 @@ test("pooled worktree assignment and return preserve branch safety", async (t) =
   await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
   await run("git", ["config", "user.name", "ruk test"], { cwd: root });
   await fs.writeFile(path.join(root, "tracked.txt"), "clean\n");
-  await fs.writeFile(path.join(root, ".gitignore"), "ignored-secret.txt\n");
+  await fs.writeFile(path.join(root, ".gitignore"), "ignored-secret.txt\nnode_modules/\n");
   await run("git", ["add", "."], { cwd: root });
   await run("git", ["commit", "-qm", "fixture"], { cwd: root });
 
@@ -26,11 +26,14 @@ test("pooled worktree assignment and return preserve branch safety", async (t) =
 
   await fs.writeFile(path.join(workspace, "tracked.txt"), "dirty\n");
   await fs.writeFile(path.join(workspace, "ignored-secret.txt"), "secret\n");
+  await fs.mkdir(path.join(workspace, "node_modules", "fixture"), { recursive: true });
+  await fs.writeFile(path.join(workspace, "node_modules", "fixture", "ready"), "yes\n");
   await assert.rejects(returnWorktree(workspace), /uncommitted changes/);
-  await returnWorktree(workspace, true);
+  await returnWorktree(workspace, true, ["node_modules"]);
   assert.equal(await currentBranch(workspace), "(detached)");
   assert.equal((await fs.readFile(path.join(workspace, "tracked.txt"), "utf8")).trim(), "clean");
   await assert.rejects(fs.access(path.join(workspace, "ignored-secret.txt")));
+  assert.equal(await fs.readFile(path.join(workspace, "node_modules", "fixture", "ready"), "utf8"), "yes\n");
 });
 
 test("fetch is explicit and updates the selected remote", async (t) => {

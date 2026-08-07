@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import { treeKey } from "./state.js";
 import type { RukState } from "./types.js";
@@ -38,9 +39,19 @@ async function scanProjection(
   let localBytes = 0;
   for (const name of entries) {
     const entry = path.join(directory, name);
-    const stat = await fs.lstat(entry);
+    let stat: Stats;
+    try {
+      stat = await fs.lstat(entry);
+    } catch {
+      continue;
+    }
     if (stat.isSymbolicLink()) {
-      const real = await fs.realpath(entry);
+      let real: string;
+      try {
+        real = await fs.realpath(entry);
+      } catch {
+        continue;
+      }
       const target = targets.get(real);
       if (target) target.references += 1;
       else targets.set(real, { size: await entrySize(real, new Set()), references: 1 });

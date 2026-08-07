@@ -110,14 +110,19 @@ export async function assignWorktree({
   }
 }
 
-export async function returnWorktree(cwd: string, force = false): Promise<void> {
+export async function returnWorktree(
+  cwd: string,
+  force = false,
+  preservedProjections: readonly string[] = [],
+): Promise<void> {
   if (!force && !(await worktreeIsClean(cwd))) {
     throw new Error("Workspace has uncommitted changes. Commit them or retry release with --force.");
   }
   if (force) {
     await run("git", ["reset", "--hard", "HEAD"], { cwd });
   }
-  await run("git", ["clean", "-ffdx"], { cwd });
+  const exclusions = preservedProjections.flatMap((projection) => ["-e", `/${projection.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "")}/`]);
+  await run("git", ["clean", "-ffdx", ...exclusions], { cwd });
   await run("git", ["switch", "--detach"], { cwd });
 }
 

@@ -296,7 +296,8 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
         await markWorkspaceFailed(paths, workspace.path, operationId, message);
       } else if (workspace.assignment) {
         await beginWorkspaceReturn(paths, workspace.assignment.id);
-        await returnWorktree(workspace.path, true);
+        const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
+        await returnWorktree(workspace.path, true, projections);
         await finishWorkspaceReturn(paths, workspace.assignment.id);
       }
     } catch (cleanupError) {
@@ -386,7 +387,8 @@ async function releaseAssignment(
       const workspace = await beginWorkspaceReturn(paths, assignmentId);
       returning = true;
       const cleanedProcesses = await cleanTrackedProcesses(paths, assignmentId, workspace.processes, force);
-      await returnWorktree(workspace.path, force);
+      const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
+      await returnWorktree(workspace.path, force, projections);
       const available = await finishWorkspaceReturn(paths, assignmentId);
       return { workspace: available, cleanedProcesses };
     } catch (error) {

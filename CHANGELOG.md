@@ -27,3 +27,5 @@ versioning.
   preparation statistics, and optional disk estimates.
 - Accept separator-free `ruk run` commands for PowerShell npm shims and tolerate
   short-lived Windows children that exit before process identity inspection.
+- Preserve recorded dependency projections during pool cleanup so unchanged
+  reassigned workspaces skip installation while other ignored files are removed.

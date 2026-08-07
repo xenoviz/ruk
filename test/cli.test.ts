@@ -159,6 +159,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(released.cleanedProcesses, 1);
   await running;
 
+  const installsBeforeReuse = await fs.readFile(counter, "utf8");
   const reused = JSON.parse((await run(
     process.execPath,
     [cli, "acquire", "agent/lease-two", "--json"],
@@ -167,6 +168,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(reused.reused, true);
   assert.equal(await fs.realpath(reused.path), await fs.realpath(acquired.path));
   assert.notEqual(reused.assignmentId, acquired.assignmentId);
+  assert.equal(await fs.readFile(counter, "utf8"), installsBeforeReuse);
 
   const staleRelease = await run(process.execPath, [cli, "release", acquired.assignmentId, "--json"], {
     cwd: root,

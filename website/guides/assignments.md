@@ -11,6 +11,10 @@ workspace. Renew and release accept only the exact active ID.
 This rule prevents delayed automation from releasing a workspace after another
 agent has acquired it.
 
+Normal and forced release preserve only dependency projections recorded by
+Ruk. Other untracked and ignored files are removed before reuse. If the
+fingerprint and projection remain valid, the next assignment skips installation.
+
 ## Lease duration
 
 The default time to live is 480 minutes. Set a different duration during
