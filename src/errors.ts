@@ -10,7 +10,7 @@ export class DependencyPreparationError extends Error {
 }
 
 const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
-  [/unknown (?:command|option)|requires|does not accept|must be|exactly one/i, "INVALID_ARGUMENT", false],
+  [/unknown (?:command|option)|requires|does not accept|must (?:be|contain)|exactly one/i, "INVALID_ARGUMENT", false],
   [/assignment .* does not exist|expected assigned|preparation operation does not match/i, "ASSIGNMENT_CONFLICT", false],
   [/uncommitted changes|workspace .* dirty/i, "WORKSPACE_DIRTY", false],
   [/port .* unavailable|allocate an available port|allocator returned/i, "PORT_UNAVAILABLE", true],

@@ -23,9 +23,12 @@ For a short clean job, use `ruk exec <branch> -- <command>` to acquire, run,
 and release automatically. If the command leaves changes or cleanup fails, Ruk
 retains the assignment and prints the exact recovery ID. It also retains the
 assignment when child identity cannot be established while descendants remain;
-inspect that process tree before forcing release. Use `ruk shell <branch>` for
+surviving POSIX process groups remain tracked even after their leader exits.
+Inspect that process tree before forcing release. Use `ruk shell <branch>` for
 an interactive assigned shell; commit intended work before exit so normal
-release can succeed.
+release can succeed. Release integrity-validates recorded dependency projections:
+unchanged projections stay warm, while modified projections are discarded and
+rebuilt from the package store on the next acquisition.
 
 Use `ruk warm --count <n> --json` before a known burst of agents. The count is
 the desired number of available prepared workspaces, not the number to add.

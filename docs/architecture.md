@@ -69,6 +69,8 @@ module instead of accumulating in the CLI.
   versions; unsupported managers retain their managed layout.
 - Shared mode must fail when the package manager/backend is unsupported.
 - A workspace is recorded as prepared only after installation succeeds.
+- Recorded dependency projections are integrity-validated before reuse; modified
+  projections are discarded instead of entering the pool.
 - Preparation of the same workspace is serialized.
 - State replacement is atomic and state files are owner-readable only.
 - A stale lock owned by a live local process is never removed by age alone.
@@ -111,7 +113,8 @@ return a workspace that has since been reassigned. Leases expire for reporting;
 reclaiming expired assignments requires an explicit forced GC operation.
 Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
-release stops and retains the assignment.
+release stops and retains the assignment. POSIX process groups remain tracked
+after their leader exits so background children can still be cleaned safely.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same

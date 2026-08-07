@@ -34,6 +34,7 @@ export interface FingerprintDetails {
 export interface TreeRecord {
   path: string;
   fingerprint: string;
+  projectionFingerprint?: string;
   mode: string;
   projections: string[];
   branch: string;

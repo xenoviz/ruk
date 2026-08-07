@@ -291,12 +291,14 @@ export async function finishWorkspaceReturn(
   assignmentId: string,
   now?: string,
 ): Promise<WorkspaceRecord> {
+  let hasPorts = false;
   const workspace = await updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "returning");
     if (workspace.processes.length > 0) {
       throw new Error(`Workspace ${workspace.path} still has tracked processes`);
     }
+    hasPorts = Object.keys(workspace.assignment!.ports).length > 0;
     const returnedAt = timestamp(now, "now");
     workspace.lifecycle = "available";
     workspace.assignment = null;
@@ -304,7 +306,13 @@ export async function finishWorkspaceReturn(
     workspace.availableAt = returnedAt;
     return workspace;
   });
-  await releaseHostPorts(assignmentId);
+  if (hasPorts) {
+    try {
+      await releaseHostPorts(assignmentId);
+    } catch {
+      // The registry prunes this inactive assignment on its next successful update.
+    }
+  }
   return workspace;
 }
 

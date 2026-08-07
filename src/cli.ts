@@ -5,6 +5,7 @@ import path from "node:path";
 import { loadConfig, detectPackageManager } from "./config.js";
 import {
   assertSharedBackendSupported,
+  dependencyProjectionsAreValid,
   dependenciesPresent,
   ensureDependencies,
 } from "./dependencies.js";
@@ -42,7 +43,13 @@ import {
 } from "./lifecycle.js";
 import { withDirectoryLock } from "./lock.js";
 import { portEnvironment } from "./ports.js";
-import { killProcessTree, ProcessIdentityUnavailableError, processIdentity, requireProcessIdentity, run } from "./process.js";
+import {
+  ProcessIdentityUnavailableError,
+  requireProcessIdentity,
+  run,
+  terminateTrackedProcess,
+  trackedProcessExists,
+} from "./process.js";
 import { deleteTreeState, readState, storePaths, treeKey, treeLockPath } from "./state.js";
 import { diskStatistics, usageStatistics } from "./statistics.js";
 import type { CliIo, DependencyReporter, StorePaths, TrackedProcessRecord, WorkspaceRecord } from "./types.js";
@@ -339,8 +346,7 @@ const delay = (milliseconds: number): Promise<void> =>
 async function processExited(record: TrackedProcessRecord, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   do {
-    const identity = await processIdentity(record.pid);
-    if (!identity || identity !== record.startedAt) return true;
+    if (!(await trackedProcessExists(record))) return true;
     await delay(50);
   } while (Date.now() < deadline);
   return false;
@@ -354,13 +360,11 @@ async function cleanTrackedProcesses(
 ): Promise<number> {
   let cleaned = 0;
   for (const record of processes) {
-    const identity = await processIdentity(record.pid);
-    if (identity === record.startedAt) {
-      await killProcessTree(record.groupId ?? record.pid, false, identity);
-      cleaned += 1;
+    if (await trackedProcessExists(record)) {
+      if (await terminateTrackedProcess(record)) cleaned += 1;
       if (!(await processExited(record, 1_500))) {
         if (!force) throw new Error(`Tracked process ${record.pid} survived graceful termination; retry with --force`);
-        await killProcessTree(record.groupId ?? record.pid, true, identity);
+        await terminateTrackedProcess(record, true);
         if (!(await processExited(record, 1_500))) throw new Error(`Could not terminate tracked process ${record.pid}`);
       }
     }
@@ -391,7 +395,11 @@ async function releaseAssignment(
       const workspace = await beginWorkspaceReturn(paths, assignmentId);
       returning = true;
       const cleanedProcesses = await cleanTrackedProcesses(paths, assignmentId, workspace.processes, force);
-      const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
+      const tree = (await readState(paths)).trees[treeKey(workspace.path)];
+      const projections = tree && (await dependencyProjectionsAreValid(workspace.path, tree))
+        ? tree.projections
+        : [];
+      if (tree && projections.length === 0) await deleteTreeState(paths, workspace.path);
       await returnWorktree(workspace.path, force, projections);
       const available = await finishWorkspaceReturn(paths, assignmentId);
       return { workspace: available, cleanedProcesses };
@@ -677,11 +685,23 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
   const command = separator < 0 ? [...args] : args.slice(separator + 1);
   if (command.length === 0) throw new Error("run requires a command");
   if (separator > 0) throw new Error(`Unknown run option ${args[0]}`);
-  const { repository } = await context(cwd);
-  await sync(repository.root, io);
+  const value = await context(cwd);
+  const { repository } = value;
   const [program, ...programArgs] = command;
   const paths = storePaths(repository.commonDir);
-  const lifecycle = (await readState(paths)).workspaces[treeKey(repository.root)];
+  let state = await readState(paths);
+  let lifecycle = state.workspaces[treeKey(repository.root)];
+  const tree = state.trees[treeKey(repository.root)];
+  if (
+    !lifecycle?.assignment ||
+    !tree?.projectionFingerprint ||
+    tree.fingerprint !== (await dependencyFingerprint({ root: repository.root, manager: value.manager })).fingerprint ||
+    !(await dependenciesPresent(repository.root, tree.projections))
+  ) {
+    await sync(repository.root, io);
+    state = await readState(paths);
+    lifecycle = state.workspaces[treeKey(repository.root)];
+  }
   if (!lifecycle || lifecycle.lifecycle !== "assigned" || !lifecycle.assignment) {
     const result = await run(program!, programArgs, {
       cwd: repository.root,
@@ -725,7 +745,7 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
     await Promise.race([registration, execution.then(() => undefined)]);
   });
   const result = await execution;
-  if (tracking.record) {
+  if (tracking.record && !(await trackedProcessExists(tracking.record))) {
     try {
       await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
     } catch {

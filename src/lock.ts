@@ -110,7 +110,7 @@ export async function withDirectoryLock<T>(
       } catch (statError) {
         if (
           isErrnoException(statError) &&
-          (statError.code === "ENOENT" || statError.code === "EEXIST" || statError.code === "ENOTEMPTY" || statError.code === "EPERM")
+          (statError.code === "ENOENT" || statError.code === "EEXIST" || statError.code === "ENOTEMPTY" || statError.code === "EPERM" || statError.code === "EBUSY")
         ) continue;
         throw statError;
       }

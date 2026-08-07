@@ -56,3 +56,54 @@ test("statistics aggregate counters and estimate repeated linked content", async
   assert.equal(disk.linkedTargetBytes, 5);
   assert.equal(disk.estimatedBytesAvoided, 5);
 });
+
+test("disk statistics tolerate unreadable linked targets", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX permissions are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-stats-unreadable-"));
+  const workspace = path.join(root, "workspace");
+  const target = path.join(root, "target");
+  t.after(async () => {
+    await fs.chmod(target, 0o700).catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(workspace, "node_modules"), { recursive: true });
+  await fs.mkdir(target);
+  await fs.writeFile(path.join(target, "index.js"), "content");
+  await fs.symlink(target, path.join(workspace, "node_modules", "unreadable"), "dir");
+  await fs.chmod(target, 0);
+  const now = new Date(0).toISOString();
+  const state: RukState = {
+    version: 3,
+    metrics: emptyMetrics(),
+    workspaces: {
+      [treeKey(workspace)]: {
+        path: workspace,
+        managed: true,
+        branch: "(warm)",
+        lifecycle: "available",
+        operationId: null,
+        assignment: null,
+        processes: [],
+        createdAt: now,
+        updatedAt: now,
+        availableAt: now,
+        failure: null,
+      },
+    },
+    trees: {
+      [treeKey(workspace)]: {
+        path: workspace,
+        fingerprint: "fingerprint",
+        mode: "managed-install",
+        projections: ["node_modules"],
+        branch: "(detached)",
+        updatedAt: now,
+      },
+    },
+  };
+  assert.deepEqual(await diskStatistics(state), {
+    projectionBytes: 0,
+    linkedTargetBytes: 0,
+    estimatedBytesAvoided: 0,
+  });
+});

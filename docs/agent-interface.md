@@ -82,9 +82,10 @@ release fails and preserves the assignment if a tracked process survives
 graceful termination or the worktree is dirty. `--force` force-kills surviving
 tracked process trees and discards tracked and untracked changes.
 Tracked, untracked, and ignored files are removed before a workspace enters the
-pool, except dependency projections recorded by Ruk. Preserving those
-projections allows an unchanged reassignment to skip installation; agents must
-still commit or otherwise save every intended artifact first.
+pool, except dependency projections recorded and integrity-validated by Ruk.
+Preserving an unchanged projection allows reassignment to skip installation;
+a modified projection is discarded and rebuilt on the next acquisition.
+Agents must still commit or otherwise save every intended artifact first.
 It never permits an old ID to release a newer assignment. `cleanedProcesses`
 counts recorded process identities found and sent a termination request.
 

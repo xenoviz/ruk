@@ -3,6 +3,7 @@ import type { StdioOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isErrnoException } from "./types.js";
+import type { TrackedProcessRecord } from "./types.js";
 
 export interface RunOptions {
   cwd?: string;
@@ -243,6 +244,31 @@ export async function processDescendantsExist(pid: number): Promise<boolean> {
   } catch (error) {
     return !(isErrnoException(error) && error.code === "ESRCH");
   }
+}
+
+export async function trackedProcessExists(record: TrackedProcessRecord): Promise<boolean> {
+  const identity = await processIdentity(record.pid);
+  if (identity) return identity === record.startedAt;
+  return processDescendantsExist(record.groupId ?? record.pid);
+}
+
+export async function terminateTrackedProcess(record: TrackedProcessRecord, force = false): Promise<boolean> {
+  const identity = await processIdentity(record.pid);
+  if (identity === record.startedAt) {
+    return killProcessTree(record.groupId ?? record.pid, force, identity);
+  }
+  if (identity) return false;
+  if (process.platform !== "win32" && record.groupId !== undefined) {
+    try {
+      process.kill(-record.groupId, force ? "SIGKILL" : "SIGTERM");
+      return true;
+    } catch (error) {
+      if (isMissingProcess(error)) return false;
+      throw error;
+    }
+  }
+  if (await processDescendantsExist(record.pid)) throw new ProcessIdentityUnavailableError(record.pid);
+  return false;
 }
 
 export async function killProcessTree(

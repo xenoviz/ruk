@@ -19,9 +19,15 @@ async function entrySize(entry: string, visited: Set<string>): Promise<number> {
   }
   if (visited.has(real)) return 0;
   visited.add(real);
-  const stat = await fs.stat(real);
-  if (!stat.isDirectory()) return stat.size;
-  const entries = await fs.readdir(real);
+  let stat: Stats;
+  let entries: string[];
+  try {
+    stat = await fs.stat(real);
+    if (!stat.isDirectory()) return stat.size;
+    entries = await fs.readdir(real);
+  } catch {
+    return 0;
+  }
   const sizes = await Promise.all(entries.map((name) => entrySize(path.join(real, name), visited)));
   return sizes.reduce((total, size) => total + size, 0);
 }

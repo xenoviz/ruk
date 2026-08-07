@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { currentBranch } from "./git.js";
@@ -6,7 +7,7 @@ import { dependencyFingerprint } from "./fingerprint.js";
 import { withDirectoryLock } from "./lock.js";
 import { run } from "./process.js";
 import { readState, recordPreparationMetric, setTreeState, storePaths, treeKey, treeLockPath } from "./state.js";
-import type { DependencyReporter, PackageManager, Repository } from "./types.js";
+import type { DependencyReporter, PackageManager, Repository, TreeRecord } from "./types.js";
 
 async function exists(file: string): Promise<boolean> {
   try {
@@ -72,6 +73,71 @@ export async function dependenciesPresent(
   if (!Array.isArray(projections) || projections.length === 0) return false;
   const present = await Promise.all(projections.map((relative) => exists(path.join(root, relative))));
   return present.every(Boolean);
+}
+
+function projectionPath(root: string, relative: string): string {
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(resolvedRoot, relative);
+  if (resolved === resolvedRoot || !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error(`Dependency projection must stay inside the workspace: ${relative}`);
+  }
+  return resolved;
+}
+
+function hashFields(hash: ReturnType<typeof crypto.createHash>, ...fields: readonly string[]): void {
+  for (const field of fields) hash.update(field).update("\0");
+}
+
+async function hashProjectionEntry(
+  entry: string,
+  label: string,
+  hash: ReturnType<typeof crypto.createHash>,
+): Promise<void> {
+  const stat = await fs.lstat(entry);
+  if (stat.isSymbolicLink()) {
+    hashFields(hash, "symlink", label, await fs.readlink(entry));
+    return;
+  }
+  if (stat.isDirectory()) {
+    hashFields(hash, "directory", label, String(stat.mode & 0o777));
+    const entries = (await fs.readdir(entry)).sort();
+    for (const name of entries) {
+      await hashProjectionEntry(path.join(entry, name), `${label}/${name}`, hash);
+    }
+    return;
+  }
+  hashFields(
+    hash,
+    stat.isFile() ? "file" : "other",
+    label,
+    String(stat.mode & 0o777),
+    String(stat.size),
+    String(stat.mtimeMs),
+    String(stat.ctimeMs),
+  );
+}
+
+export async function projectionFingerprint(root: string, projections: readonly string[]): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  for (const relative of [...projections].sort()) {
+    await hashProjectionEntry(projectionPath(root, relative), relative.replaceAll("\\", "/"), hash);
+  }
+  return hash.digest("hex");
+}
+
+export async function dependencyProjectionsAreValid(root: string, record: TreeRecord): Promise<boolean> {
+  if (!record.projectionFingerprint || !(await dependenciesPresent(root, record.projections))) return false;
+  try {
+    return await projectionFingerprint(root, record.projections) === record.projectionFingerprint;
+  } catch {
+    return false;
+  }
+}
+
+async function removeDependencyProjections(root: string, projections: readonly string[]): Promise<void> {
+  for (const relative of projections) {
+    await fs.rm(projectionPath(root, relative), { recursive: true, force: true });
+  }
 }
 
 const DEFAULT_REPORTER: DependencyReporter = {
@@ -150,10 +216,7 @@ async function ensureDependenciesUnlocked({
 
   const state = await readState(paths);
   const currentTree = state.trees[treeKey(root)];
-  if (
-    currentTree?.fingerprint === fingerprint &&
-    (await dependenciesPresent(root, currentTree.projections))
-  ) {
+  if (currentTree?.fingerprint === fingerprint && (await dependencyProjectionsAreValid(root, currentTree))) {
     return {
       fingerprint,
       mode: currentTree.mode,
@@ -161,6 +224,8 @@ async function ensureDependenciesUnlocked({
       alreadyAttached: true,
     };
   }
+
+  if (currentTree) await removeDependencyProjections(root, currentTree.projections);
 
   await installDependencies(root, manager, reporter);
   details = await dependencyFingerprint({ root, manager });
@@ -172,6 +237,7 @@ async function ensureDependenciesUnlocked({
   }
   await setTreeState(paths, root, {
     fingerprint,
+    projectionFingerprint: await projectionFingerprint(root, projections),
     mode,
     projections,
     branch: await currentBranch(root),

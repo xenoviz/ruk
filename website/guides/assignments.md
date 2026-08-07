@@ -12,8 +12,10 @@ This rule prevents delayed automation from releasing a workspace after another
 agent has acquired it.
 
 Normal and forced release preserve only dependency projections recorded by
-Ruk. Other untracked and ignored files are removed before reuse. If the
-fingerprint and projection remain valid, the next assignment skips installation.
+Ruk. Other untracked and ignored files are removed before reuse. Ruk validates
+the recorded projection contents during release: unchanged projections stay
+warm, while modified projections are discarded and rebuilt on the next
+assignment.
 
 ## Lease duration
 

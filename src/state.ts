@@ -48,6 +48,8 @@ function isTreeRecord(value: unknown): value is TreeRecord {
     isRecord(value) &&
     typeof value["path"] === "string" &&
     typeof value["fingerprint"] === "string" &&
+    (value["projectionFingerprint"] === undefined ||
+      (typeof value["projectionFingerprint"] === "string" && /^[0-9a-f]{64}$/.test(value["projectionFingerprint"]))) &&
     typeof value["mode"] === "string" &&
     Array.isArray(value["projections"]) &&
     value["projections"].every((entry) => typeof entry === "string") &&

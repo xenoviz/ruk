@@ -94,6 +94,13 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(warmed.every((result) => result.status === "warmed"), true);
   assert.equal(warmed.reduce((total, result) => total + result.created.length, 0), 1);
 
+  const invalidPort = await run(
+    process.execPath,
+    [cli, "acquire", "agent/invalid-port", "--port", "___", "--json"],
+    { cwd: root, allowFailure: true },
+  );
+  assert.equal(JSON.parse(invalidPort.stderr).code, "INVALID_ARGUMENT");
+
   const acquired = JSON.parse((await run(
     process.execPath,
     [
@@ -178,7 +185,42 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   });
   assert.equal(staleRelease.code, 1);
   assert.match(staleRelease.stderr, /does not exist/);
+  await fs.writeFile(path.join(reused.path, "node_modules", "fixture", "ready"), "tampered");
+  const installsBeforeRepair = Number(await fs.readFile(counter, "utf8"));
   await run(process.execPath, [cli, "release", reused.assignmentId, "--json"], { cwd: root });
+
+  const repaired = JSON.parse((await run(
+    process.execPath,
+    [cli, "acquire", "agent/repaired", "--json"],
+    { cwd: root },
+  )).stdout);
+  assert.equal(Number(await fs.readFile(counter, "utf8")), installsBeforeRepair + 1);
+  assert.equal(await fs.readFile(path.join(repaired.path, "node_modules", "fixture", "ready"), "utf8"), "yes");
+  await run(process.execPath, [cli, "release", repaired.assignmentId, "--json"], { cwd: root });
+
+  const registryTemp = path.join(parent, "registry-temp");
+  await fs.mkdir(registryTemp);
+  const registryEnvironment = { ...process.env, TMPDIR: registryTemp, TMP: registryTemp, TEMP: registryTemp };
+  const ported = JSON.parse((await run(
+    process.execPath,
+    [cli, "acquire", "agent/port-cleanup", "--port", "app", "--json"],
+    { cwd: root, env: registryEnvironment },
+  )).stdout);
+  const registryFile = path.join(registryTemp, `ruk-host-${process.getuid?.() ?? "user"}`, "ports.json");
+  await fs.writeFile(registryFile, "invalid");
+  await run(process.execPath, [cli, "release", ported.assignmentId, "--json"], {
+    cwd: root,
+    env: registryEnvironment,
+  });
+  const withoutPorts = JSON.parse((await run(
+    process.execPath,
+    [cli, "acquire", "agent/no-port-cleanup", "--json"],
+    { cwd: root, env: registryEnvironment },
+  )).stdout);
+  await run(process.execPath, [cli, "release", withoutPorts.assignmentId, "--json"], {
+    cwd: root,
+    env: registryEnvironment,
+  });
 
   await fs.rm(path.join(reused.path, "node_modules"), { recursive: true, force: true });
   const rewarmed = JSON.parse((await run(
@@ -204,6 +246,25 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   );
   assert.equal(failedShort.code, 1);
   assert.match(failedShort.stderr, /Released/);
+
+  if (process.platform !== "win32") {
+    const childPidFile = path.join(parent, "background-child.pid");
+    const background = await run(
+      process.execPath,
+      [cli, "exec", "agent/background", "sh", "-c", 'sleep 60 & echo $! > "$1"', "sh", childPidFile],
+      { cwd: root },
+    );
+    assert.match(background.stderr, /Released/);
+    const childPid = Number(await fs.readFile(childPidFile, "utf8"));
+    await waitFor(async () => {
+      try {
+        process.kill(childPid, 0);
+        return false;
+      } catch (error) {
+        return error instanceof Error && "code" in error && error.code === "ESRCH";
+      }
+    });
+  }
 
   const shellResult = await run(process.execPath, [cli, "shell", "agent/shell"], {
     cwd: root,
