@@ -11,6 +11,7 @@ import {
   markWorkspaceAssigned,
   recordPreparingWorkspace,
   recordSuccessfulAcquisition,
+  reserveAvailableWorkspace,
 } from "../src/lifecycle.js";
 import { withDirectoryLock } from "../src/lock.js";
 import { run } from "../src/process.js";
@@ -234,22 +235,49 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(await fs.readFile(path.join(repaired.path, "node_modules", "fixture", "ready"), "utf8"), "yes");
   await run(process.execPath, [cli, "release", repaired.assignmentId, "--json"], { cwd: root });
 
+  let blockedAcquire!: ReturnType<typeof run>;
+  await withDirectoryLock(`${treeLockPath(paths, repaired.path)}.acquire`, async () => {
+    blockedAcquire = run(process.execPath, [cli, "acquire", "agent/blocked-handoff", "--json"], { cwd: root });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const waiting = (await readState(paths)).workspaces[treeKey(repaired.path)]!;
+    assert.equal(waiting.lifecycle, "available");
+    assert.equal(waiting.operationId, null);
+  });
+  const acquiredAfterHandoff = JSON.parse((await blockedAcquire).stdout);
+  await run(process.execPath, [cli, "release", acquiredAfterHandoff.assignmentId, "--json"], { cwd: root });
+
   const raced = JSON.parse((await run(process.execPath, [cli, "acquire", "agent/race", "--json"], {
     cwd: root,
   })).stdout);
+  await fs.writeFile(path.join(raced.path, "node_modules", "fixture", "ready"), "repair-needed");
   let racedRun!: ReturnType<typeof run>;
+  let replacement!: Awaited<ReturnType<typeof reserveAvailableWorkspace>>;
   await withDirectoryLock(treeLockPath(paths, raced.path), async () => {
     racedRun = run(
       process.execPath,
       [cli, "run", "--", process.execPath, "-e", "require('fs').writeFileSync('race.txt','ran')"],
       { cwd: raced.path, allowFailure: true },
     );
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
     await beginWorkspaceReturn(paths, raced.assignmentId);
     await finishWorkspaceReturn(paths, raced.assignmentId);
+    replacement = await reserveAvailableWorkspace(paths, {
+      owner: "replacement",
+      hostname: "host",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      branch: "agent/replacement",
+    });
+    assert.ok(replacement);
+    replacement = await recordSuccessfulAcquisition(
+      paths,
+      replacement.assignment!.id,
+      replacement.operationId!,
+      true,
+    );
   });
   assert.equal((await racedRun).code, 1);
   await assert.rejects(fs.access(path.join(raced.path, "race.txt")));
+  await run(process.execPath, [cli, "release", replacement!.assignment!.id, "--json"], { cwd: root });
 
   await fs.writeFile(path.join(reused.path, "node_modules", "fixture", "ready"), "tampered");
   const rewarmed = JSON.parse((await run(

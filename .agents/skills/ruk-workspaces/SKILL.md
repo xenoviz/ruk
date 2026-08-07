@@ -10,7 +10,8 @@ description: Manage Ruk workspaces for coding agents. Use when an agent must acq
 1. Run `ruk acquire <branch> --owner <stable-agent-id> --json` from the source
    repository. Add `--from`, `--fetch`, `--ttl`, or named `--port` requests only
    when needed. Fetch is explicit because it performs network I/O; without
-   `--from`, it uses the primary remote's advertised default branch.
+   `--from`, it uses the primary remote's advertised default branch. A fully
+   qualified remote-tracking ref fails if its named remote is missing.
 2. Parse and retain `path`, `assignmentId`, `expiresAt`, and `ports`. Treat the
    assignment ID as opaque; never derive it from the path.
 3. Set the working directory to the returned path. Use `ruk run -- <command>`
@@ -43,7 +44,8 @@ Use `ruk warm --count <n> --json` before a known burst of agents. The count is
 the desired number of available prepared workspaces, not the number to add;
 acquisition and warm-capacity reservations are serialized.
 Use `ruk stats --json` for recorded reuse and preparation metrics; add `--disk`
-only when an on-demand filesystem scan is acceptable.
+only when an on-demand filesystem scan is acceptable. Available capacity omits
+workspaces fenced by collection.
 
 Named ports are cooperative host-local reservations. `--port app` returns an
 `app` field and makes `RUK_PORT_APP` available to `ruk run`, `exec`, and
@@ -64,4 +66,5 @@ Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read
 `docs/agent-interface.md` for exact JSON fields and stdout/stderr rules.
 When a JSON command fails, parse the JSON error from stderr and use its stable
-`code` and `retryable` fields; stdout contains no success record.
+`code` and `retryable` fields; stdout contains no success record. JSON-mode
+dependency installers have their output discarded to keep memory bounded.

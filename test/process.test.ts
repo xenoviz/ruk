@@ -79,6 +79,47 @@ test("process runner terminates a child when tracking registration fails", async
   );
 });
 
+test("process runner terminates an attached process tree when tracking registration fails", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX attached process cleanup is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-attached-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const childFile = path.join(root, "child.pid");
+  let childPid = 0;
+  await assert.rejects(
+    run(
+      process.execPath,
+      [
+        "-e",
+        `const {spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(childFile)},String(child.pid));setInterval(()=>{},1000)`,
+      ],
+      {
+        onSpawn: async () => {
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            try {
+              childPid = Number(await fs.readFile(childFile, "utf8"));
+              break;
+            } catch {
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+          }
+          throw new Error("tracking failed");
+        },
+      },
+    ),
+    /tracking failed/,
+  );
+  assert.ok(childPid > 0);
+  for (let attempt = 0; attempt < 100 && await processIdentity(childPid); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(await processIdentity(childPid), null);
+});
+
+test("Windows process identity inspection confirms the current process", async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows identity inspection is required");
+  assert.match((await processIdentity(process.pid)) ?? "", /^\d+$/);
+});
+
 test("POSIX session inspection failures fail closed", async (t) => {
   if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-ps-"));

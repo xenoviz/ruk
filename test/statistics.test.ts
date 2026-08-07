@@ -52,6 +52,10 @@ test("statistics aggregate counters and estimate repeated linked content", async
   const usage = usageStatistics(state);
   assert.equal(usage.reuseRate, 0.75);
   assert.equal(usage.averagePreparationMs, 15);
+  assert.equal(usage.availableWorkspaces, 1);
+  state.workspaces[treeKey(workspace)]!.operationId = "00000000-0000-4000-8000-000000000001";
+  assert.equal(usageStatistics(state).availableWorkspaces, 0);
+  state.workspaces[treeKey(workspace)]!.operationId = null;
   state.workspaces[treeKey(workspace)]!.lifecycle = "returning";
   state.workspaces[treeKey(workspace)]!.assignment = {
     id: "00000000-0000-4000-8000-000000000000",

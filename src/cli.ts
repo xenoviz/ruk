@@ -165,7 +165,7 @@ function dependencyReporter(io: CliIo, json: boolean): DependencyReporter {
   return json
     ? {
         write: () => {},
-        stdio: "pipe",
+        stdio: "ignore",
       }
     : {
         write: (message: string) => {
@@ -249,14 +249,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
     hostname: os.hostname(),
     branch,
   };
-  const reserved = await reserveAvailableWorkspace(paths, { ...assignmentBase, expiresAt: expiresIn(ttl) });
-  const reused = reserved !== null;
-  const destination = reserved?.path ?? path.join(
-    path.dirname(repository.root),
-    `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
-  );
-  return withDirectoryLock(`${treeLockPath(paths, destination)}.acquire`, async () => {
-    let workspace = reserved ?? await recordPreparingWorkspace(paths, { path: destination, branch });
+  const finishAcquisition = async (workspace: WorkspaceRecord, reused: boolean) => {
     let operationId = reused ? null : workspace.operationId;
     let dependenciesReady = false;
     try {
@@ -337,7 +330,37 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
       }
       throw error;
     }
-  });
+  };
+
+  while (true) {
+    const available = Object.values((await readState(paths)).workspaces)
+      .filter((workspace) => workspace.lifecycle === "available" && workspace.operationId === null)
+      .sort(
+        (left, right) =>
+          (left.availableAt ?? "").localeCompare(right.availableAt ?? "") || left.path.localeCompare(right.path),
+      )[0];
+    if (available) {
+      const result = await withDirectoryLock(`${treeLockPath(paths, available.path)}.acquire`, async () => {
+        const reserved = await reserveAvailableWorkspace(
+          paths,
+          { ...assignmentBase, expiresAt: expiresIn(ttl) },
+          available.path,
+        );
+        return reserved ? finishAcquisition(reserved, true) : null;
+      });
+      if (result) return result;
+      continue;
+    }
+
+    const destination = path.join(
+      path.dirname(repository.root),
+      `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
+    );
+    return withDirectoryLock(`${treeLockPath(paths, destination)}.acquire`, async () => {
+      const workspace = await recordPreparingWorkspace(paths, { path: destination, branch });
+      return finishAcquisition(workspace, false);
+    });
+  }
 }
 
 async function renew(args: readonly string[], cwd: string, io: CliIo) {
@@ -783,6 +806,7 @@ async function execute(
   const paths = storePaths(repository.commonDir);
   let state = await readState(paths);
   let lifecycle = state.workspaces[treeKey(repository.root)];
+  const expectedAssignmentId = lifecycle?.assignment?.id;
   const tree = state.trees[treeKey(repository.root)];
   if (
     !lifecycle?.assignment ||
@@ -793,6 +817,9 @@ async function execute(
     await sync(repository.root, io);
     state = await readState(paths);
     lifecycle = state.workspaces[treeKey(repository.root)];
+    if (expectedAssignmentId && lifecycle?.assignment?.id !== expectedAssignmentId) {
+      throw new Error(`Assignment ${expectedAssignmentId} no longer owns ${repository.root}`);
+    }
   }
   if (!lifecycle) {
     const result = await run(program!, programArgs, {
@@ -807,7 +834,7 @@ async function execute(
     throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
   }
 
-  const assignmentId = lifecycle.assignment.id;
+  const assignmentId = expectedAssignmentId ?? lifecycle.assignment.id;
   const environment = { ...process.env, ...portEnvironment(lifecycle.assignment.ports) };
   const tracking: { record?: TrackedProcessRecord } = {};
   let interruptPending = false;
@@ -823,7 +850,11 @@ async function execute(
   try {
     await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
       const current = (await readState(paths)).workspaces[treeKey(repository.root)];
-      if (current?.lifecycle !== "assigned" || current.assignment?.id !== assignmentId) {
+      if (
+        current?.lifecycle !== "assigned" ||
+        current.operationId !== null ||
+        current.assignment?.id !== assignmentId
+      ) {
         throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
       }
       let registered!: () => void;

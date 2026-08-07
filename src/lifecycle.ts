@@ -158,11 +158,18 @@ export async function markWorkspaceAvailable(
 export async function reserveAvailableWorkspace(
   paths: StorePaths,
   input: AssignmentInput,
+  workspacePath?: string,
 ): Promise<WorkspaceRecord | null> {
+  const requestedKey = workspacePath === undefined ? undefined : treeKey(path.resolve(workspacePath));
   return withDirectoryLock(path.join(paths.root, "warm.lock"), () =>
     updateState(paths, (state) => {
       const workspace = Object.values(state.workspaces)
-        .filter((entry) => entry.lifecycle === "available" && entry.operationId === null)
+        .filter(
+          (entry) =>
+            entry.lifecycle === "available" &&
+            entry.operationId === null &&
+            (requestedKey === undefined || treeKey(entry.path) === requestedKey),
+        )
         .sort(
           (left, right) =>
             (left.availableAt ?? "").localeCompare(right.availableAt ?? "") ||

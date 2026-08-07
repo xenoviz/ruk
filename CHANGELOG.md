@@ -46,3 +46,7 @@ versioning.
   non-interactive POSIX shells.
 - Serialize abandoned-acquisition recovery with live handoff, preserve its
   retry marker after failed cleanup, and forward non-interactive shell signals.
+- Publish pool reservations only under their handoff lock, preserve assignment
+  identity across repair, harden process inspection and registration cleanup,
+  bound JSON installer output, validate explicit remotes, and report only
+  reservable warm capacity.

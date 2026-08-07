@@ -76,7 +76,7 @@ module instead of accumulating in the CLI.
 - A stale lock owned by a live local process is never removed by age alone.
 - The current workspace cannot remove itself.
 - Machine-readable output contains one JSON value on stdout; diagnostics go to
-  stderr.
+  stderr, while suppressed installer streams are discarded rather than buffered.
 - Named ports are serialized through a stable per-user host registry and unique
   among active recorded assignments. They are cooperative reservations, not
   held sockets.
@@ -123,16 +123,20 @@ wrapper interrupts to their detached process group.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
-transitions and preserve ownership whenever normal release is unsafe. Explicit
-`--fetch` is the only workspace operation in this layer that contacts a Git
-remote.
+transitions and preserve ownership whenever normal release is unsafe. Command
+launch snapshots its original assignment across dependency repair and rejects
+reassignment instead of adopting another agent's lease. Explicit `--fetch` is
+the only workspace operation in this layer that contacts a Git remote, and an
+explicit remote name must exist.
 
 Garbage collection can recover abandoned preparation, acquisition handoff, and
 collection operations. Warm, acquisition, and per-workspace locks prevent
 recovery from racing live work; operation IDs and update timestamps fence final
-transitions. Acquisition recovery revalidates under the handoff lock, and a
-failed recovery restores its acquisition marker. Failed removal is re-locked
-before a workspace becomes available, and post-removal state remains retryable.
+transitions. Pool reservations are published only after their handoff lock is
+held. Acquisition recovery revalidates under the same lock, and a failed
+recovery restores its acquisition marker. Failed removal is re-locked before a
+workspace becomes available, and post-removal state remains retryable and is
+excluded from available-capacity statistics.
 
 See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
 for transitions, fencing, GC boundaries, and non-goals.

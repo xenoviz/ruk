@@ -54,7 +54,13 @@ async function ownerIsAlive(owner: LockOwner): Promise<boolean> {
   const key = `${owner.pid}:${owner.processIdentity}`;
   const cached = ownerIdentityChecks.get(key);
   if (cached && Date.now() - cached.checkedAt < 1_000) return cached.result;
-  const result = processIdentity(owner.pid).then((identity) => identity === owner.processIdentity);
+  const result = (async () => {
+    try {
+      return await processIdentity(owner.pid) === owner.processIdentity;
+    } catch {
+      return true;
+    }
+  })();
   ownerIdentityChecks.set(key, { checkedAt: Date.now(), result });
   return result;
 }

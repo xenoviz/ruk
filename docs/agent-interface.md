@@ -1,9 +1,10 @@
 # Agent interface
 
 Use `--json` for automation. On success, Ruk writes exactly one JSON value and
-a trailing newline to stdout. Progress, dependency-installer output, and
-diagnostics go to stderr. A failure exits nonzero, writes one JSON error to
-stderr, and does not emit a success record.
+a trailing newline to stdout. Human-mode progress and dependency-installer
+output use the terminal; JSON mode discards installer streams so verbose tools
+cannot grow an unbounded in-memory buffer. A failure exits nonzero, writes one
+JSON error to stderr, and does not emit a success record.
 
 Paths are absolute. Timestamps use ISO 8601 UTC strings. Within a major
 release, documented fields keep their names, types, and meanings. Ruk may add
@@ -39,10 +40,10 @@ and release. `reused` reports whether Ruk assigned an available managed
 workspace instead of creating one.
 
 `--fetch` explicitly refreshes the remote selected by `--from`; without
-`--from`, Ruk resolves the primary remote's advertised default branch. Named
-ports are
-unique among active Ruk assignments and are injected into assigned commands as
-normalized variables such as `RUK_PORT_APP`.
+`--from`, Ruk resolves the primary remote's advertised default branch. Fully
+qualified remote-tracking refs fail if their named remote is missing. Named
+ports are unique among active Ruk assignments and are injected into assigned
+commands as normalized variables such as `RUK_PORT_APP`.
 
 ## Renew
 
@@ -149,6 +150,7 @@ the launched process cannot be identified while descendants remain.
 ensures that the pool has the requested number of available prepared workspaces;
 acquisition uses the same capacity lock.
 Statistics count both assigned and returning workspaces as active assignments.
+Available capacity excludes workspaces fenced by an in-progress collection.
 
 `ruk stats --json` returns aggregate acquisition, reuse, preparation, failure,
 and timing counters. `--disk` adds an on-demand scan; `estimatedBytesAvoided`

@@ -98,7 +98,9 @@ export function usageStatistics(state: RukState) {
     reuseRate: metrics.acquisitions === 0 ? 0 : metrics.workspaceReuses / metrics.acquisitions,
     preparationHitRate: attempts === 0 ? 0 : metrics.preparationSkips / attempts,
     activeAssignments: Object.values(state.workspaces).filter((workspace) => workspace.assignment !== null).length,
-    availableWorkspaces: Object.values(state.workspaces).filter((workspace) => workspace.lifecycle === "available").length,
+    availableWorkspaces: Object.values(state.workspaces).filter(
+      (workspace) => workspace.lifecycle === "available" && workspace.operationId === null,
+    ).length,
     failedWorkspaces: Object.values(state.workspaces).filter((workspace) => workspace.lifecycle === "failed").length,
     reservedPorts: Object.values(state.workspaces).reduce(
       (total, workspace) => total + Object.keys(workspace.assignment?.ports ?? {}).length,
