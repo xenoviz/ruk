@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { getRepository } from "../src/git.js";
-import { beginWorkspaceReturn, finishWorkspaceReturn, recordPreparingWorkspace } from "../src/lifecycle.js";
+import { beginWorkspaceReturn, finishWorkspaceReturn, markWorkspaceAssigned, recordPreparingWorkspace } from "../src/lifecycle.js";
 import { withDirectoryLock } from "../src/lock.js";
 import { run } from "../src/process.js";
 import { readState, storePaths, treeKey, treeLockPath } from "../src/state.js";
@@ -279,14 +279,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     );
     assert.match(background.stderr, /Released/);
     const childPid = Number(await fs.readFile(childPidFile, "utf8"));
-    await waitFor(async () => {
-      try {
-        process.kill(childPid, 0);
-        return false;
-      } catch (error) {
-        return error instanceof Error && "code" in error && error.code === "ESRCH";
-      }
-    });
+    await waitFor(() => processStopped(childPid));
   }
 
   const shellResult = await run(process.execPath, [cli, "shell", "agent/shell"], {
@@ -316,14 +309,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     });
     assert.match(ptyShell.stdout, /RUK_PTY_OK/);
     const childPid = Number(await fs.readFile(shellChildPid, "utf8"));
-    await waitFor(async () => {
-      try {
-        process.kill(childPid, 0);
-        return false;
-      } catch (error) {
-        return error instanceof Error && "code" in error && error.code === "ESRCH";
-      }
-    });
+    await waitFor(() => processStopped(childPid));
   }
 
   const statistics = JSON.parse((await run(process.execPath, [cli, "stats", "--disk", "--json"], {
@@ -500,7 +486,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(JSON.parse(failed.stderr).status, "error");
 });
 
-test("gc recovers an interrupted acquire preparation", async (t) => {
+test("gc recovers an interrupted acquire handoff", async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-abandoned-warm-"));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const root = path.join(parent, "repo");
@@ -514,9 +500,16 @@ test("gc recovers an interrupted acquire preparation", async (t) => {
   await run("git", ["commit", "-qm", "fixture"], { cwd: root });
   await run("git", ["worktree", "add", "--detach", abandoned, "HEAD"], { cwd: root });
   const repository = await getRepository(root);
-  await recordPreparingWorkspace(storePaths(repository.commonDir), {
+  const paths = storePaths(repository.commonDir);
+  const preparing = await recordPreparingWorkspace(paths, {
     path: abandoned,
     branch: "agent/interrupted",
+    now: "2026-01-01T00:00:00.000Z",
+  });
+  await markWorkspaceAssigned(paths, abandoned, preparing.operationId!, {
+    owner: "interrupted-agent",
+    hostname: "host",
+    expiresAt: "2030-01-01T00:00:00.000Z",
     now: "2026-01-01T00:00:00.000Z",
   });
 
@@ -588,4 +581,14 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs = 10_000): Promi
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("Timed out waiting for lifecycle state");
+}
+
+async function processStopped(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ESRCH";
+  }
+  const status = await run("ps", ["-o", "stat=", "-p", String(pid)], { allowFailure: true });
+  return status.code !== 0 || status.stdout.trim().startsWith("Z");
 }

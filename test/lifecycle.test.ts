@@ -53,12 +53,13 @@ async function assign(
   expiresAt = T2,
 ): Promise<WorkspaceRecord> {
   const preparing = await prepare(paths, workspacePath, now);
-  return markWorkspaceAssigned(paths, workspacePath, preparing.operationId!, {
+  const assigned = await markWorkspaceAssigned(paths, workspacePath, preparing.operationId!, {
     owner: "agent",
     hostname: "host",
     expiresAt,
     now,
   });
+  return recordSuccessfulAcquisition(paths, assigned.assignment!.id, assigned.operationId!, false, now);
 }
 
 async function makeAvailable(
@@ -194,8 +195,7 @@ test("warm workspaces become available and named ports remain unique", async (t)
     allocateAssignmentPorts(paths, first!.assignment!.id, ["web-app", "web_app"], allocator),
     /unique after normalization/,
   );
-  await recordSuccessfulAcquisition(paths, first!.assignment!.id, true);
-  await recordSuccessfulAcquisition(paths, second.assignment!.id, false);
+  await recordSuccessfulAcquisition(paths, first!.assignment!.id, first!.operationId!, true);
 
   const state = await readState(paths);
   assert.equal(state.metrics.acquisitions, 2);
@@ -256,6 +256,15 @@ test("GC selects stale safe records and reports expired assignments without recl
   const expired = await assign(paths, path.join(root, "expired"), T0, T1);
   await assign(paths, path.join(root, "active"), T1, T3);
   await prepare(paths, path.join(root, "preparing"), T0);
+  const acquiringPreparation = await prepare(paths, path.join(root, "acquiring"), T0);
+  await markWorkspaceAssigned(paths, acquiringPreparation.path, acquiringPreparation.operationId!, {
+    owner: "agent",
+    hostname: "host",
+    expiresAt: T3,
+    now: T0,
+  });
+  const interruptedCollection = await makeAvailable(paths, path.join(root, "collecting"), T0);
+  await beginWorkspaceCollection(paths, interruptedCollection.path, interruptedCollection.updatedAt, T1);
 
   const candidates = await identifyGcCandidates(paths, T1, T2, true);
   assert.deepEqual(
@@ -265,7 +274,9 @@ test("GC selects stale safe records and reports expired assignments without recl
       requiresForce,
     })),
     [
+      { name: "acquiring", reason: "abandoned-acquisition", requiresForce: false },
       { name: "available", reason: "available", requiresForce: false },
+      { name: "collecting", reason: "interrupted-collection", requiresForce: false },
       { name: "expired", reason: "expired-assignment", requiresForce: true },
       { name: "failed", reason: "failed", requiresForce: false },
       { name: "preparing", reason: "abandoned-preparation", requiresForce: false },

@@ -116,7 +116,9 @@ assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. POSIX process groups remain tracked
 after their leader exits so background children can still be cleaned safely.
 Interactive shells use their isolated session ID on Linux and controlling
-terminal on macOS, where `ps` does not expose the POSIX session ID.
+terminal on macOS, where `ps` does not expose the POSIX session ID. A live
+identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
+cleanup. Non-interactive shells do not allocate a PTY.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
@@ -124,9 +126,11 @@ transitions and preserve ownership whenever normal release is unsafe. Explicit
 `--fetch` is the only workspace operation in this layer that contacts a Git
 remote.
 
-Garbage collection can recover abandoned warm and acquire preparations. Warm
-and per-workspace locks prevent collection from racing live preparation; the
-operation ID and update timestamp fence the final transition.
+Garbage collection can recover abandoned preparation, acquisition handoff, and
+collection operations. Warm, acquisition, and per-workspace locks prevent
+recovery from racing live work; operation IDs and update timestamps fence final
+transitions. Failed removal is re-locked before a workspace becomes available,
+and post-removal state remains retryable.
 
 See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
 for transitions, fencing, GC boundaries, and non-goals.

@@ -225,25 +225,21 @@ export async function processDescendantsExist(pid: number): Promise<boolean> {
     );
     return result.code !== 0 || result.stdout.trim() === "1";
   }
-  const result = await run("ps", ["-eo", "pid=,ppid="], { allowFailure: true });
-  if (result.code === 0) {
-    const processes = result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number));
-    const parents = new Set([pid]);
-    let found = false;
-    while (true) {
-      const children = processes.filter(([child, parent]) => child && parent && parents.has(parent) && !parents.has(child));
-      if (children.length === 0) break;
-      found = true;
-      for (const [child] of children) parents.add(child!);
-    }
-    if (found) return true;
+  const result = await run("ps", ["-e", "-o", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "stat="], {
+    allowFailure: true,
+  });
+  if (result.code !== 0) throw new Error(`Could not enumerate POSIX processes: ${result.stderr.trim()}`);
+  const processes = result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
+    .filter((entry) => entry.length === 4 && !entry[3]!.startsWith("Z"))
+    .map(([child, parent, group]) => ({ pid: Number(child), parent: Number(parent), group: Number(group) }))
+    .filter((entry) => [entry.pid, entry.parent, entry.group].every(Number.isSafeInteger));
+  const parents = new Set([pid]);
+  while (true) {
+    const children = processes.filter((entry) => parents.has(entry.parent) && !parents.has(entry.pid));
+    if (children.length === 0) break;
+    for (const child of children) parents.add(child.pid);
   }
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    return !(isErrnoException(error) && error.code === "ESRCH");
-  }
+  return parents.size > 1 || processes.some((entry) => entry.group === pid);
 }
 
 interface PosixProcess {
@@ -255,8 +251,10 @@ interface PosixProcess {
 
 async function posixProcesses(): Promise<PosixProcess[]> {
   const scopeField = process.platform === "darwin" ? "tty" : "sid";
-  const result = await run("ps", ["-eo", `pid=,${scopeField}=,stat=`], { allowFailure: true });
-  if (result.code !== 0) return [];
+  const result = await run("ps", ["-e", "-o", "pid=", "-o", `${scopeField}=`, "-o", "stat="], {
+    allowFailure: true,
+  });
+  if (result.code !== 0) throw new Error(`Could not enumerate POSIX processes: ${result.stderr.trim()}`);
   return result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
     .filter((entry) => entry.length === 3 && Number.isSafeInteger(Number(entry[0])))
     .flatMap(([rawPid, scope, state]): PosixProcess[] => {
@@ -338,7 +336,11 @@ async function terminateProcessTerminal(
   force: boolean,
 ): Promise<boolean> {
   const leaderIdentity = await processIdentity(leaderPid);
-  if (leaderIdentity && leaderIdentity !== leaderStartedAt) {
+  if (!leaderIdentity) {
+    if (await processTerminalExists(terminalId)) throw new ProcessIdentityUnavailableError(leaderPid);
+    return false;
+  }
+  if (leaderIdentity !== leaderStartedAt) {
     throw new Error(`Refusing to terminate reused process ${leaderPid}`);
   }
   const members = (await posixProcesses()).filter((process) =>
@@ -356,11 +358,12 @@ async function terminateProcessTerminal(
 }
 
 export async function trackedProcessExists(record: TrackedProcessRecord): Promise<boolean> {
-  const identity = await processIdentity(record.pid);
-  if (identity) return identity === record.startedAt;
   if (record.terminalId !== undefined) return processTerminalExists(record.terminalId);
   if (record.sessionId !== undefined) return processSessionExists(record.sessionId);
-  return processDescendantsExist(record.groupId ?? record.pid);
+  if (record.groupId !== undefined) return processDescendantsExist(record.groupId);
+  const identity = await processIdentity(record.pid);
+  if (identity) return identity === record.startedAt;
+  return processDescendantsExist(record.pid);
 }
 
 export async function terminateTrackedProcess(record: TrackedProcessRecord, force = false): Promise<boolean> {

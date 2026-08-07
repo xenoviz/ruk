@@ -154,6 +154,7 @@ function isWorkspaceRecord(value: unknown): value is WorkspaceRecord {
   const assigned = value["lifecycle"] === "assigned" || value["lifecycle"] === "returning";
   const operationAllowed =
     value["lifecycle"] === "preparing" ||
+    value["lifecycle"] === "assigned" ||
     value["lifecycle"] === "available" ||
     value["lifecycle"] === "failed";
   return (

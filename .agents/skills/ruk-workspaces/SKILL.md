@@ -29,7 +29,8 @@ Ruk fences the assignment again immediately before launching a command.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
 an interactive, terminal-attached assigned shell; its isolated terminal session
 keeps surviving descendants tracked after the shell exits (by session ID on
-Linux and controlling terminal on macOS). Commit intended work
+Linux and a live, identity-fenced controlling-terminal sentinel on macOS).
+Non-interactive shell input skips PTY allocation so EOF remains observable. Commit intended work
 before exit so normal release can succeed. Release integrity-validates recorded dependency projections:
 unchanged projections stay warm, while modified projections are discarded and
 rebuilt from the package store before the next assigned command. Warm capacity
@@ -53,8 +54,9 @@ Use `ruk gc --json` to preview collection. Apply only when requested with
 `ruk gc --apply --json`. Add `--force-expired` only with explicit authority to
 reclaim expired assignments; expiry alone does not make them safe to remove.
 Forced collection revalidates expiry atomically before changing lifecycle state.
-GC recovers interrupted warm and acquire preparations after the age cutoff;
-workspace and warm locks prevent collection from racing live preparation.
+GC recovers interrupted preparations, pre-handoff acquisitions, and collections
+after the age cutoff; workspace and warm locks prevent recovery from racing live
+operations.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read

@@ -3,7 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { commandExists, killProcessTree, processIdentity, requireProcessIdentity, run } from "../src/process.js";
+import {
+  commandExists,
+  killProcessTree,
+  processIdentity,
+  requireProcessIdentity,
+  run,
+  trackedProcessExists,
+} from "../src/process.js";
 
 test("process runner captures output and preserves non-zero results when requested", async () => {
   const success = await run(process.execPath, ["-e", "process.stdout.write('ok')"]);
@@ -70,4 +77,29 @@ test("process runner terminates a child when tracking registration fails", async
     }),
     /tracking failed/,
   );
+});
+
+test("POSIX session inspection failures fail closed", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-ps-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  try {
+    await assert.rejects(
+      trackedProcessExists({
+        pid: 999_999,
+        sessionId: 999_999,
+        sessionStartedAt: "missing",
+        startedAt: "missing",
+      }),
+      /Could not enumerate POSIX processes/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+  }
 });

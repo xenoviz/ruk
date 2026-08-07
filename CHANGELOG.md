@@ -41,3 +41,6 @@ versioning.
 - Recover interrupted acquire preparations, keep failed-reuse projection
   metadata, retain surviving Windows process records, stabilize host port
   reservations, and deduplicate nested linked targets in disk statistics.
+- Fence acquisition handoff and collection recovery, re-lock failed removals,
+  fail closed on process-enumeration errors, and preserve EOF for
+  non-interactive POSIX shells.

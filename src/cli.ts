@@ -291,7 +291,12 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
       if (options.ports?.length) {
         workspace = await allocateAssignmentPorts(paths, workspace.assignment!.id, options.ports);
       }
-      workspace = await recordSuccessfulAcquisition(paths, workspace.assignment!.id, reused);
+      workspace = await recordSuccessfulAcquisition(
+        paths,
+        workspace.assignment!.id,
+        workspace.operationId!,
+        reused,
+      );
       const result = {
         status: "assigned",
         assignmentId: workspace.assignment!.id,
@@ -615,11 +620,13 @@ async function collectWorkspace(
     withDirectoryLock(treeLockPath(paths, workspace.path), async () => {
       const collecting = await beginWorkspaceCollection(paths, workspace.path, workspace.updatedAt);
       let gitRemoved = false;
+      let unlocked = false;
       try {
         const worktrees = await listWorktrees(repository.root);
         const managedPath = await canonicalPath(workspace.path);
         if (await Promise.all(worktrees.map((entry) => canonicalPath(entry.path))).then((entries) => entries.includes(managedPath))) {
           await unlockWorktree(repository.root, workspace.path);
+          unlocked = true;
           await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true, stdio });
         }
         gitRemoved = true;
@@ -627,7 +634,20 @@ async function collectWorkspace(
         await deleteTreeState(paths, workspace.path);
       } catch (error) {
         if (!gitRemoved) {
-          try { await cancelWorkspaceCollection(paths, workspace.path, collecting.operationId!); } catch { /* Preserve the original failure. */ }
+          let cleanupError: unknown;
+          if (unlocked) {
+            try { await lockWorktree(repository.root, workspace.path); } catch (failure) { cleanupError = failure; }
+          }
+          if (!cleanupError) {
+            try {
+              await cancelWorkspaceCollection(paths, workspace.path, collecting.operationId!);
+            } catch (failure) {
+              cleanupError = failure;
+            }
+          }
+          if (cleanupError) {
+            throw new AggregateError([error, cleanupError], `Workspace collection failed and recovery also failed for ${workspace.path}`);
+          }
         }
         throw error;
       }
@@ -653,15 +673,24 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   const expiredCandidates = candidates.filter((candidate) => candidate.requiresForce);
   const safeCandidates = candidates.filter((candidate) => !candidate.requiresForce);
   const removed: Array<{ path: string; lifecycle: string; reason: string }> = [];
+  const candidateReason = (reason: (typeof safeCandidates)[number]["reason"]): string => {
+    if (reason === "abandoned-preparation") return "abandoned preparation";
+    if (reason === "abandoned-acquisition") return "abandoned acquisition";
+    if (reason === "interrupted-collection") return "interrupted collection";
+    return "older than max age";
+  };
 
   if (options.apply) {
     for (const candidate of safeCandidates) {
       if (await canonicalPath(candidate.workspace.path) === current) continue;
-      await collectWorkspace(repository, paths, candidate.workspace, options.json ? "pipe" : "inherit");
+      const workspace = candidate.reason === "abandoned-acquisition"
+        ? (await releaseAssignment(repository, candidate.workspace.assignment!.id, true)).workspace
+        : candidate.workspace;
+      await collectWorkspace(repository, paths, workspace, options.json ? "pipe" : "inherit");
       removed.push({
         path: candidate.workspace.path,
         lifecycle: candidate.workspace.lifecycle,
-        reason: candidate.reason === "abandoned-preparation" ? "abandoned preparation" : "older than max age",
+        reason: candidateReason(candidate.reason),
       });
     }
     if (options.forceExpired) {
@@ -679,7 +708,7 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
       removed.push({
         path: candidate.workspace.path,
         lifecycle: candidate.workspace.lifecycle,
-        reason: candidate.reason === "abandoned-preparation" ? "abandoned preparation" : "older than max age",
+        reason: candidateReason(candidate.reason),
       });
     }
   }
@@ -952,13 +981,13 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
   const assigned = await acquire(acquireArgs, cwd, io, false);
   const executable = process.env["RUK_SHELL"] ?? process.env["SHELL"] ??
     (process.platform === "win32" ? process.env["COMSPEC"] ?? "cmd.exe" : "/bin/sh");
-  const sessionMarker = process.platform === "win32"
+  const sessionMarker = process.platform === "win32" || !process.stdin.isTTY
     ? undefined
     : path.join((await repositoryContext(assigned.path)).repository.commonDir, "ruk", `shell-${crypto.randomUUID()}`);
   const wrapper = process.platform === "darwin"
-    ? `started=$(ps -o lstart= -p $$); terminal=$(ps -o tty= -p $$); printf "%s\\n%s\\n%s\\n" "$$" "$started" "$terminal" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`
-    : `sid=$(ps -o sid= -p $$); started=$(ps -o lstart= -p "$sid"); printf "%s\\n%s\\n" "$sid" "$started" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`;
-  const command = process.platform === "win32"
+    ? `sleep 2147483647 </dev/null >/dev/null 2>&1 & sentinel=$!; started=$(ps -o lstart= -p "$sentinel"); terminal=$(ps -o tty= -p "$sentinel"); printf "%s\\n%s\\n%s\\n" "$sentinel" "$started" "$terminal" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`
+    : `sid=$(ps -o sid= -p $$ | tr -d ' '); started=$(ps -o lstart= -p "$sid"); printf "%s\\n%s\\n" "$sid" "$started" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`;
+  const command = !sessionMarker
     ? [executable]
     : process.platform === "darwin"
       ? ["/usr/bin/script", "-q", "/dev/null", "/bin/sh", "-c", wrapper]
@@ -972,7 +1001,14 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
     process.env["RUK_SHELL_SESSION_FILE"] = sessionMarker;
   }
   try {
-    return await runAssignedAndRelease(assigned, command, cwd, io, false, sessionMarker);
+    return await runAssignedAndRelease(
+      assigned,
+      command,
+      cwd,
+      io,
+      process.platform !== "win32" && !sessionMarker,
+      sessionMarker,
+    );
   } finally {
     if (process.platform !== "win32") process.off("SIGINT", ignoreInterrupt);
     if (sessionMarker) {

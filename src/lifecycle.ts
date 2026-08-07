@@ -37,7 +37,13 @@ export interface AssignmentQuery {
   now?: string;
 }
 
-export type GcCandidateReason = "available" | "failed" | "expired-assignment" | "abandoned-preparation";
+export type GcCandidateReason =
+  | "available"
+  | "failed"
+  | "expired-assignment"
+  | "abandoned-preparation"
+  | "abandoned-acquisition"
+  | "interrupted-collection";
 
 export interface GcCandidate {
   workspace: WorkspaceRecord;
@@ -89,10 +95,11 @@ function requireLifecycle(
   }
 }
 
-function assign(workspace: WorkspaceRecord, input: AssignmentInput): WorkspaceRecord {
+function assign(workspace: WorkspaceRecord, input: AssignmentInput, operationId: string | null = null): WorkspaceRecord {
   const nextAssignment = assignment(input);
   if (input.branch !== undefined) workspace.branch = nonempty(input.branch, "branch");
   workspace.lifecycle = "assigned";
+  workspace.operationId = operationId;
   workspace.assignment = nextAssignment;
   workspace.updatedAt = nextAssignment.assignedAt;
   workspace.availableAt = null;
@@ -162,7 +169,7 @@ export async function reserveAvailableWorkspace(
             left.path.localeCompare(right.path),
         )[0];
       if (!workspace) return null;
-      return assign(workspace, input);
+      return assign(workspace, input, crypto.randomUUID());
     }));
 }
 
@@ -178,19 +185,23 @@ export async function markWorkspaceAssigned(
     if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
     requireLifecycle(workspace, "preparing");
     if (workspace.operationId !== operationId) throw new Error("Preparation operation does not match");
-    workspace.operationId = null;
-    return assign(workspace, input);
+    return assign(workspace, input, crypto.randomUUID());
   });
 }
 
 export async function recordSuccessfulAcquisition(
   paths: StorePaths,
   assignmentId: string,
+  operationId: string,
   reused: boolean,
+  now?: string,
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "assigned");
+    if (workspace.operationId !== operationId) throw new Error("Acquisition operation does not match");
+    workspace.operationId = null;
+    workspace.updatedAt = timestamp(now, "now");
     state.metrics.acquisitions += 1;
     if (reused) state.metrics.workspaceReuses += 1;
     return workspace;
@@ -289,6 +300,7 @@ export async function beginWorkspaceReturn(
       throw new Error(`Assignment ${assignmentId} was renewed before collection`);
     }
     workspace.lifecycle = "returning";
+    workspace.operationId = null;
     workspace.failure = null;
     workspace.updatedAt = timestamp(now, "now");
     return workspace;
@@ -453,6 +465,20 @@ export async function identifyGcCandidates(
     ) {
       candidates.push({ workspace, reason: "abandoned-preparation", requiresForce: false });
     } else if (
+      includeAbandonedPreparations &&
+      workspace.lifecycle === "assigned" &&
+      workspace.operationId !== null &&
+      Date.parse(workspace.updatedAt) <= cutoff
+    ) {
+      candidates.push({ workspace, reason: "abandoned-acquisition", requiresForce: false });
+    } else if (
+      includeAbandonedPreparations &&
+      (workspace.lifecycle === "available" || workspace.lifecycle === "failed") &&
+      workspace.operationId !== null &&
+      Date.parse(workspace.updatedAt) <= cutoff
+    ) {
+      candidates.push({ workspace, reason: "interrupted-collection", requiresForce: false });
+    } else if (
       workspace.operationId === null &&
       workspace.lifecycle === "available" &&
       Date.parse(workspace.availableAt!) <= cutoff
@@ -488,9 +514,10 @@ export async function beginWorkspaceCollection(
     if (!abandonedPreparation && workspace.lifecycle !== "available" && workspace.lifecycle !== "failed") {
       throw new Error(`Workspace ${resolved} is not safe to collect`);
     }
-    if ((!abandonedPreparation && workspace.operationId !== null) || workspace.updatedAt !== expectedUpdatedAt) {
+    if (workspace.updatedAt !== expectedUpdatedAt) {
       throw new Error(`Workspace ${resolved} changed before collection`);
     }
+    if (!abandonedPreparation && workspace.operationId !== null) return workspace;
     if (abandonedPreparation) {
       workspace.lifecycle = "failed";
       workspace.failure = "Workspace preparation was abandoned";

@@ -100,9 +100,9 @@ ruk gc [--max-age <minutes>] [--apply] [--force-expired] [--json]
 ```
 
 The age defaults to 1440 minutes. GC is a dry run unless `--apply` is present.
-Interrupted warm and acquire preparations older than the cutoff are safe
-candidates; live preparation holds the corresponding lock and cannot be
-collected concurrently.
+Interrupted preparations, acquisition handoffs, and collections older than the
+cutoff are safe candidates; live operations hold the corresponding locks and
+cannot be collected concurrently.
 
 ```json
 {
