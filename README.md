@@ -26,6 +26,9 @@ Ruk is an early release with a deliberately small, tested surface:
 
 - create, inspect, run commands in, and remove Git worktrees;
 - acquire, renew, release, and reuse fenced agent workspace assignments;
+- prewarm pools, run short assigned jobs, and open interactive assigned shells;
+- reserve named host-local ports and inject them into assigned processes;
+- report recorded reuse, preparation, failure, timing, and optional disk metrics;
 - track commands launched by `ruk run` and safely collect recorded workspaces;
 - fingerprint root and workspace manifests, lockfiles, package-manager config,
   patches, runtime, platform, architecture, and install strategy;
@@ -33,9 +36,10 @@ Ruk is an early release with a deliberately small, tested surface:
 - share immutable package content by default with supported Bun and pnpm versions;
 - allow repositories to opt out when an isolated layout is incompatible.
 
-Lifecycle coordination is local to one host. Runtime namespace allocation is
-not provided. Garbage collection acts only on Ruk-managed records; it does not
-discover or remove arbitrary orphan worktrees or processes.
+Lifecycle coordination is local to one host. Ruk allocates cooperative named
+ports but provides no broader runtime namespaces. Garbage collection acts only
+on Ruk-managed records; it does not discover or remove arbitrary orphan
+worktrees or processes.
 
 ## Requirements
 
@@ -97,11 +101,31 @@ ruk run -- bun test
 ruk run -- bun run typecheck
 ```
 
+Run a short job with automatic safe release, or prewarm before an agent burst:
+
+```bash
+ruk exec agent/check -- bun test
+ruk warm --count 5 --from origin/main --fetch --json
+```
+
+Reserve named ports for an assigned workspace:
+
+```bash
+ruk acquire agent/web --port app --port inspector --json
+```
+
+`ruk run`, `ruk exec`, and `ruk shell` expose those values as
+`RUK_PORT_APP` and `RUK_PORT_INSPECTOR`. Reservations coordinate Ruk
+assignments on one host; they do not hold sockets against unrelated processes.
+
 Inspect or clean up:
 
 ```bash
 ruk status
 ruk status --json
+ruk status --explain
+ruk stats --json
+ruk stats --disk --json
 ruk list --json
 ruk remove ../project-agent-auth-flow
 ```
@@ -202,6 +226,11 @@ bun run pack:check
 Ruk is authored in strict TypeScript. Bun is the repository toolchain and
 builds the standalone executables; `tsc` emits the Node-compatible npm
 distribution. The published runtime remains dependency-free.
+
+This repository commits managed mode in `.rukrc.json` because Bun's isolated
+global-store linker does not reliably install the VitePress dependency graph on
+Windows. The exception is repository-specific; supported Bun and pnpm projects
+still default to shared package content.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and
 [docs/architecture.md](./docs/architecture.md) before changing lifecycle,

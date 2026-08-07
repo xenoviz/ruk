@@ -21,3 +21,9 @@ versioning.
 - Add an advanced update-installer environment override, manifest-gated release
   readiness, one coordinated release workflow, and real Windows
   release-upgrade smoke validation.
+- Add warm pools, assigned one-command execution, interactive shells, explicit
+  remote refresh, and cooperative named port reservations.
+- Add structured JSON failures, readiness reasons, bounded reuse and
+  preparation statistics, and optional disk estimates.
+- Accept separator-free `ruk run` commands for PowerShell npm shims and tolerate
+  short-lived Windows children that exit before process identity inspection.

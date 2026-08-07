@@ -1,0 +1,32 @@
+export interface ErrorRecord {
+  status: "error";
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
+  [/unknown (?:command|option)|requires|does not accept|must be|exactly one/i, "INVALID_ARGUMENT", false],
+  [/assignment .* does not exist|expected assigned|preparation operation does not match/i, "ASSIGNMENT_CONFLICT", false],
+  [/uncommitted changes|workspace .* dirty/i, "WORKSPACE_DIRTY", false],
+  [/port .* unavailable|allocate an available port|allocator returned/i, "PORT_UNAVAILABLE", true],
+  [/lock|changed before collection|still has tracked processes|survived graceful termination/i, "RESOURCE_BUSY", true],
+  [/install|dependency|node_modules projection|shared dependency backend/i, "DEPENDENCY_PREPARATION_FAILED", true],
+  [/git |worktree|branch .* checked out|remote .* does not exist/i, "GIT_OPERATION_FAILED", false],
+];
+
+export function errorRecord(error: unknown): ErrorRecord {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = CATEGORIES.find(([pattern]) => pattern.test(message));
+  return {
+    status: "error",
+    code: match?.[1] ?? "OPERATION_FAILED",
+    message,
+    retryable: match?.[2] ?? false,
+  };
+}
+
+export function jsonRequested(argv: readonly string[]): boolean {
+  const separator = argv.indexOf("--");
+  return argv.slice(0, separator < 0 ? argv.length : separator).includes("--json");
+}

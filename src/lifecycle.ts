@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { availablePort, portEnvironmentName } from "./ports.js";
 import { readState, treeKey, updateState } from "./state.js";
 import type {
   AssignmentRecord,
@@ -65,6 +66,7 @@ function assignment(input: AssignmentInput): AssignmentRecord {
     assignedAt: now,
     renewedAt: now,
     expiresAt,
+    ports: {},
   };
 }
 
@@ -124,6 +126,27 @@ export async function recordPreparingWorkspace(
   });
 }
 
+export async function markWorkspaceAvailable(
+  paths: StorePaths,
+  workspacePath: string,
+  operationId: string,
+  now?: string,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const resolved = path.resolve(workspacePath);
+    const workspace = state.workspaces[treeKey(resolved)];
+    if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
+    requireLifecycle(workspace, "preparing");
+    if (workspace.operationId !== operationId) throw new Error("Preparation operation does not match");
+    const availableAt = timestamp(now, "now");
+    workspace.lifecycle = "available";
+    workspace.operationId = null;
+    workspace.updatedAt = availableAt;
+    workspace.availableAt = availableAt;
+    return workspace;
+  });
+}
+
 export async function reserveAvailableWorkspace(
   paths: StorePaths,
   input: AssignmentInput,
@@ -136,7 +159,10 @@ export async function reserveAvailableWorkspace(
           (left.availableAt ?? "").localeCompare(right.availableAt ?? "") ||
           left.path.localeCompare(right.path),
       )[0];
-    return workspace ? assign(workspace, input) : null;
+    if (!workspace) return null;
+    state.metrics.acquisitions += 1;
+    state.metrics.workspaceReuses += 1;
+    return assign(workspace, input);
   });
 }
 
@@ -153,7 +179,38 @@ export async function markWorkspaceAssigned(
     requireLifecycle(workspace, "preparing");
     if (workspace.operationId !== operationId) throw new Error("Preparation operation does not match");
     workspace.operationId = null;
+    state.metrics.acquisitions += 1;
     return assign(workspace, input);
+  });
+}
+
+export async function allocateAssignmentPorts(
+  paths: StorePaths,
+  assignmentId: string,
+  names: readonly string[],
+  allocate: (excluded: ReadonlySet<number>) => Promise<number> = availablePort,
+): Promise<WorkspaceRecord> {
+  const environmentNames = names.map(portEnvironmentName);
+  if (new Set(environmentNames).size !== environmentNames.length) {
+    throw new Error("Port names must be unique after normalization");
+  }
+  return updateState(paths, async (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    const excluded = new Set(
+      Object.values(state.workspaces).flatMap((entry) => Object.values(entry.assignment?.ports ?? {})),
+    );
+    const ports: Record<string, number> = {};
+    for (const name of names) {
+      const port = await allocate(excluded);
+      if (!Number.isSafeInteger(port) || port < 1 || port > 65_535 || excluded.has(port)) {
+        throw new Error(`Port allocator returned unavailable port ${port}`);
+      }
+      excluded.add(port);
+      ports[name] = port;
+    }
+    workspace.assignment!.ports = ports;
+    return workspace;
   });
 }
 

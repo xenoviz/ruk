@@ -12,6 +12,7 @@ import { dependencyFingerprint } from "./fingerprint.js";
 import {
   addWorktree,
   assignWorktree,
+  fetchRemote,
   getRepository,
   listWorktrees,
   lockWorktree,
@@ -30,15 +31,19 @@ import {
   finishWorkspaceReturn,
   identifyGcCandidates,
   markWorkspaceAssigned,
+  markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
+  allocateAssignmentPorts,
 } from "./lifecycle.js";
 import { withDirectoryLock } from "./lock.js";
+import { portEnvironment } from "./ports.js";
 import { killProcessTree, processIdentity, run } from "./process.js";
 import { deleteTreeState, readState, storePaths, treeKey, treeLockPath } from "./state.js";
+import { diskStatistics, usageStatistics } from "./statistics.js";
 import type { CliIo, DependencyReporter, StorePaths, TrackedProcessRecord, WorkspaceRecord } from "./types.js";
 import { formatUpdate, updateRuk } from "./update.js";
 import type { Distribution } from "./update.js";
@@ -49,14 +54,18 @@ const HELP = `Ruk — dependency-aware Git workspaces for parallel coding agents
 Usage:
   ruk init [--json]
   ruk create <branch> [--path <directory>] [--from <ref>] [--detach] [--json]
-  ruk acquire <branch> [--from <ref>] [--ttl <minutes>] [--owner <id>] [--json]
+  ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] [--json]
   ruk renew <assignment-id> [--ttl <minutes>] [--json]
   ruk release <assignment-id> [--force] [--json]
   ruk sync [--json]
   ruk run -- <command> [args...]
+  ruk exec <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] -- <command> [args...]
+  ruk warm --count <n> [--from <ref>] [--fetch] [--json]
+  ruk shell <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...]
   ruk list [--json]
   ruk remove <path> [--force]
-  ruk status [--json]
+  ruk status [--explain] [--json]
+  ruk stats [--disk] [--json]
   ruk gc [--max-age <minutes>] [--apply] [--force-expired] [--json]
   ruk update [--check] [--json]
 
@@ -76,6 +85,11 @@ interface ParsedOptions {
   maxAge?: string;
   apply?: boolean;
   forceExpired?: boolean;
+  fetch?: boolean;
+  explain?: boolean;
+  disk?: boolean;
+  count?: string;
+  ports?: string[];
 }
 
 function parseOptions(
@@ -102,7 +116,8 @@ function parseOptions(
       const value = args[index + 1];
       if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
       const key = argument.slice(2).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
-      (options as Record<string, string | boolean | undefined>)[key] = value;
+      if (argument === "--port") options.ports = [...(options.ports ?? []), value];
+      else (options as Record<string, string | boolean | undefined>)[key] = value;
       index += 1;
       continue;
     }
@@ -185,6 +200,10 @@ function expiresIn(durationMinutes: number): string {
   return new Date(Date.now() + durationMinutes * 60_000).toISOString();
 }
 
+async function fetchIfRequested(repository: string, startPoint: string, requested: boolean): Promise<void> {
+  if (requested) await fetchRemote(repository, startPoint);
+}
+
 async function canonicalPath(value: string): Promise<string> {
   try {
     return await fs.realpath(value);
@@ -193,14 +212,15 @@ async function canonicalPath(value: string): Promise<string> {
   }
 }
 
-async function acquire(args: readonly string[], cwd: string, io: CliIo) {
+async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = true) {
   const { options, positional } = parseOptions(args, {
-    values: ["--from", "--ttl", "--owner"],
-    flags: ["--json"],
+    values: ["--from", "--ttl", "--owner", "--port"],
+    flags: ["--fetch", "--json"],
   });
   requirePositionals(positional, 1, "acquire requires exactly one branch name");
   const branch = positional[0]!;
   const { repository } = await repositoryContext(cwd);
+  await fetchIfRequested(repository.root, options.from ?? "origin/main", options.fetch ?? false);
   const paths = storePaths(repository.commonDir);
   const ttl = minutes(options.ttl, 480, "--ttl");
   const assignmentBase = {
@@ -245,8 +265,12 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo) {
         ...assignmentBase,
         expiresAt: expiresIn(ttl),
       });
+      operationId = null;
     } else {
       workspace = await renewAssignment(paths, workspace.assignment!.id, expiresIn(ttl));
+    }
+    if (options.ports?.length) {
+      workspace = await allocateAssignmentPorts(paths, workspace.assignment!.id, options.ports);
     }
     const result = {
       status: "assigned",
@@ -257,9 +281,13 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo) {
       reused,
       fingerprint: prepared.fingerprint,
       mode: prepared.mode,
+      ports: workspace.assignment!.ports,
     };
-    if (options.json) io.stdout.write(jsonLine(result));
-    else io.stdout.write(`Assigned ${workspace.path}\nAssignment: ${result.assignmentId}\nExpires: ${result.expiresAt}\n`);
+    if (emit && options.json) io.stdout.write(jsonLine(result));
+    else if (emit) {
+      io.stdout.write(`Assigned ${workspace.path}\nAssignment: ${result.assignmentId}\nExpires: ${result.expiresAt}\n`);
+      for (const [name, port] of Object.entries(result.ports)) io.stdout.write(`${name}: ${port}\n`);
+    }
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -389,11 +417,12 @@ async function release(args: readonly string[], cwd: string, io: CliIo) {
 async function create(args: readonly string[], cwd: string, io: CliIo) {
   const { options, positional } = parseOptions(args, {
     values: ["--path", "--from"],
-    flags: ["--detach", "--json"],
+    flags: ["--detach", "--fetch", "--json"],
   });
   requirePositionals(positional, 1, "create requires exactly one branch name");
   const branch = positional[0]!;
   const { repository, manager } = await context(cwd);
+  await fetchIfRequested(repository.root, options.from ?? "origin/main", options.fetch ?? false);
   const backend = await dependencyFingerprint({ root: repository.root, manager });
   if (manager.dependencyMode === "shared") assertSharedBackendSupported(backend.manager);
   const destination = path.resolve(
@@ -469,7 +498,7 @@ async function list(args: readonly string[], cwd: string, io: CliIo) {
 }
 
 async function status(args: readonly string[], cwd: string, io: CliIo) {
-  const { options, positional } = parseOptions(args, { flags: ["--json"] });
+  const { options, positional } = parseOptions(args, { flags: ["--explain", "--json"] });
   requirePositionals(positional, 0, "status does not accept positional arguments");
   const value = await context(cwd);
   const paths = storePaths(value.repository.commonDir);
@@ -482,6 +511,13 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     record?.projections ?? ["node_modules"],
   );
   const ready = record?.fingerprint === current.fingerprint && modulesPresent;
+  const reason = ready
+    ? null
+    : !record
+      ? "not-prepared"
+      : !modulesPresent
+        ? "dependencies-missing"
+        : "fingerprint-changed";
   const result = {
     path: value.repository.root,
     fingerprint: current.fingerprint,
@@ -489,6 +525,8 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     mode: record?.mode ?? null,
     nodeModulesPresent: modulesPresent,
     status: ready ? "ready" : "sync-required",
+    reason,
+    recovery: ready ? null : "ruk sync",
     lifecycle: lifecycle?.lifecycle ?? null,
     assignmentId: lifecycle?.assignment?.id ?? null,
     expiresAt: lifecycle?.assignment?.expiresAt ?? null,
@@ -502,9 +540,10 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     io.stdout.write(`Mode:        ${result.mode ?? "-"}\n`);
     io.stdout.write(`node_modules:${modulesPresent ? " present" : " missing"}\n`);
     io.stdout.write(`Status:      ${result.status}\n`);
+    if (options.explain && reason) io.stdout.write(`Reason:      ${reason}\nRecovery:    ${result.recovery}\n`);
     io.stdout.write(`Lifecycle:   ${result.lifecycle ?? "unmanaged"}\n`);
     if (result.assignmentId) io.stdout.write(`Assignment:  ${result.assignmentId} (expires ${result.expiresAt})\n`);
-    if (!ready) io.stdout.write("Next:        ruk sync\n");
+    if (!ready && !options.explain) io.stdout.write("Next:        ruk sync\n");
   }
   return result;
 }
@@ -615,9 +654,8 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
 
 async function execute(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
   const separator = args.indexOf("--");
-  if (separator < 0) throw new Error("run requires -- before the command");
-  const command = args.slice(separator + 1);
-  if (command.length === 0) throw new Error("run requires a command after --");
+  const command = separator < 0 ? [...args] : args.slice(separator + 1);
+  if (command.length === 0) throw new Error("run requires a command");
   if (separator > 0) throw new Error(`Unknown run option ${args[0]}`);
   const { repository } = await context(cwd);
   await sync(repository.root, io);
@@ -627,6 +665,7 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
   if (!lifecycle || lifecycle.lifecycle !== "assigned" || !lifecycle.assignment) {
     const result = await run(program!, programArgs, {
       cwd: repository.root,
+      env: process.env,
       stdio: "inherit",
       allowFailure: true,
     });
@@ -634,6 +673,7 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
   }
 
   const assignmentId = lifecycle.assignment.id;
+  const environment = { ...process.env, ...portEnvironment(lifecycle.assignment.ports) };
   const tracking: { record?: TrackedProcessRecord } = {};
   let execution!: ReturnType<typeof run>;
   await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
@@ -641,12 +681,17 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
     const registration = new Promise<void>((resolve) => { registered = resolve; });
     execution = run(program!, programArgs, {
       cwd: repository.root,
+      env: environment,
       stdio: "inherit",
       allowFailure: true,
       detached: true,
       onSpawn: async (pid) => {
         const startedAt = await processIdentity(pid);
-        if (!startedAt) throw new Error(`Could not identify process ${pid}`);
+        if (!startedAt) {
+          // A short-lived child may exit before Windows can report its start time.
+          registered();
+          return;
+        }
         const record: TrackedProcessRecord = {
           pid,
           ...(process.platform === "win32" ? {} : { groupId: pid }),
@@ -669,6 +714,159 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
     }
   }
   return result.code;
+}
+
+async function warm(args: readonly string[], cwd: string, io: CliIo) {
+  const { options, positional } = parseOptions(args, {
+    values: ["--count", "--from"],
+    flags: ["--fetch", "--json"],
+  });
+  requirePositionals(positional, 0, "warm does not accept positional arguments");
+  const count = Number(options.count);
+  if (!Number.isSafeInteger(count) || count < 1) throw new Error("--count must be a positive integer");
+  const { repository } = await repositoryContext(cwd);
+  const startPoint = options.from ?? "HEAD";
+  await fetchIfRequested(repository.root, options.from ?? "origin/main", options.fetch ?? false);
+  const paths = storePaths(repository.commonDir);
+  const initial = await readState(paths);
+  const available = Object.values(initial.workspaces).filter((workspace) => workspace.lifecycle === "available").length;
+  const created: string[] = [];
+
+  for (let index = available; index < count; index += 1) {
+    const destination = path.join(
+      path.dirname(repository.root),
+      `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
+    );
+    const workspace = await recordPreparingWorkspace(paths, { path: destination, branch: "(warm)" });
+    try {
+      await addWorktree({
+        cwd: repository.root,
+        destination,
+        branch: "(warm)",
+        startPoint,
+        detach: true,
+        stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
+      });
+      await lockWorktree(repository.root, destination);
+      await sync(destination, io, options.json ?? false, false);
+      await markWorkspaceAvailable(paths, destination, workspace.operationId!);
+      created.push(destination);
+    } catch (error) {
+      await markWorkspaceFailed(
+        paths,
+        destination,
+        workspace.operationId!,
+        error instanceof Error ? error.message : String(error),
+      );
+      throw error;
+    }
+  }
+
+  const result = { status: "warmed", requested: count, available: available + created.length, created };
+  if (options.json) io.stdout.write(jsonLine(result));
+  else io.stdout.write(`Available workspaces: ${result.available} (${created.length} created)\n`);
+  return result;
+}
+
+function splitExecArguments(args: readonly string[]): { acquireArgs: string[]; command: string[] } {
+  const separator = args.indexOf("--");
+  if (separator >= 0) {
+    return { acquireArgs: args.slice(0, separator), command: args.slice(separator + 1) };
+  }
+  if (!args[0]) return { acquireArgs: [], command: [] };
+  const acquireArgs = [args[0]];
+  let index = 1;
+  while (index < args.length) {
+    const argument = args[index]!;
+    if (["--fetch"].includes(argument)) {
+      acquireArgs.push(argument);
+      index += 1;
+      continue;
+    }
+    if (["--from", "--ttl", "--owner", "--port"].includes(argument)) {
+      if (!args[index + 1]) throw new Error(`${argument} requires a value`);
+      acquireArgs.push(argument, args[index + 1]!);
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return { acquireArgs, command: args.slice(index) };
+}
+
+function retainedAssignment(io: CliIo, result: Awaited<ReturnType<typeof acquire>>, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  io.stderr.write(
+    `Workspace retained: ${result.path}\nAssignment: ${result.assignmentId}\nExpires: ${result.expiresAt}\nReason: ${message}\nRelease: ruk release ${result.assignmentId}\n`,
+  );
+}
+
+async function executeAssigned(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
+  const { acquireArgs, command } = splitExecArguments(args);
+  if (acquireArgs.length === 0) throw new Error("exec requires a branch");
+  if (command.length === 0) throw new Error("exec requires a command");
+  const assigned = await acquire(acquireArgs, cwd, io, false);
+  io.stderr.write(`Assigned ${assigned.path} (${assigned.assignmentId})\n`);
+  const code = await execute(["--", ...command], assigned.path, io);
+  const { repository } = await repositoryContext(cwd);
+  try {
+    await releaseAssignment(repository, assigned.assignmentId, false);
+    io.stderr.write(`Released ${assigned.path}\n`);
+    return code;
+  } catch (error) {
+    retainedAssignment(io, assigned, error);
+    return code === 0 ? 1 : code;
+  }
+}
+
+async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
+  const { options, positional } = parseOptions(args, {
+    values: ["--from", "--ttl", "--owner", "--port"],
+    flags: ["--fetch"],
+  });
+  requirePositionals(positional, 1, "shell requires exactly one branch name");
+  const acquireArgs = [positional[0]!];
+  if (options.from) acquireArgs.push("--from", options.from);
+  if (options.ttl) acquireArgs.push("--ttl", options.ttl);
+  if (options.owner) acquireArgs.push("--owner", options.owner);
+  if (options.fetch) acquireArgs.push("--fetch");
+  for (const name of options.ports ?? []) acquireArgs.push("--port", name);
+  const assigned = await acquire(acquireArgs, cwd, io, false);
+  const executable = process.env["RUK_SHELL"] ?? process.env["SHELL"] ??
+    (process.platform === "win32" ? process.env["COMSPEC"] ?? "cmd.exe" : "/bin/sh");
+  io.stderr.write(`Shell workspace: ${assigned.path}\nAssignment: ${assigned.assignmentId}\n`);
+  const code = await execute(["--", executable], assigned.path, io);
+  const { repository } = await repositoryContext(cwd);
+  try {
+    await releaseAssignment(repository, assigned.assignmentId, false);
+    io.stderr.write(`Released ${assigned.path}\n`);
+    return code;
+  } catch (error) {
+    retainedAssignment(io, assigned, error);
+    return code === 0 ? 1 : code;
+  }
+}
+
+async function stats(args: readonly string[], cwd: string, io: CliIo) {
+  const { options, positional } = parseOptions(args, { flags: ["--disk", "--json"] });
+  requirePositionals(positional, 0, "stats does not accept positional arguments");
+  const { repository } = await repositoryContext(cwd);
+  const state = await readState(storePaths(repository.commonDir));
+  const result = {
+    ...usageStatistics(state),
+    ...(options.disk ? { disk: await diskStatistics(state) } : {}),
+  };
+  if (options.json) io.stdout.write(jsonLine(result));
+  else {
+    io.stdout.write(`Acquisitions:       ${result.acquisitions}\n`);
+    io.stdout.write(`Workspace reuses:   ${result.workspaceReuses}\n`);
+    io.stdout.write(`Preparations:       ${result.preparations}\n`);
+    io.stdout.write(`Preparation skips:  ${result.preparationSkips}\n`);
+    io.stdout.write(`Preparation failures: ${result.preparationFailures}\n`);
+    io.stdout.write(`Average prepare ms: ${result.averagePreparationMs}\n`);
+    if ("disk" in result) io.stdout.write(`Estimated bytes avoided: ${result.disk.estimatedBytesAvoided}\n`);
+  }
+  return result;
 }
 
 export interface MainOptions {
@@ -715,13 +913,26 @@ export async function main(argv: readonly string[], options: MainOptions = {}): 
     await release(args, cwd, io);
     return 0;
   }
-  if (command === "run" || command === "exec") return execute(args, cwd, io);
+  if (command === "run") return execute(args, cwd, io);
+  if (command === "exec") {
+    if (args[0] === "--") return execute(args, cwd, io);
+    return executeAssigned(args, cwd, io);
+  }
+  if (command === "warm") {
+    await warm(args, cwd, io);
+    return 0;
+  }
+  if (command === "shell") return shell(args, cwd, io);
   if (command === "list") {
     await list(args, cwd, io);
     return 0;
   }
   if (command === "status") {
     await status(args, cwd, io);
+    return 0;
+  }
+  if (command === "stats") {
+    await stats(args, cwd, io);
     return 0;
   }
   if (command === "remove") {

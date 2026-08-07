@@ -21,6 +21,16 @@ acquire -> work at returned path -> renew when needed -> release exact ID
 6. Renew before `expiresAt` when work continues.
 7. Commit or export intended work, then release the exact assignment ID.
 
+For a short command that leaves a clean tree, the composed form performs the
+same lifecycle:
+
+```sh
+ruk exec agent/check --owner agent-17 -- bun test
+```
+
+If safe release fails, `exec` retains the assignment and prints the path, ID,
+expiry, and recovery command.
+
 ## Example orchestration
 
 ```sh
@@ -41,8 +51,9 @@ run(cwd=workspace, command=["ruk", "release", fence, "--json"])
 ## Output rules
 
 With `--json`, a successful command writes one JSON value and a trailing newline
-to stdout. Progress, installer output, and diagnostics go to stderr. A failure
-exits nonzero and does not emit a success record.
+to stdout. Progress and installer output go to stderr. A failure exits nonzero,
+writes a JSON error with stable `code` and `retryable` fields to stderr, and
+does not emit a success record.
 
 Consumers must ignore unknown object fields. Within a major release, documented
 fields keep their names, types, and meanings.
@@ -52,6 +63,13 @@ fields keep their names, types, and meanings.
 Only processes launched through `ruk run` are recorded. Ruk does not discover
 commands started directly in another terminal or arbitrary daemons. The agent
 runner remains responsible for those processes.
+
+## Named ports
+
+Repeated `--port <name>` options reserve ports among active Ruk assignments.
+The acquire response contains the mapping, and `ruk run` injects normalized
+variables such as `RUK_PORT_APP`. Ruk does not hold sockets or exclude
+unrelated host processes.
 
 ## Failure handling
 

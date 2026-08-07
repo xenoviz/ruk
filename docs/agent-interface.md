@@ -2,8 +2,8 @@
 
 Use `--json` for automation. On success, Ruk writes exactly one JSON value and
 a trailing newline to stdout. Progress, dependency-installer output, and
-diagnostics go to stderr. A failure exits nonzero and does not emit a success
-record.
+diagnostics go to stderr. A failure exits nonzero, writes one JSON error to
+stderr, and does not emit a success record.
 
 Paths are absolute. Timestamps use ISO 8601 UTC strings. Within a major
 release, documented fields keep their names, types, and meanings. Ruk may add
@@ -12,7 +12,7 @@ object fields; consumers must ignore unknown fields.
 ## Acquire
 
 ```text
-ruk acquire <branch> [--from <ref>] [--ttl <minutes>] [--owner <id>] [--json]
+ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] [--json]
 ```
 
 The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
@@ -27,13 +27,20 @@ The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
   "expiresAt": "2026-08-04T05:00:00.000Z",
   "reused": false,
   "fingerprint": "sha256 dependency fingerprint",
-  "mode": "bun-global-store"
+  "mode": "bun-global-store",
+  "ports": {
+    "app": 43127
+  }
 }
 ```
 
 `assignmentId` is an immutable fencing token. Store it and use it for renew
 and release. `reused` reports whether Ruk assigned an available managed
 workspace instead of creating one.
+
+`--fetch` explicitly refreshes the remote selected by `--from`. Named ports are
+unique among active Ruk assignments and are injected into assigned commands as
+normalized variables such as `RUK_PORT_APP`.
 
 ## Renew
 
@@ -118,3 +125,28 @@ output. Expired assigned or returning workspaces are only reported unless both
 and `expiresAt`; assignment fields are null when no assignment is active.
 `ruk run -- ...` records the child process only when invoked inside an assigned
 managed workspace. Use the returned acquire path as the working directory.
+
+`ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
+retains the assignment when the command leaves a dirty tree or cleanup fails.
+`ruk warm --count <n> --json` ensures that the pool has the requested number of
+available prepared workspaces.
+
+`ruk stats --json` returns aggregate acquisition, reuse, preparation, failure,
+and timing counters. `--disk` adds an on-demand scan; `estimatedBytesAvoided`
+is explicitly approximate.
+
+## Failure record
+
+```json
+{
+  "status": "error",
+  "code": "WORKSPACE_DIRTY",
+  "message": "Workspace has uncommitted changes.",
+  "retryable": false
+}
+```
+
+Stable categories include `INVALID_ARGUMENT`, `ASSIGNMENT_CONFLICT`,
+`WORKSPACE_DIRTY`, `PORT_UNAVAILABLE`, `RESOURCE_BUSY`,
+`DEPENDENCY_PREPARATION_FAILED`, `GIT_OPERATION_FAILED`, and
+`OPERATION_FAILED`. Consumers must still ignore unknown fields and categories.

@@ -55,6 +55,8 @@ Ruk has five deliberately separate concerns:
 4. `state.js` records preparation metadata under the common Git directory.
 5. `update.js` owns release discovery, installer delegation, integrity checks,
    and executable replacement.
+6. `ports.js` performs short-lived OS port probes and environment-name mapping.
+7. `statistics.js` derives aggregate and optional on-demand disk measurements.
 
 `cli.js` composes these modules. Business rules should remain in the closest
 module instead of accumulating in the CLI.
@@ -72,12 +74,20 @@ module instead of accumulating in the CLI.
 - The current workspace cannot remove itself.
 - Machine-readable output contains one JSON value on stdout; diagnostics go to
   stderr.
+- Named ports are unique among active recorded assignments. They are
+  cooperative reservations, not held sockets.
+- Metrics are bounded counters; ordinary commands never append an event log or
+  scan workspace disk usage.
 
 ## State
 
-State is stored in `<git-common-dir>/ruk/state.json`, so linked worktrees share
+Version 3 state is stored in `<git-common-dir>/ruk/state.json`, so linked worktrees share
 metadata without committing it. Per-workspace preparation locks and the state
 lock live beside it.
+
+Loading migrates version 1 preparation records and version 2 lifecycle records
+in memory. Existing assignment IDs, ownership, expiry, and process records stay
+intact; new port maps and aggregate metrics receive empty defaults.
 
 State is an optimization, not source of truth. Git and the dependency
 fingerprint remain authoritative. Invalid state fails visibly rather than being
@@ -99,6 +109,12 @@ return a workspace that has since been reassigned. Leases expire for reporting;
 reclaiming expired assignments requires an explicit forced GC operation.
 Process cleanup is limited to children recorded through `ruk run` for the
 assignment.
+
+Warm workspaces enter `available` directly after detached creation and
+dependency preparation. Assigned `exec` and `shell` operations reuse the same
+transitions and preserve ownership whenever normal release is unsafe. Explicit
+`--fetch` is the only workspace operation in this layer that contacts a Git
+remote.
 
 See [the lifecycle design](./plans/2026-08-03-workspace-lifecycle-design.md)
 for transitions, fencing, GC boundaries, and non-goals.

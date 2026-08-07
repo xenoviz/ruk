@@ -14,12 +14,17 @@ strings. Consumers must ignore unknown object fields.
   "expiresAt": "2026-08-04T05:00:00.000Z",
   "reused": false,
   "fingerprint": "sha256 dependency fingerprint",
-  "mode": "bun-global-store"
+  "mode": "bun-global-store",
+  "ports": {
+    "app": 43127
+  }
 }
 ```
 
 `mode` reports the preparation backend. Current values include
 `managed-install`, `bun-global-store`, and `pnpm-global-store`.
+Named ports are also injected into assigned processes as variables such as
+`RUK_PORT_APP`.
 
 ## Renew
 
@@ -78,5 +83,17 @@ is active.
 
 ## Failure behavior
 
-A failed command exits nonzero and does not emit a success record. Read stderr
-for the diagnostic; do not treat partial output as JSON success.
+A failed JSON command exits nonzero, emits no success record on stdout, and
+writes one error record to stderr:
+
+```json
+{
+  "status": "error",
+  "code": "WORKSPACE_DIRTY",
+  "message": "Workspace has uncommitted changes.",
+  "retryable": false
+}
+```
+
+Use `code` for decisions and `message` for operators. Unknown codes must be
+treated as `OPERATION_FAILED`.

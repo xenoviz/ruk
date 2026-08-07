@@ -41,7 +41,7 @@ test("state rejects corrupted and unsupported data", async (t) => {
   await assert.rejects(readState(paths), /Unsupported or invalid Ruk state/);
 });
 
-test("state safely migrates v1 preparation records to v2", async (t) => {
+test("state safely migrates v1 preparation records to v3", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-state-migrate-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const paths = storePaths(root);
@@ -59,11 +59,12 @@ test("state safely migrates v1 preparation records to v2", async (t) => {
   await fs.writeFile(paths.state, JSON.stringify({ version: 1, trees: { [key]: tree } }));
 
   const migrated = await readState(paths);
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.deepEqual(migrated.trees[key], tree);
   assert.deepEqual(migrated.workspaces, {});
+  assert.equal(migrated.metrics.acquisitions, 0);
 
   await setTreeState(paths, workspace, { ...tree, fingerprint: "updated" });
   const persisted = JSON.parse(await fs.readFile(paths.state, "utf8")) as { version: number };
-  assert.equal(persisted.version, 2);
+  assert.equal(persisted.version, 3);
 });

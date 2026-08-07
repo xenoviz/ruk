@@ -6,6 +6,7 @@ import test from "node:test";
 import { assertSharedBackendSupported, ensureDependencies } from "../src/dependencies.js";
 import { getRepository } from "../src/git.js";
 import { run } from "../src/process.js";
+import { readState, storePaths } from "../src/state.js";
 import type { PackageManager } from "../src/types.js";
 
 interface DependencyFixture {
@@ -87,6 +88,11 @@ test("each worktree gets a local projection while unchanged trees skip reinstall
   const noOp = await ensureDependencies({ repository: agentRepository, manager: fixture.manager });
   assert.equal(noOp.alreadyAttached, true);
   assert.equal(await fs.readFile(fixture.counter, "utf8"), "3");
+  const metrics = (await readState(storePaths(mainRepository.commonDir))).metrics;
+  assert.equal(metrics.preparations, 3);
+  assert.equal(metrics.preparationSkips, 1);
+  assert.equal(metrics.preparationFailures, 0);
+  assert.ok(metrics.totalPreparationMs > 0);
 });
 
 test("pnpm uses its global virtual store for each local projection", async (t) => {
@@ -156,6 +162,8 @@ test("pnpm rejects an explicitly disabled global virtual store", async (t) => {
     ensureDependencies({ repository, manager: fixture.manager }),
     /requires the global virtual store/,
   );
+  const repositoryState = await readState(storePaths(repository.commonDir));
+  assert.equal(repositoryState.metrics.preparationFailures, 1);
 });
 
 test("shared backends reject package-manager versions without the feature", () => {

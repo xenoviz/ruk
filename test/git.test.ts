@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addWorktree, assignWorktree, currentBranch, returnWorktree } from "../src/git.js";
+import { addWorktree, assignWorktree, currentBranch, fetchRemote, returnWorktree } from "../src/git.js";
 import { run } from "../src/process.js";
 
 test("pooled worktree assignment and return preserve branch safety", async (t) => {
@@ -31,4 +31,30 @@ test("pooled worktree assignment and return preserve branch safety", async (t) =
   assert.equal(await currentBranch(workspace), "(detached)");
   assert.equal((await fs.readFile(path.join(workspace, "tracked.txt"), "utf8")).trim(), "clean");
   await assert.rejects(fs.access(path.join(workspace, "ignored-secret.txt")));
+});
+
+test("fetch is explicit and updates the selected remote", async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-git-fetch-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const remote = path.join(parent, "remote.git");
+  const source = path.join(parent, "source");
+  const clone = path.join(parent, "clone");
+  await run("git", ["init", "--bare", "-q", remote]);
+  await run("git", ["init", "-q", "-b", "main", source]);
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: source });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: source });
+  await fs.writeFile(path.join(source, "tracked.txt"), "one\n");
+  await run("git", ["add", "."], { cwd: source });
+  await run("git", ["commit", "-qm", "one"], { cwd: source });
+  await run("git", ["remote", "add", "origin", remote], { cwd: source });
+  await run("git", ["push", "-qu", "origin", "main"], { cwd: source });
+  await run("git", ["clone", "-q", "-b", "main", remote, clone]);
+  await fs.writeFile(path.join(source, "tracked.txt"), "two\n");
+  await run("git", ["commit", "-qam", "two"], { cwd: source });
+  await run("git", ["push", "-q"], { cwd: source });
+
+  const before = (await run("git", ["rev-parse", "origin/main"], { cwd: clone })).stdout;
+  await fetchRemote(clone, "origin/main");
+  const after = (await run("git", ["rev-parse", "origin/main"], { cwd: clone })).stdout;
+  assert.notEqual(after, before);
 });

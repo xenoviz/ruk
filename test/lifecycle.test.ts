@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   addAssignmentProcess,
+  allocateAssignmentPorts,
   beginWorkspaceCollection,
   beginWorkspaceReturn,
   cancelWorkspaceCollection,
@@ -14,6 +15,7 @@ import {
   finishWorkspaceReturn,
   identifyGcCandidates,
   markWorkspaceAssigned,
+  markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
   removeAssignmentProcess,
@@ -150,6 +152,35 @@ test("only one concurrent caller reserves an available workspace", async (t) => 
   );
   assert.equal(results.filter(Boolean).length, 1);
   assert.equal((await findAssignments(paths, { now: T2 })).length, 1);
+});
+
+test("warm workspaces become available and named ports remain unique", async (t) => {
+  const { root, paths } = await fixture(t);
+  const warm = await prepare(paths, path.join(root, "warm"));
+  const available = await markWorkspaceAvailable(paths, warm.path, warm.operationId!, T1);
+  assert.equal(available.lifecycle, "available");
+
+  const first = await reserveAvailableWorkspace(paths, {
+    owner: "one",
+    hostname: "host",
+    expiresAt: T3,
+    now: T2,
+  });
+  const second = await assign(paths, path.join(root, "second"), T1, T3);
+  const allocator = async (excluded: ReadonlySet<number>) => excluded.has(4100) ? 4101 : 4100;
+  const [firstPorts, secondPorts] = await Promise.all([
+    allocateAssignmentPorts(paths, first!.assignment!.id, ["app"], allocator),
+    allocateAssignmentPorts(paths, second.assignment!.id, ["debug"], allocator),
+  ]);
+  assert.notEqual(firstPorts.assignment!.ports["app"], secondPorts.assignment!.ports["debug"]);
+  await assert.rejects(
+    allocateAssignmentPorts(paths, first!.assignment!.id, ["web-app", "web_app"], allocator),
+    /unique after normalization/,
+  );
+
+  const state = await readState(paths);
+  assert.equal(state.metrics.acquisitions, 2);
+  assert.equal(state.metrics.workspaceReuses, 1);
 });
 
 test("GC selects stale safe records and reports expired assignments without reclaiming them", async (t) => {

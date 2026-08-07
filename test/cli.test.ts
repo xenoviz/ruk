@@ -10,7 +10,7 @@ import { readState, storePaths, treeKey } from "../src/state.js";
 
 const cli = fileURLToPath(new URL("../bin/ruk.js", import.meta.url));
 
-test("CLI creates, leases, reuses, and collects worktrees", { timeout: 60_000 }, async (t) => {
+test("CLI creates, leases, reuses, and collects worktrees", { timeout: 120_000 }, async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-"));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const root = path.join(parent, "repo");
@@ -46,6 +46,9 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   await run("git", ["add", "."], { cwd: root });
   await run("git", ["commit", "-qm", "fixture"], { cwd: root });
 
+  const unprepared = JSON.parse((await run(process.execPath, [cli, "status", "--json"], { cwd: root })).stdout);
+  assert.equal(unprepared.reason, "not-prepared");
+  assert.equal(unprepared.recovery, "ruk sync");
   await run(process.execPath, [cli, "init"], { cwd: root });
   await run(process.execPath, [cli, "create", "agent/cli", "--path", tree], { cwd: root });
   assert.equal(await fs.readFile(counter, "utf8"), "2");
@@ -81,14 +84,45 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(record.status, "prepared");
   await run(process.execPath, [cli, "remove", jsonTree, "--force"], { cwd: root });
 
+  const warmed = JSON.parse((await run(
+    process.execPath,
+    [cli, "warm", "--count", "1", "--json"],
+    { cwd: root },
+  )).stdout);
+  assert.equal(warmed.status, "warmed");
+  assert.equal(warmed.created.length, 1);
+
   const acquired = JSON.parse((await run(
     process.execPath,
-    [cli, "acquire", "agent/lease-one", "--owner", "test-agent", "--ttl", "10", "--json"],
+    [
+      cli,
+      "acquire",
+      "agent/lease-one",
+      "--owner",
+      "test-agent",
+      "--ttl",
+      "10",
+      "--port",
+      "app",
+      "--port",
+      "debug-server",
+      "--json",
+    ],
     { cwd: root },
   )).stdout);
   assert.equal(acquired.status, "assigned");
-  assert.equal(acquired.reused, false);
+  assert.equal(acquired.reused, true);
   assert.equal(acquired.owner, undefined);
+  assert.ok(Number.isInteger(acquired.ports.app));
+  assert.ok(Number.isInteger(acquired.ports["debug-server"]));
+  assert.notEqual(acquired.ports.app, acquired.ports["debug-server"]);
+
+  const portOutput = await run(
+    process.execPath,
+    [cli, "run", "--", process.execPath, "-e", "process.stdout.write(process.env.RUK_PORT_APP || '')"],
+    { cwd: acquired.path },
+  );
+  assert.match(portOutput.stdout, new RegExp(String(acquired.ports.app)));
 
   const managedRemove = await run(process.execPath, [cli, "remove", acquired.path, "--force"], {
     cwd: root,
@@ -141,6 +175,29 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(staleRelease.code, 1);
   assert.match(staleRelease.stderr, /does not exist/);
   await run(process.execPath, [cli, "release", reused.assignmentId, "--json"], { cwd: root });
+
+  const short = await run(
+    process.execPath,
+    [cli, "exec", "agent/short", process.execPath, "-e", "process.stdout.write('assigned-command')"],
+    { cwd: root },
+  );
+  assert.match(short.stdout, /assigned-command/);
+  assert.match(short.stderr, /Released/);
+
+  const shellResult = await run(process.execPath, [cli, "shell", "agent/shell"], {
+    cwd: root,
+    env: { ...process.env, RUK_SHELL: process.execPath },
+  });
+  assert.match(shellResult.stderr, /Released/);
+
+  const statistics = JSON.parse((await run(process.execPath, [cli, "stats", "--disk", "--json"], {
+    cwd: root,
+  })).stdout);
+  assert.ok(statistics.acquisitions >= 4);
+  assert.ok(statistics.workspaceReuses >= 3);
+  assert.ok(statistics.preparationSkips >= 1);
+  assert.ok(statistics.disk.projectionBytes >= 0);
+  assert.ok(statistics.disk.estimatedBytesAvoided >= 0);
 
   const planned = JSON.parse((await run(
     process.execPath,
@@ -198,6 +255,15 @@ test("CLI exposes stable help, version, JSON, and argument errors", async (t) =>
   });
   assert.equal(removedViaOption.code, 1);
   assert.match(removedViaOption.stderr, /Unknown option --via/);
+
+  const jsonError = await run(process.execPath, [cli, "status", "--unknown", "--json"], {
+    cwd: parent,
+    allowFailure: true,
+  });
+  const failure = JSON.parse(jsonError.stderr);
+  assert.equal(failure.status, "error");
+  assert.equal(failure.code, "INVALID_ARGUMENT");
+  assert.equal(failure.retryable, false);
 });
 
 async function waitFor(check: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {

@@ -8,6 +8,7 @@ import type {
   StorePaths,
   TrackedProcessRecord,
   TreeRecord,
+  UsageMetrics,
   WorkspaceRecord,
 } from "./types.js";
 import { isErrnoException, isRecord } from "./types.js";
@@ -28,6 +29,18 @@ export function treeLockPath(paths: StorePaths, treePath: string): string {
 
 export function treeKey(treePath: string): string {
   return crypto.createHash("sha256").update(path.resolve(treePath)).digest("hex").slice(0, 20);
+}
+
+export function emptyMetrics(): UsageMetrics {
+  return {
+    acquisitions: 0,
+    workspaceReuses: 0,
+    preparations: 0,
+    preparationSkips: 0,
+    preparationFailures: 0,
+    totalPreparationMs: 0,
+    lastPreparationMs: null,
+  };
 }
 
 function isTreeRecord(value: unknown): value is TreeRecord {
@@ -68,7 +81,28 @@ function isAssignmentRecord(value: unknown): value is AssignmentRecord {
     isTimestamp(value["renewedAt"]) &&
     isTimestamp(value["expiresAt"]) &&
     Date.parse(value["assignedAt"]) <= Date.parse(value["renewedAt"]) &&
-    Date.parse(value["renewedAt"]) < Date.parse(value["expiresAt"])
+    Date.parse(value["renewedAt"]) < Date.parse(value["expiresAt"]) &&
+    isRecord(value["ports"]) &&
+    Object.entries(value["ports"]).every(
+      ([name, port]) => name.length > 0 && Number.isSafeInteger(port) && (port as number) >= 1 && (port as number) <= 65_535,
+    )
+  );
+}
+
+function isUsageMetrics(value: unknown): value is UsageMetrics {
+  if (!isRecord(value)) return false;
+  const counters = [
+    "acquisitions",
+    "workspaceReuses",
+    "preparations",
+    "preparationSkips",
+    "preparationFailures",
+    "totalPreparationMs",
+  ];
+  return (
+    counters.every((name) => Number.isSafeInteger(value[name]) && (value[name] as number) >= 0) &&
+    (value["lastPreparationMs"] === null ||
+      (Number.isSafeInteger(value["lastPreparationMs"]) && (value["lastPreparationMs"] as number) >= 0))
   );
 }
 
@@ -140,12 +174,21 @@ function parseState(value: unknown, file: string): RukState {
     throw new Error(`Unsupported or invalid Ruk state in ${file}`);
   }
   if (value["version"] === 1) {
-    return { version: 2, trees: trees as Record<string, TreeRecord>, workspaces: {} };
+    return { version: 3, trees: trees as Record<string, TreeRecord>, workspaces: {}, metrics: emptyMetrics() };
   }
-  if (value["version"] !== 2 || !isRecord(value["workspaces"])) {
+  if ((value["version"] !== 2 && value["version"] !== 3) || !isRecord(value["workspaces"])) {
     throw new Error(`Unsupported or invalid Ruk state in ${file}`);
   }
-  const workspaces = value["workspaces"];
+  const workspaces = Object.fromEntries(
+    Object.entries(value["workspaces"]).map(([key, workspace]) => {
+      if (value["version"] !== 2 || !isRecord(workspace) || !isRecord(workspace["assignment"])) {
+        return [key, workspace];
+      }
+      return [key, { ...workspace, assignment: { ...workspace["assignment"], ports: {} } }];
+    }),
+  );
+  const metrics = value["version"] === 2 ? emptyMetrics() : value["metrics"];
+  if (!isUsageMetrics(metrics)) throw new Error(`Unsupported or invalid Ruk state in ${file}`);
   if (
     !Object.entries(workspaces).every(
       ([key, workspace]) => isWorkspaceRecord(workspace) && key === treeKey(workspace.path),
@@ -165,10 +208,17 @@ function parseState(value: unknown, file: string): RukState {
   if (new Set(operationIds).size !== operationIds.length) {
     throw new Error(`Unsupported or invalid Ruk state in ${file}`);
   }
+  const ports = Object.values(workspaces)
+    .filter(isWorkspaceRecord)
+    .flatMap((workspace) => Object.values(workspace.assignment?.ports ?? {}));
+  if (new Set(ports).size !== ports.length) {
+    throw new Error(`Unsupported or invalid Ruk state in ${file}`);
+  }
   return {
-    version: 2,
+    version: 3,
     trees: trees as Record<string, TreeRecord>,
     workspaces: workspaces as Record<string, WorkspaceRecord>,
+    metrics,
   };
 }
 
@@ -177,13 +227,32 @@ export async function readState(paths: StorePaths): Promise<RukState> {
     return parseState(JSON.parse(await fs.readFile(paths.state, "utf8")) as unknown, paths.state);
   } catch (error) {
     if (isErrnoException(error) && error.code === "ENOENT") {
-      return { version: 2, trees: {}, workspaces: {} };
+      return { version: 3, trees: {}, workspaces: {}, metrics: emptyMetrics() };
     }
     if (error instanceof SyntaxError) {
       throw new Error(`Cannot parse Ruk state in ${paths.state}: ${error.message}`);
     }
     throw error;
   }
+}
+
+export async function recordPreparationMetric(
+  paths: StorePaths,
+  outcome: "prepared" | "skipped" | "failed",
+  durationMs: number,
+): Promise<void> {
+  const elapsed = Math.max(0, Math.round(durationMs));
+  await updateState(paths, (state) => {
+    state.metrics.lastPreparationMs = elapsed;
+    if (outcome === "prepared") {
+      state.metrics.preparations += 1;
+      state.metrics.totalPreparationMs += elapsed;
+    } else if (outcome === "skipped") {
+      state.metrics.preparationSkips += 1;
+    } else {
+      state.metrics.preparationFailures += 1;
+    }
+  });
 }
 
 export async function updateState<T>(

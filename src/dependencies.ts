@@ -4,7 +4,7 @@ import { currentBranch } from "./git.js";
 import { dependencyFingerprint } from "./fingerprint.js";
 import { withDirectoryLock } from "./lock.js";
 import { run } from "./process.js";
-import { readState, setTreeState, storePaths, treeKey, treeLockPath } from "./state.js";
+import { readState, recordPreparationMetric, setTreeState, storePaths, treeKey, treeLockPath } from "./state.js";
 import type { DependencyReporter, PackageManager, Repository } from "./types.js";
 
 async function exists(file: string): Promise<boolean> {
@@ -176,7 +176,19 @@ async function ensureDependenciesUnlocked({
 
 export async function ensureDependencies(value: EnsureDependenciesInput): Promise<EnsureDependenciesResult> {
   const paths = storePaths(value.repository.commonDir);
-  return withDirectoryLock(treeLockPath(paths, value.repository.root), () =>
-    ensureDependenciesUnlocked(value),
-  );
+  const startedAt = Date.now();
+  try {
+    const result = await withDirectoryLock(treeLockPath(paths, value.repository.root), () =>
+      ensureDependenciesUnlocked(value),
+    );
+    await recordPreparationMetric(paths, result.alreadyAttached ? "skipped" : "prepared", Date.now() - startedAt);
+    return result;
+  } catch (error) {
+    try {
+      await recordPreparationMetric(paths, "failed", Date.now() - startedAt);
+    } catch {
+      // Preserve the dependency failure; metrics must not hide it.
+    }
+    throw error;
+  }
 }
