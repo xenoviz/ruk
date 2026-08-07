@@ -767,15 +767,16 @@ async function execute(
       allowFailure: true,
       detached,
       onSpawn: async (pid) => {
-        const startedAt = await requireProcessIdentity(pid);
+        const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
+        const startedAt = session?.sessionStartedAt ?? await requireProcessIdentity(pid);
         if (!startedAt) {
           registered();
           return;
         }
         const record: TrackedProcessRecord = {
-          pid,
+          pid: session?.sessionId ?? pid,
           ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
-          ...(sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : {}),
+          ...session,
           command: [...command],
           startedAt,
         };
