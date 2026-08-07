@@ -959,7 +959,8 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
   const sessionMarker = process.platform === "win32"
     ? undefined
     : path.join((await repositoryContext(assigned.path)).repository.commonDir, "ruk", `shell-${crypto.randomUUID()}`);
-  const wrapper = 'sid=$(ps -o sid= -p $$); started=$(ps -o lstart= -p "$sid"); printf "%s\\n%s\\n" "$sid" "$started" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"';
+  const sessionField = process.platform === "darwin" ? "sess" : "sid";
+  const wrapper = `sid=$(ps -o ${sessionField}= -p $$); started=$(ps -o lstart= -p "$sid"); printf "%s\\n%s\\n" "$sid" "$started" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`;
   const command = process.platform === "win32"
     ? [executable]
     : process.platform === "darwin"

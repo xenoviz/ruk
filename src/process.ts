@@ -253,7 +253,8 @@ interface PosixProcess {
 }
 
 async function posixProcesses(): Promise<PosixProcess[]> {
-  const result = await run("ps", ["-eo", "pid=,sid=,stat="], { allowFailure: true });
+  const sessionField = process.platform === "darwin" ? "sess" : "sid";
+  const result = await run("ps", ["-eo", `pid=,${sessionField}=,stat=`], { allowFailure: true });
   if (result.code !== 0) return [];
   return result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
     .filter((entry) => entry.length === 3 && entry.slice(0, 2).map(Number).every(Number.isSafeInteger))
