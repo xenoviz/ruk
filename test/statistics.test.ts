@@ -52,6 +52,17 @@ test("statistics aggregate counters and estimate repeated linked content", async
   const usage = usageStatistics(state);
   assert.equal(usage.reuseRate, 0.75);
   assert.equal(usage.averagePreparationMs, 15);
+  state.workspaces[treeKey(workspace)]!.lifecycle = "returning";
+  state.workspaces[treeKey(workspace)]!.assignment = {
+    id: "00000000-0000-4000-8000-000000000000",
+    owner: "agent",
+    hostname: "host",
+    assignedAt: now,
+    renewedAt: now,
+    expiresAt: new Date(1).toISOString(),
+    ports: {},
+  };
+  assert.equal(usageStatistics(state).activeAssignments, 1);
   const disk = await diskStatistics(state);
   assert.equal(disk.linkedTargetBytes, 5);
   assert.equal(disk.estimatedBytesAvoided, 5);

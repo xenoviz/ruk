@@ -38,7 +38,9 @@ The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
 and release. `reused` reports whether Ruk assigned an available managed
 workspace instead of creating one.
 
-`--fetch` explicitly refreshes the remote selected by `--from`. Named ports are
+`--fetch` explicitly refreshes the remote selected by `--from`; without
+`--from`, Ruk resolves the primary remote's advertised default branch. Named
+ports are
 unique among active Ruk assignments and are injected into assigned commands as
 normalized variables such as `RUK_PORT_APP`.
 
@@ -129,14 +131,16 @@ and `expiresAt`; assignment fields are null when no assignment is active.
 Status reports `projection-changed` with a `ruk sync` recovery when recorded
 projection contents or linked package targets no longer match their fingerprint.
 `ruk run -- ...` validates dependency inputs and projection integrity, then
-records the child process only when invoked inside an assigned managed
-workspace. Use the returned acquire path as the working directory.
+rechecks the assignment fence and records the child process only when invoked
+inside an assigned managed workspace. Use the returned acquire path as the
+working directory.
 
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
 retains the assignment when the command leaves a dirty tree, cleanup fails, or
 the launched process cannot be identified while descendants remain.
 `ruk warm --count <n> --json` counts only integrity-valid projections and
 ensures that the pool has the requested number of available prepared workspaces.
+Statistics count both assigned and returning workspaces as active assignments.
 
 `ruk stats --json` returns aggregate acquisition, reuse, preparation, failure,
 and timing counters. `--disk` adds an on-demand scan; `estimatedBytesAvoided`

@@ -202,6 +202,21 @@ test("named port reservations preserve prototype-like names", async (t) => {
   assert.equal(persisted.assignment!.ports["__proto__"], 4100);
 });
 
+test("corrupt assignment state cannot release a host port reservation", async (t) => {
+  const { root, paths } = await fixture(t);
+  const assigned = await assign(paths, path.join(root, "workspace"));
+  await allocateAssignmentPorts(paths, assigned.assignment!.id, ["app"], async () => 4199);
+  const validState = await fs.readFile(paths.state, "utf8");
+  await fs.writeFile(paths.state, "{");
+  await assert.rejects(
+    allocateAssignmentPorts(paths, assigned.assignment!.id, ["debug"], async () => 4200),
+    SyntaxError,
+  );
+  await fs.writeFile(paths.state, validState);
+  await beginWorkspaceReturn(paths, assigned.assignment!.id);
+  await finishWorkspaceReturn(paths, assigned.assignment!.id);
+});
+
 test("named ports remain unique across repositories", async (t) => {
   const { root, paths } = await fixture(t);
   const otherPaths = storePaths(path.join(root, "other-repository"));

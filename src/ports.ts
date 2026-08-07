@@ -24,7 +24,9 @@ function isReservation(value: unknown): value is HostPortReservation {
 async function reservationIsActive(port: number, reservation: HostPortReservation): Promise<boolean> {
   try {
     const state: unknown = JSON.parse(await fs.readFile(reservation.statePath, "utf8"));
-    if (!isRecord(state) || !isRecord(state["workspaces"])) return false;
+    if (!isRecord(state) || !isRecord(state["workspaces"])) {
+      throw new Error(`Invalid Ruk state in ${reservation.statePath}`);
+    }
     return Object.values(state["workspaces"]).some((workspace) => {
       if (!isRecord(workspace) || !isRecord(workspace["assignment"])) return false;
       const assignment = workspace["assignment"];
@@ -32,7 +34,7 @@ async function reservationIsActive(port: number, reservation: HostPortReservatio
         Object.values(assignment["ports"]).includes(port);
     });
   } catch (error) {
-    if ((isErrnoException(error) && error.code === "ENOENT") || error instanceof SyntaxError) return false;
+    if (isErrnoException(error) && error.code === "ENOENT") return false;
     throw error;
   }
 }

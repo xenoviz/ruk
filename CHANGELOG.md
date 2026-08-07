@@ -32,3 +32,5 @@ versioning.
   discarded before reassignment, including mutations behind package links.
 - Keep background POSIX process groups tracked after their leader exits, make
   port-registry cleanup recoverable, and tolerate concurrent disk-stat races.
+- Resolve fetched remote defaults, fence commands at launch, keep shells
+  terminal-attached, and fail closed on corrupt active port reservations.

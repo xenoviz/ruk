@@ -9,7 +9,8 @@ description: Manage Ruk workspaces for coding agents. Use when an agent must acq
 
 1. Run `ruk acquire <branch> --owner <stable-agent-id> --json` from the source
    repository. Add `--from`, `--fetch`, `--ttl`, or named `--port` requests only
-   when needed. Fetch is explicit because it performs network I/O.
+   when needed. Fetch is explicit because it performs network I/O; without
+   `--from`, it uses the primary remote's advertised default branch.
 2. Parse and retain `path`, `assignmentId`, `expiresAt`, and `ports`. Treat the
    assignment ID as opaque; never derive it from the path.
 3. Set the working directory to the returned path. Use `ruk run -- <command>`
@@ -24,8 +25,9 @@ and release automatically. If the command leaves changes or cleanup fails, Ruk
 retains the assignment and prints the exact recovery ID. It also retains the
 assignment when child identity cannot be established while descendants remain;
 surviving POSIX process groups remain tracked even after their leader exits.
+Ruk fences the assignment again immediately before launching a command.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
-an interactive assigned shell; commit intended work before exit so normal
+an interactive, terminal-attached assigned shell; commit intended work before exit so normal
 release can succeed. Release integrity-validates recorded dependency projections:
 unchanged projections stay warm, while modified projections are discarded and
 rebuilt from the package store before the next assigned command. Warm capacity

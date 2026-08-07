@@ -31,6 +31,7 @@ ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [
 
 Assign an available managed workspace or create one. The default TTL is 480
 minutes. `--fetch` refreshes the remote used by `--from` before assignment.
+Without `--from`, it resolves the primary remote's advertised default branch.
 Repeated `--port` options reserve named cooperative host-local ports.
 
 ### `ruk renew <assignment-id>`
@@ -68,7 +69,7 @@ recovery ID.
 
 ### `ruk shell <branch>`
 
-Open an interactive assigned shell. Set `RUK_SHELL` to override the platform
+Open a terminal-attached interactive assigned shell. Set `RUK_SHELL` to override the platform
 default. Ruk releases a clean workspace on shell exit and retains a dirty one.
 
 ### `ruk warm --count <n>`

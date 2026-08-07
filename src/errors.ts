@@ -1,3 +1,5 @@
+import { ProcessIdentityUnavailableError } from "./process.js";
+
 export interface ErrorRecord {
   status: "error";
   code: string;
@@ -23,7 +25,9 @@ export function errorRecord(error: unknown): ErrorRecord {
   const message = error instanceof Error ? error.message : String(error);
   const match = error instanceof DependencyPreparationError
     ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
-    : CATEGORIES.find(([pattern]) => pattern.test(message));
+    : error instanceof ProcessIdentityUnavailableError
+      ? [/.*/, "RESOURCE_BUSY", true] as const
+      : CATEGORIES.find(([pattern]) => pattern.test(message));
   return {
     status: "error",
     code: match?.[1] ?? "OPERATION_FAILED",

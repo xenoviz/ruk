@@ -5,13 +5,14 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { getRepository } from "../src/git.js";
-import { recordPreparingWorkspace } from "../src/lifecycle.js";
+import { beginWorkspaceReturn, finishWorkspaceReturn, recordPreparingWorkspace } from "../src/lifecycle.js";
+import { withDirectoryLock } from "../src/lock.js";
 import { run } from "../src/process.js";
-import { readState, storePaths, treeKey } from "../src/state.js";
+import { readState, storePaths, treeKey, treeLockPath } from "../src/state.js";
 
 const cli = fileURLToPath(new URL("../bin/ruk.js", import.meta.url));
 
-test("CLI creates, leases, reuses, and collects worktrees", { timeout: 120_000 }, async (t) => {
+test("CLI creates, leases, reuses, and collects worktrees", { timeout: 180_000 }, async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-"));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const root = path.join(parent, "repo");
@@ -227,6 +228,23 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(await fs.readFile(path.join(repaired.path, "node_modules", "fixture", "ready"), "utf8"), "yes");
   await run(process.execPath, [cli, "release", repaired.assignmentId, "--json"], { cwd: root });
 
+  const raced = JSON.parse((await run(process.execPath, [cli, "acquire", "agent/race", "--json"], {
+    cwd: root,
+  })).stdout);
+  let racedRun!: ReturnType<typeof run>;
+  await withDirectoryLock(treeLockPath(paths, raced.path), async () => {
+    racedRun = run(
+      process.execPath,
+      [cli, "run", "--", process.execPath, "-e", "require('fs').writeFileSync('race.txt','ran')"],
+      { cwd: raced.path, allowFailure: true },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await beginWorkspaceReturn(paths, raced.assignmentId);
+    await finishWorkspaceReturn(paths, raced.assignmentId);
+  });
+  assert.equal((await racedRun).code, 1);
+  await assert.rejects(fs.access(path.join(raced.path, "race.txt")));
+
   const registryTemp = path.join(parent, "registry-temp");
   await fs.mkdir(registryTemp);
   const registryEnvironment = { ...process.env, TMPDIR: registryTemp, TMP: registryTemp, TEMP: registryTemp };
@@ -300,6 +318,21 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     env: { ...process.env, RUK_SHELL: process.execPath },
   });
   assert.match(shellResult.stderr, /Released/);
+  if (process.platform === "linux") {
+    const shellProbe = path.join(parent, "shell-probe.sh");
+    await fs.writeFile(
+      shellProbe,
+      "#!/bin/sh\n[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"$(ps -o tpgid= -p $$ | tr -d ' ')\" ] && printf RUK_PTY_OK\n",
+    );
+    await fs.chmod(shellProbe, 0o755);
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    const command = [process.execPath, cli, "shell", "agent/pty"].map(quote).join(" ");
+    const ptyShell = await run("script", ["-qec", command, "/dev/null"], {
+      cwd: root,
+      env: { ...process.env, RUK_SHELL: shellProbe },
+    });
+    assert.match(ptyShell.stdout, /RUK_PTY_OK/);
+  }
 
   const statistics = JSON.parse((await run(process.execPath, [cli, "stats", "--disk", "--json"], {
     cwd: root,
@@ -435,17 +468,18 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     `${JSON.stringify({ dependencyMode: "managed", installCommand: [process.execPath, installer] })}\n`,
   );
   await fs.writeFile(path.join(seed, "version.txt"), "old\n");
-  await run("git", ["init", "-q", "-b", "main"], { cwd: seed });
+  await run("git", ["init", "-q", "-b", "trunk"], { cwd: seed });
   await run("git", ["config", "user.email", "test@example.com"], { cwd: seed });
   await run("git", ["config", "user.name", "ruk test"], { cwd: seed });
   await run("git", ["add", "."], { cwd: seed });
   await run("git", ["commit", "-qm", "initial"], { cwd: seed });
-  await run("git", ["init", "--bare", "-q", remote], { cwd: parent });
-  await run("git", ["remote", "add", "origin", remote], { cwd: seed });
-  await run("git", ["push", "-q", "-u", "origin", "main"], { cwd: seed });
-  await run("git", ["clone", "-q", "--branch", "main", remote, root], { cwd: parent });
+  await run("git", ["init", "--bare", "-q", "--initial-branch=trunk", remote], { cwd: parent });
+  await run("git", ["remote", "add", "upstream", remote], { cwd: seed });
+  await run("git", ["push", "-q", "-u", "upstream", "trunk"], { cwd: seed });
+  await run("git", ["clone", "-q", "--branch", "trunk", remote, root], { cwd: parent });
+  await run("git", ["remote", "rename", "origin", "upstream"], { cwd: root });
   await fs.writeFile(path.join(seed, "version.txt"), "new\n");
-  await run("git", ["commit", "-qam", "advance main"], { cwd: seed });
+  await run("git", ["commit", "-qam", "advance trunk"], { cwd: seed });
   await run("git", ["push", "-q"], { cwd: seed });
 
   const acquired = JSON.parse((await run(

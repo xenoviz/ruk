@@ -45,6 +45,17 @@ export async function fetchRemote(cwd: string, startPoint = "origin/main"): Prom
   return remote;
 }
 
+export async function fetchDefaultRemote(cwd: string): Promise<string> {
+  const remotes = (await run("git", ["remote"], { cwd })).stdout.split(/\r?\n/).filter(Boolean);
+  const remote = remotes.includes("origin") ? "origin" : remotes[0];
+  if (!remote) throw new Error("Git remote does not exist");
+  const result = await run("git", ["ls-remote", "--symref", remote, "HEAD"], { cwd });
+  const branch = /^ref:\s+refs\/heads\/(.+)\s+HEAD$/m.exec(result.stdout)?.[1];
+  if (!branch) throw new Error(`Git remote ${remote} does not advertise a default branch`);
+  await fetchRemote(cwd, `${remote}/${branch}`);
+  return `refs/remotes/${remote}/${branch}`;
+}
+
 export async function addWorktree({
   cwd,
   destination,

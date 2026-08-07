@@ -13,6 +13,7 @@ import { dependencyFingerprint } from "./fingerprint.js";
 import {
   addWorktree,
   assignWorktree,
+  fetchDefaultRemote,
   fetchRemote,
   getRepository,
   listWorktrees,
@@ -211,6 +212,18 @@ async function fetchIfRequested(repository: string, startPoint: string, requeste
   if (requested) await fetchRemote(repository, startPoint);
 }
 
+async function resolveStartPoint(
+  repository: string,
+  requested: string | undefined,
+  fetch: boolean,
+): Promise<string> {
+  if (requested) {
+    await fetchIfRequested(repository, requested, fetch);
+    return requested;
+  }
+  return fetch ? fetchDefaultRemote(repository) : "HEAD";
+}
+
 async function canonicalPath(value: string): Promise<string> {
   try {
     return await fs.realpath(value);
@@ -227,8 +240,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
   requirePositionals(positional, 1, "acquire requires exactly one branch name");
   const branch = positional[0]!;
   const { repository } = await repositoryContext(cwd);
-  const startPoint = options.from ?? (options.fetch ? "origin/main" : "HEAD");
-  await fetchIfRequested(repository.root, startPoint, options.fetch ?? false);
+  const startPoint = await resolveStartPoint(repository.root, options.from, options.fetch ?? false);
   const paths = storePaths(repository.commonDir);
   const ttl = minutes(options.ttl, 480, "--ttl");
   const assignmentBase = {
@@ -442,8 +454,7 @@ async function create(args: readonly string[], cwd: string, io: CliIo) {
   requirePositionals(positional, 1, "create requires exactly one branch name");
   const branch = positional[0]!;
   const { repository, manager } = await context(cwd);
-  const startPoint = options.from ?? (options.fetch ? "origin/main" : "HEAD");
-  await fetchIfRequested(repository.root, startPoint, options.fetch ?? false);
+  const startPoint = await resolveStartPoint(repository.root, options.from, options.fetch ?? false);
   const backend = await dependencyFingerprint({ root: repository.root, manager });
   if (manager.dependencyMode === "shared") assertSharedBackendSupported(backend.manager);
   const destination = path.resolve(
@@ -689,7 +700,7 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   return result;
 }
 
-async function execute(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
+async function execute(args: readonly string[], cwd: string, io: CliIo, detached = true): Promise<number> {
   const separator = args.indexOf("--");
   const command = separator < 0 ? [...args] : args.slice(separator + 1);
   if (command.length === 0) throw new Error("run requires a command");
@@ -711,7 +722,7 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
     state = await readState(paths);
     lifecycle = state.workspaces[treeKey(repository.root)];
   }
-  if (!lifecycle || lifecycle.lifecycle !== "assigned" || !lifecycle.assignment) {
+  if (!lifecycle) {
     const result = await run(program!, programArgs, {
       cwd: repository.root,
       env: process.env,
@@ -720,12 +731,19 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
     });
     return result.code;
   }
+  if (lifecycle.lifecycle !== "assigned" || !lifecycle.assignment) {
+    throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
+  }
 
   const assignmentId = lifecycle.assignment.id;
   const environment = { ...process.env, ...portEnvironment(lifecycle.assignment.ports) };
   const tracking: { record?: TrackedProcessRecord } = {};
   let execution!: ReturnType<typeof run>;
   await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
+    const current = (await readState(paths)).workspaces[treeKey(repository.root)];
+    if (current?.lifecycle !== "assigned" || current.assignment?.id !== assignmentId) {
+      throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
+    }
     let registered!: () => void;
     const registration = new Promise<void>((resolve) => { registered = resolve; });
     execution = run(program!, programArgs, {
@@ -733,7 +751,7 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
       env: environment,
       stdio: "inherit",
       allowFailure: true,
-      detached: true,
+      detached,
       onSpawn: async (pid) => {
         const startedAt = await requireProcessIdentity(pid);
         if (!startedAt) {
@@ -742,7 +760,7 @@ async function execute(args: readonly string[], cwd: string, io: CliIo): Promise
         }
         const record: TrackedProcessRecord = {
           pid,
-          ...(process.platform === "win32" ? {} : { groupId: pid }),
+          ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
           command: [...command],
           startedAt,
         };
@@ -773,8 +791,7 @@ async function warm(args: readonly string[], cwd: string, io: CliIo) {
   const count = Number(options.count);
   if (!Number.isSafeInteger(count) || count < 1) throw new Error("--count must be a positive integer");
   const { repository } = await repositoryContext(cwd);
-  const startPoint = options.from ?? (options.fetch ? "origin/main" : "HEAD");
-  await fetchIfRequested(repository.root, startPoint, options.fetch ?? false);
+  const startPoint = await resolveStartPoint(repository.root, options.from, options.fetch ?? false);
   const targetHead = (await run("git", ["rev-parse", startPoint], { cwd: repository.root })).stdout.trim();
   const paths = storePaths(repository.commonDir);
   // ponytail: one host-wide warm lock; reserve per-slot if concurrent warming needs higher throughput.
@@ -870,11 +887,12 @@ async function runAssignedAndRelease(
   command: readonly string[],
   sourceCwd: string,
   io: CliIo,
+  detached = true,
 ): Promise<number> {
   let code = 1;
   let commandError: unknown;
   try {
-    code = await execute(["--", ...command], assigned.path, io);
+    code = await execute(["--", ...command], assigned.path, io, detached);
   } catch (error) {
     commandError = error;
   }
@@ -922,7 +940,13 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
   const executable = process.env["RUK_SHELL"] ?? process.env["SHELL"] ??
     (process.platform === "win32" ? process.env["COMSPEC"] ?? "cmd.exe" : "/bin/sh");
   io.stderr.write(`Shell workspace: ${assigned.path}\nAssignment: ${assigned.assignmentId}\n`);
-  return runAssignedAndRelease(assigned, [executable], cwd, io);
+  const ignoreInterrupt = () => {};
+  if (process.platform !== "win32") process.on("SIGINT", ignoreInterrupt);
+  try {
+    return await runAssignedAndRelease(assigned, [executable], cwd, io, false);
+  } finally {
+    if (process.platform !== "win32") process.off("SIGINT", ignoreInterrupt);
+  }
 }
 
 async function stats(args: readonly string[], cwd: string, io: CliIo) {
