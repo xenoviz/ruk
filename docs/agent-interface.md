@@ -83,6 +83,8 @@ that assignment; it does not search for arbitrary processes. Without `--force`,
 release fails and preserves the assignment if a tracked process survives
 graceful termination or the worktree is dirty. `--force` force-kills surviving
 tracked process trees and discards tracked and untracked changes.
+Failed acquisition cleanup restores assigned ownership so the fenced workspace
+can be discovered and recovered.
 Tracked, untracked, and ignored files are removed before a workspace enters the
 pool, except dependency projections recorded and integrity-validated by Ruk.
 Preserving an unchanged projection allows reassignment to skip installation;
@@ -123,6 +125,8 @@ The age defaults to 1440 minutes. GC is a dry run unless `--apply` is present.
 `removed` contains candidates in dry-run output and selected removals in apply
 output. Expired assigned or returning workspaces are only reported unless both
 `--apply` and `--force-expired` are present.
+Forced collection rechecks the current expiry in the lifecycle state transaction,
+so a concurrent renewal prevents collection.
 
 ## Inspecting and running
 
@@ -139,7 +143,8 @@ working directory.
 retains the assignment when the command leaves a dirty tree, cleanup fails, or
 the launched process cannot be identified while descendants remain.
 `ruk warm --count <n> --json` counts only integrity-valid projections and
-ensures that the pool has the requested number of available prepared workspaces.
+ensures that the pool has the requested number of available prepared workspaces;
+acquisition uses the same capacity lock.
 Statistics count both assigned and returning workspaces as active assignments.
 
 `ruk stats --json` returns aggregate acquisition, reuse, preparation, failure,

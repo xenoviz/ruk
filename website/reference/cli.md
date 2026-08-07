@@ -69,8 +69,10 @@ recovery ID.
 
 ### `ruk shell <branch>`
 
-Open a terminal-attached interactive assigned shell. Set `RUK_SHELL` to override the platform
-default. Ruk releases a clean workspace on shell exit and retains a dirty one.
+Open a terminal-attached interactive assigned shell. Set `RUK_SHELL` to override
+the platform default. On POSIX, an isolated terminal session keeps surviving
+shell descendants tracked. Ruk releases a clean workspace on shell exit and
+retains a dirty one.
 
 ### `ruk warm --count <n>`
 
@@ -80,6 +82,7 @@ ruk warm --count <n> [--from <ref>] [--fetch] [--json]
 
 Ensure that the pool contains the requested number of available prepared
 workspaces. The count is a target, so an already-warm pool creates nothing.
+Capacity checks are serialized with acquisition.
 
 ### `ruk status [--explain] [--json]`
 

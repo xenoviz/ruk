@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { withDirectoryLock } from "./lock.js";
 import { availablePort, portEnvironmentName, releaseHostPorts, withHostPortRegistry } from "./ports.js";
 import { readState, treeKey, updateState } from "./state.js";
 import type {
@@ -151,17 +152,18 @@ export async function reserveAvailableWorkspace(
   paths: StorePaths,
   input: AssignmentInput,
 ): Promise<WorkspaceRecord | null> {
-  return updateState(paths, (state) => {
-    const workspace = Object.values(state.workspaces)
-      .filter((entry) => entry.lifecycle === "available" && entry.operationId === null)
-      .sort(
-        (left, right) =>
-          (left.availableAt ?? "").localeCompare(right.availableAt ?? "") ||
-          left.path.localeCompare(right.path),
-      )[0];
-    if (!workspace) return null;
-    return assign(workspace, input);
-  });
+  return withDirectoryLock(path.join(paths.root, "warm.lock"), () =>
+    updateState(paths, (state) => {
+      const workspace = Object.values(state.workspaces)
+        .filter((entry) => entry.lifecycle === "available" && entry.operationId === null)
+        .sort(
+          (left, right) =>
+            (left.availableAt ?? "").localeCompare(right.availableAt ?? "") ||
+            left.path.localeCompare(right.path),
+        )[0];
+      if (!workspace) return null;
+      return assign(workspace, input);
+    }));
 }
 
 export async function markWorkspaceAssigned(
@@ -274,11 +276,18 @@ export async function beginWorkspaceReturn(
   paths: StorePaths,
   assignmentId: string,
   now?: string,
+  requireExpiredBy?: string,
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     if (workspace.lifecycle === "returning") return workspace;
     requireLifecycle(workspace, "assigned");
+    if (
+      requireExpiredBy &&
+      Date.parse(workspace.assignment!.expiresAt) > Date.parse(timestamp(requireExpiredBy, "requireExpiredBy"))
+    ) {
+      throw new Error(`Assignment ${assignmentId} was renewed before collection`);
+    }
     workspace.lifecycle = "returning";
     workspace.failure = null;
     workspace.updatedAt = timestamp(now, "now");
@@ -354,6 +363,15 @@ export async function addAssignmentProcess(
       (!Number.isSafeInteger(processRecord.groupId) || processRecord.groupId <= 0)
     ) {
       throw new Error("groupId must be a positive safe integer");
+    }
+    if (
+      processRecord.sessionId !== undefined &&
+      (!Number.isSafeInteger(processRecord.sessionId) || processRecord.sessionId <= 0)
+    ) {
+      throw new Error("sessionId must be a positive safe integer");
+    }
+    if ((processRecord.sessionId === undefined) !== (processRecord.sessionStartedAt === undefined)) {
+      throw new Error("sessionId and sessionStartedAt must be provided together");
     }
     if (workspace.processes.some((entry) => entry.pid === processRecord.pid)) {
       throw new Error(`Process ${processRecord.pid} is already tracked`);

@@ -27,8 +27,9 @@ assignment when child identity cannot be established while descendants remain;
 surviving POSIX process groups remain tracked even after their leader exits.
 Ruk fences the assignment again immediately before launching a command.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
-an interactive, terminal-attached assigned shell; commit intended work before exit so normal
-release can succeed. Release integrity-validates recorded dependency projections:
+an interactive, terminal-attached assigned shell; its isolated terminal session
+keeps surviving descendants tracked after the shell exits. Commit intended work
+before exit so normal release can succeed. Release integrity-validates recorded dependency projections:
 unchanged projections stay warm, while modified projections are discarded and
 rebuilt from the package store before the next assigned command. Warm capacity
 counts only projections whose dependency inputs and integrity fingerprint still
@@ -36,17 +37,20 @@ validate, including linked package targets. `ruk status --json` reports
 `projection-changed` and recommends `ruk sync` when integrity validation fails.
 
 Use `ruk warm --count <n> --json` before a known burst of agents. The count is
-the desired number of available prepared workspaces, not the number to add.
+the desired number of available prepared workspaces, not the number to add;
+acquisition and warm-capacity reservations are serialized.
 Use `ruk stats --json` for recorded reuse and preparation metrics; add `--disk`
 only when an on-demand filesystem scan is acceptable.
 
 Named ports are cooperative host-local reservations. `--port app` returns an
 `app` field and makes `RUK_PORT_APP` available to `ruk run`, `exec`, and
-`shell`. Ruk does not hold the socket against unrelated processes.
+`shell`. The registry is owner-only and fails closed on unsafe or corrupt state.
+Ruk does not hold the socket against unrelated processes.
 
 Use `ruk gc --json` to preview collection. Apply only when requested with
 `ruk gc --apply --json`. Add `--force-expired` only with explicit authority to
 reclaim expired assignments; expiry alone does not make them safe to remove.
+Forced collection revalidates expiry atomically before changing lifecycle state.
 GC fences interrupted warm preparations with the warm lock before collecting
 them.
 

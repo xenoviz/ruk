@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -57,9 +58,26 @@ async function readHostPortRegistry(file: string): Promise<HostPortRegistry> {
 }
 
 async function writeHostPortRegistry(file: string, registry: HostPortRegistry): Promise<void> {
-  const temporary = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
-  await fs.rename(temporary, file);
+  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    await fs.rename(temporary, file);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+async function ensureHostPortRoot(): Promise<void> {
+  try {
+    await fs.mkdir(hostPortRoot, { mode: 0o700 });
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== "EEXIST") throw error;
+  }
+  const stat = await fs.lstat(hostPortRoot);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Unsafe Ruk host port directory ${hostPortRoot}`);
+  if (process.platform !== "win32" && (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)) {
+    throw new Error(`Unsafe Ruk host port directory ${hostPortRoot}`);
+  }
 }
 
 export async function withHostPortRegistry<T>(
@@ -70,7 +88,7 @@ export async function withHostPortRegistry<T>(
     commit(): Promise<void>;
   }) => T | Promise<T>,
 ): Promise<T> {
-  await fs.mkdir(hostPortRoot, { recursive: true, mode: 0o700 });
+  await ensureHostPortRoot();
   const file = path.join(hostPortRoot, "ports.json");
   return withDirectoryLock(path.join(hostPortRoot, "ports.lock"), async () => {
     const registry = await readHostPortRegistry(file);

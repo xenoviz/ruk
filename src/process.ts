@@ -246,13 +246,91 @@ export async function processDescendantsExist(pid: number): Promise<boolean> {
   }
 }
 
+interface PosixProcess {
+  pid: number;
+  parentPid: number;
+  sessionId: number;
+  state: string;
+}
+
+async function posixProcesses(): Promise<PosixProcess[]> {
+  const result = await run("ps", ["-eo", "pid=,ppid=,sid=,stat="], { allowFailure: true });
+  if (result.code !== 0) return [];
+  return result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
+    .filter((entry) => entry.length === 4 && entry.slice(0, 3).map(Number).every(Number.isSafeInteger))
+    .map(([pid, parentPid, sessionId, state]) => ({
+      pid: Number(pid),
+      parentPid: Number(parentPid),
+      sessionId: Number(sessionId),
+      state: state!,
+    }));
+}
+
+function descendantIds(processes: readonly PosixProcess[], rootPid: number): Set<number> {
+  const descendants = new Set([rootPid]);
+  while (true) {
+    const before = descendants.size;
+    for (const process of processes) if (descendants.has(process.parentPid)) descendants.add(process.pid);
+    if (descendants.size === before) return descendants;
+  }
+}
+
+export async function requireChildProcessSession(
+  pid: number,
+): Promise<{ sessionId: number; sessionStartedAt: string }> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const processes = await posixProcesses();
+    const descendants = descendantIds(processes, pid);
+    const leader = processes.find((process) =>
+      process.pid !== pid && descendants.has(process.pid) && process.pid === process.sessionId
+    );
+    if (leader) {
+      const sessionStartedAt = await processIdentity(leader.pid);
+      if (sessionStartedAt) return { sessionId: leader.pid, sessionStartedAt };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new ProcessIdentityUnavailableError(pid);
+}
+
+async function processSessionExists(sessionId: number): Promise<boolean> {
+  return (await posixProcesses()).some((process) => process.sessionId === sessionId && !process.state.startsWith("Z"));
+}
+
+async function terminateProcessSession(
+  sessionId: number,
+  sessionStartedAt: string,
+  force: boolean,
+): Promise<boolean> {
+  const leaderIdentity = await processIdentity(sessionId);
+  if (leaderIdentity && leaderIdentity !== sessionStartedAt) {
+    throw new Error(`Refusing to terminate reused process session ${sessionId}`);
+  }
+  const members = (await posixProcesses()).filter((process) =>
+    process.sessionId === sessionId && !process.state.startsWith("Z")
+  );
+  for (const member of members) {
+    if (member.pid === process.pid) throw new Error(`Refusing to terminate current process session ${sessionId}`);
+    try {
+      process.kill(member.pid, force ? "SIGKILL" : "SIGTERM");
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+  }
+  return members.length > 0;
+}
+
 export async function trackedProcessExists(record: TrackedProcessRecord): Promise<boolean> {
   const identity = await processIdentity(record.pid);
   if (identity) return identity === record.startedAt;
+  if (record.sessionId !== undefined) return processSessionExists(record.sessionId);
   return processDescendantsExist(record.groupId ?? record.pid);
 }
 
 export async function terminateTrackedProcess(record: TrackedProcessRecord, force = false): Promise<boolean> {
+  if (record.sessionId !== undefined && record.sessionStartedAt !== undefined) {
+    return terminateProcessSession(record.sessionId, record.sessionStartedAt, force);
+  }
   const identity = await processIdentity(record.pid);
   if (identity === record.startedAt) {
     return killProcessTree(record.groupId ?? record.pid, force, identity);

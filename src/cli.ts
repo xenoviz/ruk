@@ -47,6 +47,7 @@ import { portEnvironment } from "./ports.js";
 import {
   ProcessIdentityUnavailableError,
   processIdentity,
+  requireChildProcessSession,
   requireProcessIdentity,
   run,
   terminateTrackedProcess,
@@ -314,17 +315,23 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    let returning = false;
     try {
       if (operationId) {
         await markWorkspaceFailed(paths, workspace.path, operationId, message);
       } else if (workspace.assignment) {
         await beginWorkspaceReturn(paths, workspace.assignment.id);
+        returning = true;
         const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
         if (!dependenciesReady) await deleteTreeState(paths, workspace.path);
         await returnWorktree(workspace.path, true, dependenciesReady ? projections : []);
         await finishWorkspaceReturn(paths, workspace.assignment.id);
       }
     } catch (cleanupError) {
+      if (returning) {
+        const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        try { await cancelWorkspaceReturn(paths, workspace.assignment!.id, cleanupMessage); } catch { /* Preserve both failures. */ }
+      }
       throw new AggregateError([error, cleanupError], `Workspace acquisition failed and cleanup also failed for ${workspace.path}`);
     }
     throw error;
@@ -402,6 +409,7 @@ async function releaseAssignment(
   repository: Awaited<ReturnType<typeof getRepository>>,
   assignmentId: string,
   force: boolean,
+  requireExpiredBy?: string,
 ): Promise<{ workspace: WorkspaceRecord; cleanedProcesses: number }> {
   const paths = storePaths(repository.commonDir);
   const matches = await findAssignments(paths, { id: assignmentId });
@@ -410,7 +418,7 @@ async function releaseAssignment(
   return withDirectoryLock(treeLockPath(paths, workspacePath), async () => {
     let returning = false;
     try {
-      const workspace = await beginWorkspaceReturn(paths, assignmentId);
+      const workspace = await beginWorkspaceReturn(paths, assignmentId, undefined, requireExpiredBy);
       returning = true;
       const cleanedProcesses = await cleanTrackedProcesses(paths, assignmentId, workspace.processes, force);
       const tree = (await readState(paths)).trees[treeKey(workspace.path)];
@@ -667,7 +675,7 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
       for (const candidate of expiredCandidates) {
         if (await canonicalPath(candidate.workspace.path) === current) continue;
         const assignmentId = candidate.workspace.assignment!.id;
-        const released = await releaseAssignment(repository, assignmentId, true);
+        const released = await releaseAssignment(repository, assignmentId, true, new Date().toISOString());
         await collectWorkspace(repository, paths, released.workspace, options.json ? "pipe" : "inherit");
         removed.push({ path: candidate.workspace.path, lifecycle: candidate.workspace.lifecycle, reason: "expired assignment (forced)" });
       }
@@ -761,6 +769,7 @@ async function execute(args: readonly string[], cwd: string, io: CliIo, detached
         const record: TrackedProcessRecord = {
           pid,
           ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
+          ...(process.platform !== "win32" && !detached ? await requireChildProcessSession(pid) : {}),
           command: [...command],
           startedAt,
         };
@@ -939,11 +948,16 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
   const assigned = await acquire(acquireArgs, cwd, io, false);
   const executable = process.env["RUK_SHELL"] ?? process.env["SHELL"] ??
     (process.platform === "win32" ? process.env["COMSPEC"] ?? "cmd.exe" : "/bin/sh");
+  const command = process.platform === "win32"
+    ? [executable]
+    : process.platform === "darwin"
+      ? ["/usr/bin/script", "-q", "/dev/null", executable]
+      : ["/usr/bin/script", "-qec", `exec '${executable.replaceAll("'", "'\\''")}'`, "/dev/null"];
   io.stderr.write(`Shell workspace: ${assigned.path}\nAssignment: ${assigned.assignmentId}\n`);
   const ignoreInterrupt = () => {};
   if (process.platform !== "win32") process.on("SIGINT", ignoreInterrupt);
   try {
-    return await runAssignedAndRelease(assigned, [executable], cwd, io, false);
+    return await runAssignedAndRelease(assigned, command, cwd, io, false);
   } finally {
     if (process.platform !== "win32") process.off("SIGINT", ignoreInterrupt);
   }

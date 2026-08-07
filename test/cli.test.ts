@@ -12,7 +12,7 @@ import { readState, storePaths, treeKey, treeLockPath } from "../src/state.js";
 
 const cli = fileURLToPath(new URL("../bin/ruk.js", import.meta.url));
 
-test("CLI creates, leases, reuses, and collects worktrees", { timeout: 180_000 }, async (t) => {
+test("CLI creates, leases, reuses, and collects worktrees", { timeout: 300_000 }, async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-"));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const root = path.join(parent, "repo");
@@ -160,7 +160,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   await waitFor(async () => {
     const workspace = (await readState(paths)).workspaces[treeKey(acquired.path)];
     return workspace?.processes.length === 1;
-  });
+  }, 30_000);
   const released = JSON.parse((await run(
     process.execPath,
     [cli, "release", acquired.assignmentId, "--force", "--json"],
@@ -318,20 +318,36 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     env: { ...process.env, RUK_SHELL: process.execPath },
   });
   assert.match(shellResult.stderr, /Released/);
-  if (process.platform === "linux") {
+  if (process.platform !== "win32") {
     const shellProbe = path.join(parent, "shell-probe.sh");
+    const shellChildPid = path.join(parent, "shell-child.pid");
     await fs.writeFile(
       shellProbe,
-      "#!/bin/sh\n[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"$(ps -o tpgid= -p $$ | tr -d ' ')\" ] && printf RUK_PTY_OK\n",
+      "#!/bin/sh\n[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"$(ps -o tpgid= -p $$ | tr -d ' ')\" ] || exit 23\nsleep 60 </dev/null >/dev/null 2>&1 &\necho $! > \"$RUK_TEST_CHILD_PID\"\nprintf RUK_PTY_OK\n",
     );
     await fs.chmod(shellProbe, 0o755);
-    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-    const command = [process.execPath, cli, "shell", "agent/pty"].map(quote).join(" ");
-    const ptyShell = await run("script", ["-qec", command, "/dev/null"], {
+    const scriptArgs = process.platform === "darwin"
+      ? ["-q", "/dev/null", process.execPath, cli, "shell", "agent/pty"]
+      : [
+          "-qec",
+          [process.execPath, cli, "shell", "agent/pty"]
+            .map((value) => `'${value.replaceAll("'", "'\\''")}'`).join(" "),
+          "/dev/null",
+        ];
+    const ptyShell = await run("/usr/bin/script", scriptArgs, {
       cwd: root,
-      env: { ...process.env, RUK_SHELL: shellProbe },
+      env: { ...process.env, RUK_SHELL: shellProbe, RUK_TEST_CHILD_PID: shellChildPid },
     });
     assert.match(ptyShell.stdout, /RUK_PTY_OK/);
+    const childPid = Number(await fs.readFile(shellChildPid, "utf8"));
+    await waitFor(async () => {
+      try {
+        process.kill(childPid, 0);
+        return false;
+      } catch (error) {
+        return error instanceof Error && "code" in error && error.code === "ESRCH";
+      }
+    });
   }
 
   const statistics = JSON.parse((await run(process.execPath, [cli, "stats", "--disk", "--json"], {

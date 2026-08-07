@@ -23,7 +23,8 @@ import {
   renewAssignment,
   reserveAvailableWorkspace,
 } from "../src/lifecycle.js";
-import { readState, storePaths } from "../src/state.js";
+import { withDirectoryLock } from "../src/lock.js";
+import { readState, storePaths, treeKey } from "../src/state.js";
 import type { StorePaths, WorkspaceRecord } from "../src/types.js";
 
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -112,6 +113,8 @@ test("renewal requires the exact active assignment", async (t) => {
   assert.equal(renewed.assignment!.renewedAt, T1);
   assert.equal(renewed.assignment!.expiresAt, T3);
   await assert.rejects(renewAssignment(paths, crypto.randomUUID(), T3, T1), /does not exist/);
+  await assert.rejects(beginWorkspaceReturn(paths, workspace.assignment!.id, T2, T2), /renewed before collection/);
+  assert.equal((await readState(paths)).workspaces[treeKey(workspace.path)]!.lifecycle, "assigned");
 });
 
 test("return transitions retain ownership until tracked processes are removed", async (t) => {
@@ -146,6 +149,19 @@ test("return transitions retain ownership until tracked processes are removed", 
 test("only one concurrent caller reserves an available workspace", async (t) => {
   const { root, paths } = await fixture(t);
   await makeAvailable(paths, path.join(root, "workspace"));
+  let blockedReservation!: ReturnType<typeof reserveAvailableWorkspace>;
+  await withDirectoryLock(path.join(paths.root, "warm.lock"), async () => {
+    blockedReservation = reserveAvailableWorkspace(paths, {
+      owner: "blocked",
+      hostname: "host",
+      expiresAt: T3,
+      now: T2,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(Object.values((await readState(paths)).workspaces)[0]!.lifecycle, "available");
+  });
+  await beginWorkspaceReturn(paths, (await blockedReservation)!.assignment!.id, T2);
+  await finishWorkspaceReturn(paths, (await blockedReservation)!.assignment!.id, T2);
   const results = await Promise.all(
     ["one", "two"].map((owner) =>
       reserveAvailableWorkspace(paths, { owner, hostname: "host", expiresAt: T3, now: T2 }),

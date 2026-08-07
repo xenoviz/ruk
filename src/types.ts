@@ -66,6 +66,8 @@ export interface UsageMetrics {
 export interface TrackedProcessRecord {
   pid: number;
   groupId?: number;
+  sessionId?: number;
+  sessionStartedAt?: string;
   command?: string[];
   startedAt: string;
 }

@@ -34,3 +34,5 @@ versioning.
   port-registry cleanup recoverable, and tolerate concurrent disk-stat races.
 - Resolve fetched remote defaults, fence commands at launch, keep shells
   terminal-attached, and fail closed on corrupt active port reservations.
+- Revalidate forced-GC expiry, restore ownership after failed acquisition
+  cleanup, serialize warming with acquisition, and secure the host registry.
