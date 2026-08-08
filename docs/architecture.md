@@ -123,6 +123,8 @@ terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
 cleanup, and a leaderless Linux session fails closed. Detached managed commands
 explicitly forward wrapper interrupt and termination signals to their process group.
+Linux checks for the util-linux `script` command before acquiring an interactive
+shell workspace.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same

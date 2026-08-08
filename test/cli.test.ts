@@ -458,6 +458,25 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     assert.equal(terminatedExec.code, 143);
     await releaseRetained(terminatedExec.stderr);
 
+    if (process.platform === "linux") {
+      const emptyPath = path.join(parent, "empty-path");
+      await fs.mkdir(emptyPath);
+      await fs.symlink("/bin/sh", path.join(emptyPath, "sh"));
+      const shellCommand = [process.execPath, cli, "shell", "agent/missing-script"]
+        .map((value) => `'${value.replaceAll("'", "'\\''")}'`).join(" ");
+      const missingScript = await run("/usr/bin/script", ["-qec", shellCommand, "/dev/null"], {
+        cwd: root,
+        allowFailure: true,
+        env: { ...process.env, PATH: emptyPath },
+      });
+      assert.notEqual(missingScript.code, 0);
+      assert.match(`${missingScript.stdout}\n${missingScript.stderr}`, /require the util-linux script command/);
+      assert.equal(
+        Object.values((await readState(paths)).workspaces).some((workspace) => workspace.branch === "agent/missing-script"),
+        false,
+      );
+    }
+
     const shellProbe = path.join(parent, "shell-probe.sh");
     const shellChildPid = path.join(parent, "shell-child.pid");
     await fs.writeFile(
@@ -889,6 +908,29 @@ test("CLI exposes stable help, version, JSON, and argument errors", async (t) =>
     allowFailure: true,
   });
   assert.equal(JSON.parse(configFailure.stderr).code, "INVALID_ARGUMENT");
+
+  await fs.writeFile(path.join(invalidConfig, ".rukrc.json"), "{broken\n");
+  const malformedConfig = await run(process.execPath, [cli, "sync", "--json"], {
+    cwd: invalidConfig,
+    allowFailure: true,
+  });
+  assert.equal(JSON.parse(malformedConfig.stderr).code, "INVALID_ARGUMENT");
+
+  const invalidTtl = path.join(parent, "invalid-ttl");
+  await fs.mkdir(invalidTtl);
+  await fs.writeFile(path.join(invalidTtl, "package.json"), '{"name":"invalid-ttl"}\n');
+  await run("git", ["init", "-q", "-b", "main"], { cwd: invalidTtl });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: invalidTtl });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: invalidTtl });
+  await run("git", ["add", "."], { cwd: invalidTtl });
+  await run("git", ["commit", "-qm", "fixture"], { cwd: invalidTtl });
+  const ttlFailure = await run(
+    process.execPath,
+    [cli, "acquire", "agent/oversized-ttl", "--ttl", "1e300", "--json"],
+    { cwd: invalidTtl, allowFailure: true },
+  );
+  assert.equal(JSON.parse(ttlFailure.stderr).code, "INVALID_ARGUMENT");
+  assert.equal((await run("git", ["branch", "--list", "agent/oversized-ttl"], { cwd: invalidTtl })).stdout, "");
 });
 
 async function waitFor(check: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {

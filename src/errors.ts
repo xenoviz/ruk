@@ -13,6 +13,7 @@ export class DependencyPreparationError extends Error {
 
 const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
   [/shared dependency backend/i, "DEPENDENCY_PREPARATION_FAILED", true],
+  [/cannot read .*\.rukrc\.json:/i, "INVALID_ARGUMENT", false],
   [/unknown (?:command|(?:\S+\s+)*options?)(?::|\s|$)|requires|does not accept|must (?:be|contain)|exactly one/i, "INVALID_ARGUMENT", false],
   [/assignment .* does not exist|expected assigned|preparation operation does not match/i, "ASSIGNMENT_CONFLICT", false],
   [/uncommitted changes|workspace .* dirty/i, "WORKSPACE_DIRTY", false],

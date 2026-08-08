@@ -69,3 +69,5 @@ versioning.
 - Fence Windows registration cleanup by process identity and skip forced-GC
   candidates whose leases change after revalidation.
 - Carry abandoned-acquisition update fences into GC lifecycle transitions.
+- Validate Linux interactive-shell prerequisites and oversized TTLs before
+  acquisition, and classify malformed configuration as invalid input.

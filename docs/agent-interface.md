@@ -183,3 +183,5 @@ Stable categories include `INVALID_ARGUMENT`, `ASSIGNMENT_CONFLICT`,
 `WORKSPACE_DIRTY`, `PORT_UNAVAILABLE`, `RESOURCE_BUSY`,
 `DEPENDENCY_PREPARATION_FAILED`, `GIT_OPERATION_FAILED`, and
 `OPERATION_FAILED`. Consumers must still ignore unknown fields and categories.
+Malformed `.rukrc.json` input and TTL values outside the supported date range
+are non-retryable `INVALID_ARGUMENT` errors raised before acquisition.

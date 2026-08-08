@@ -12,6 +12,7 @@ test("structured failures expose stable automation categories", () => {
   });
   assert.equal(errorRecord(new Error("Could not allocate an available port")).code, "PORT_UNAVAILABLE");
   assert.equal(errorRecord(new Error("Dependency installation failed")).code, "DEPENDENCY_PREPARATION_FAILED");
+  assert.equal(errorRecord(new Error("Cannot read /repo/.rukrc.json: malformed JSON")).code, "INVALID_ARGUMENT");
   assert.deepEqual(
     errorRecord(new Error("bun 1.3.14 or newer is required for Ruk's shared dependency backend")),
     {

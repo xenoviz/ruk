@@ -45,6 +45,7 @@ import {
 import { withDirectoryLock } from "./lock.js";
 import { portEnvironment } from "./ports.js";
 import {
+  commandExists,
   ProcessIdentityUnavailableError,
   processIdentity,
   requireChildProcessSession,
@@ -199,7 +200,12 @@ async function sync(cwd: string, io: CliIo, json = false, emit = true) {
 
 function minutes(value: string | undefined, fallback: number, name: string, allowZero = false): number {
   const parsed = value === undefined ? fallback : Number(value);
-  if (!Number.isFinite(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+  const timestamp = Date.now() + parsed * 60_000;
+  if (
+    !Number.isFinite(parsed) ||
+    (allowZero ? parsed < 0 : parsed <= 0) ||
+    !Number.isFinite(new Date(timestamp).getTime())
+  ) {
     throw new Error(`${name} must be ${allowZero ? "a non-negative" : "a positive"} number of minutes`);
   }
   return parsed;
@@ -240,10 +246,10 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
   });
   requirePositionals(positional, 1, "acquire requires exactly one branch name");
   const branch = positional[0]!;
+  const ttl = minutes(options.ttl, 480, "--ttl");
   const { repository } = await repositoryContext(cwd);
   const startPoint = await resolveStartPoint(repository.root, options.from, options.fetch ?? false);
   const paths = storePaths(repository.commonDir);
-  const ttl = minutes(options.ttl, 480, "--ttl");
   const assignmentBase = {
     owner: options.owner ?? process.env["RUK_AGENT_ID"] ?? `${os.hostname()}:${process.pid}`,
     hostname: os.hostname(),
@@ -1150,6 +1156,9 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
     flags: ["--fetch"],
   });
   requirePositionals(positional, 1, "shell requires exactly one branch name");
+  if (process.platform === "linux" && process.stdin.isTTY && !(await commandExists("script"))) {
+    throw new Error("Interactive shells on Linux require the util-linux script command on PATH");
+  }
   const acquireArgs = [positional[0]!];
   if (options.from) acquireArgs.push("--from", options.from);
   if (options.ttl) acquireArgs.push("--ttl", options.ttl);
@@ -1169,7 +1178,7 @@ async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<n
     ? [executable]
     : process.platform === "darwin"
       ? ["/usr/bin/script", "-q", "/dev/null", "/bin/sh", "-c", wrapper]
-      : ["/usr/bin/script", "-qec", wrapper, "/dev/null"];
+      : ["script", "-qec", wrapper, "/dev/null"];
   io.stderr.write(`Shell workspace: ${assigned.path}\nAssignment: ${assigned.assignmentId}\n`);
   const ignoreInterrupt = () => {};
   const previousShell = process.env["RUK_SHELL"];

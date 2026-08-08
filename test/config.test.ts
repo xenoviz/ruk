@@ -58,6 +58,9 @@ test("configuration validates modes, commands, and unknown keys", async (t) => {
 
   await fs.writeFile(path.join(root, ".rukrc.json"), '[]\n');
   await assert.rejects(loadConfig(root), /must contain a JSON object/);
+
+  await fs.writeFile(path.join(root, ".rukrc.json"), '{broken\n');
+  await assert.rejects(loadConfig(root), /Cannot read .*\.rukrc\.json/);
 });
 
 test("package manager detection chooses deterministic install commands", async (t) => {
