@@ -64,3 +64,5 @@ versioning.
   assignments from expired recovery output.
 - Validate shorthand remotes, recompute expired output after GC, and preserve
   conventional signal exit codes.
+- Revalidate GC candidates, preserve handoff renewals, and fail closed for
+  leaderless or reused Windows process trees.

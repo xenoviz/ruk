@@ -153,6 +153,8 @@ retains the assignment when the command leaves a dirty tree, cleanup fails, or
 the launched process cannot be identified while descendants remain.
 Leaderless detached groups retain the assignment until their known descendants
 exit; Ruk does not signal a group whose original leader cannot be verified.
+Windows process trees follow the same fail-closed rule when a leader exits or
+its PID is reused, including registration failures.
 `ruk warm --count <n> --json` counts only integrity-valid projections and
 ensures that the pool has the requested number of available prepared workspaces;
 acquisition uses the same capacity lock.

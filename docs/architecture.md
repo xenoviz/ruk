@@ -115,6 +115,8 @@ Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. Leaderless POSIX process groups fail
 closed because their numeric IDs can be reused.
+Windows registration cleanup terminates the new process tree when possible and
+otherwise retains ownership while descendants remain or the leader PID is reused.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
@@ -144,6 +146,8 @@ excluded from available-capacity statistics and warm counts. Forced-expiry
 release uses the handoff lock before it changes workspace state.
 Warm validation and garbage collection share a pool-maintenance lock so a slot
 cannot be removed after being reported as available.
+Collection revalidates every stale snapshot under the slot's acquisition lock,
+and acquisition handoff does not overwrite a concurrent lease renewal.
 Ordinary release cannot cross an active acquisition marker, and an unreadable
 identity for a provably live lock owner never authorizes stale-lock recovery.
 

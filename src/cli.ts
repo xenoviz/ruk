@@ -251,6 +251,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
   };
   const finishAcquisition = async (workspace: WorkspaceRecord, reused: boolean) => {
     let operationId = reused ? null : workspace.operationId;
+    const initialRenewedAt = workspace.assignment?.renewedAt;
     let dependenciesReady = false;
     try {
       if (!reused) {
@@ -279,7 +280,7 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
         });
         operationId = null;
       } else {
-        workspace = await renewAssignment(paths, workspace.assignment!.id, expiresIn(ttl));
+        workspace = await renewAssignment(paths, workspace.assignment!.id, expiresIn(ttl), undefined, initialRenewedAt);
       }
       if (options.ports?.length) {
         workspace = await allocateAssignmentPorts(paths, workspace.assignment!.id, options.ports);
@@ -683,19 +684,6 @@ async function collectWorkspaceWithAcquisitionLock(
   }, { staleMs: 0 });
 }
 
-async function collectWorkspace(
-  repository: Awaited<ReturnType<typeof getRepository>>,
-  paths: StorePaths,
-  workspace: WorkspaceRecord,
-  stdio: "pipe" | "inherit" = "inherit",
-): Promise<void> {
-  await withDirectoryLock(
-    `${treeLockPath(paths, workspace.path)}.acquire`,
-    () => collectWorkspaceWithAcquisitionLock(repository, paths, workspace, stdio),
-    { staleMs: 0 },
-  );
-}
-
 async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   const { options, positional } = parseOptions(args, {
     values: ["--max-age"],
@@ -757,7 +745,28 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
         );
         if (!collected) continue;
       } else {
-        await collectWorkspace(repository, paths, candidate.workspace, options.json ? "pipe" : "inherit");
+        const collected = await withDirectoryLock(
+          `${treeLockPath(paths, candidate.workspace.path)}.acquire`,
+          async () => {
+            const currentCandidate = (await identifyGcCandidates(paths, cutoff, undefined, true)).find(
+              (entry) =>
+                !entry.requiresForce &&
+                entry.reason === candidate.reason &&
+                treeKey(entry.workspace.path) === treeKey(candidate.workspace.path) &&
+                entry.workspace.updatedAt === candidate.workspace.updatedAt,
+            );
+            if (!currentCandidate) return false;
+            await collectWorkspaceWithAcquisitionLock(
+              repository,
+              paths,
+              currentCandidate.workspace,
+              options.json ? "pipe" : "inherit",
+            );
+            return true;
+          },
+          { staleMs: 0 },
+        );
+        if (!collected) continue;
       }
       removed.push({
         path: candidate.workspace.path,

@@ -43,6 +43,10 @@ test("missing process identity fails closed", async () => {
     /cannot be released safely/,
   );
   assert.equal(await requireProcessIdentity(42, async () => null, async () => false), null);
+  await assert.rejects(
+    trackedProcessExists({ pid: 42, startedAt: "original" }, async () => "reused", async () => true),
+    /cannot be released safely/,
+  );
   assert.equal(await trackedProcessExists({ pid: 999_999, startedAt: "missing" }), false);
   assert.equal(await terminateTrackedProcess({ pid: process.pid, startedAt: "wrong" }), false);
   assert.equal(await terminateTrackedProcess({ pid: 999_999, startedAt: "missing" }), false);
@@ -92,18 +96,21 @@ test("process runner terminates a child when tracking registration fails", async
 });
 
 test("process runner terminates a detached group after its leader exits before registration fails", async (t) => {
-  if (process.platform === "win32") return t.skip("POSIX process groups are required");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-detached-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const workerFile = path.join(root, "worker.pid");
   const survivedFile = path.join(root, "survived");
-  const ps = path.join(root, "ps");
-  await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
-  await fs.chmod(ps, 0o755);
-  const workerScript = `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(survivedFile)},'1'),500);setInterval(()=>{},1000)`;
+  if (process.platform !== "win32") {
+    const ps = path.join(root, "ps");
+    await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
+    await fs.chmod(ps, 0o755);
+  }
+  const workerScript = process.platform === "win32"
+    ? "setInterval(()=>{},1000)"
+    : `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(survivedFile)},'1'),500);setInterval(()=>{},1000)`;
   let workerPid = 0;
   const originalPath = process.env["PATH"];
-  process.env["PATH"] = root;
+  if (process.platform !== "win32") process.env["PATH"] = root;
   try {
     await assert.rejects(
       run(
@@ -126,12 +133,21 @@ test("process runner terminates a detached group after its leader exits before r
       /tracking failed/,
     );
   } finally {
-    if (originalPath === undefined) delete process.env["PATH"];
-    else process.env["PATH"] = originalPath;
+    if (process.platform !== "win32") {
+      if (originalPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = originalPath;
+    }
   }
   assert.ok(workerPid > 0);
-  await new Promise((resolve) => setTimeout(resolve, 750));
-  await assert.rejects(fs.access(survivedFile), { code: "ENOENT" });
+  if (process.platform === "win32") {
+    for (let attempt = 0; attempt < 20 && await processIdentity(workerPid); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(await processIdentity(workerPid), null);
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    await assert.rejects(fs.access(survivedFile), { code: "ENOENT" });
+  }
 });
 
 test("process runner terminates an attached process tree when tracking registration fails", async (t) => {

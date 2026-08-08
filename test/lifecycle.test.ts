@@ -118,6 +118,9 @@ test("renewal requires the exact active assignment", async (t) => {
   assert.equal(renewed.assignment!.assignedAt, T0);
   assert.equal(renewed.assignment!.renewedAt, T1);
   assert.equal(renewed.assignment!.expiresAt, T3);
+  const preserved = await renewAssignment(paths, workspace.assignment!.id, T2, T0, T0);
+  assert.equal(preserved.assignment!.renewedAt, T1);
+  assert.equal(preserved.assignment!.expiresAt, T3);
   await assert.rejects(renewAssignment(paths, crypto.randomUUID(), T3, T1), /does not exist/);
   await assert.rejects(
     beginWorkspaceReturn(paths, workspace.assignment!.id, T2, undefined, crypto.randomUUID()),

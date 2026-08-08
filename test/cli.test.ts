@@ -274,6 +274,29 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   const acquiredAfterHandoff = JSON.parse((await blockedAcquire).stdout);
   await run(process.execPath, [cli, "release", acquiredAfterHandoff.assignmentId, "--json"], { cwd: root });
 
+  let renewedAcquire!: ReturnType<typeof run>;
+  let handoffRenewal!: { expiresAt: string };
+  await withDirectoryLock(treeLockPath(paths, repaired.path), async () => {
+    renewedAcquire = run(
+      process.execPath,
+      [cli, "acquire", "agent/renewed-handoff", "--ttl", "1", "--json"],
+      { cwd: root },
+    );
+    await waitFor(async () => {
+      const workspace = (await readState(paths)).workspaces[treeKey(repaired.path)];
+      return workspace?.lifecycle === "assigned" && workspace.operationId !== null;
+    });
+    const workspace = (await readState(paths)).workspaces[treeKey(repaired.path)]!;
+    handoffRenewal = JSON.parse((await run(
+      process.execPath,
+      [cli, "renew", workspace.assignment!.id, "--ttl", "20", "--json"],
+      { cwd: root },
+    )).stdout);
+  });
+  const acquiredAfterRenewal = JSON.parse((await renewedAcquire).stdout);
+  assert.equal(acquiredAfterRenewal.expiresAt, handoffRenewal.expiresAt);
+  await run(process.execPath, [cli, "release", acquiredAfterRenewal.assignmentId, "--json"], { cwd: root });
+
   const raced = JSON.parse((await run(process.execPath, [cli, "acquire", "agent/race", "--json"], {
     cwd: root,
   })).stdout);
@@ -655,7 +678,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(JSON.parse(failed.stderr).status, "error");
 });
 
-test("warm waits for collection before reporting capacity", { timeout: 60_000 }, async (t) => {
+test("warm waits for collection and GC skips concurrently acquired capacity", { timeout: 60_000 }, async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-warm-gc-"));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const root = path.join(parent, "repo");
@@ -670,20 +693,32 @@ test("warm waits for collection before reporting capacity", { timeout: 60_000 },
   await run("git", ["config", "user.name", "ruk test"], { cwd: root });
   await run("git", ["add", "."], { cwd: root });
   await run("git", ["commit", "-qm", "fixture"], { cwd: root });
-  const first = JSON.parse((await run(process.execPath, [cli, "warm", "--count", "1", "--json"], { cwd: root })).stdout);
+  const first = JSON.parse((await run(process.execPath, [cli, "warm", "--count", "2", "--json"], { cwd: root })).stdout);
   const repository = await getRepository(root);
   const paths = storePaths(repository.commonDir);
   let collecting!: ReturnType<typeof run>;
   let warming!: ReturnType<typeof run>;
+  let claimed!: Awaited<ReturnType<typeof recordSuccessfulAcquisition>>;
   await withDirectoryLock(`${treeLockPath(paths, first.created[0])}.acquire`, async () => {
-    collecting = run(process.execPath, [cli, "gc", "--max-age", "0", "--apply", "--json"], { cwd: root });
-    await waitFor(() => fs.access(path.join(paths.root, "pool-maintenance.lock")).then(() => true, () => false));
-    warming = run(process.execPath, [cli, "warm", "--count", "1", "--json"], { cwd: root });
+    await withDirectoryLock(`${treeLockPath(paths, first.created[1])}.acquire`, async () => {
+      collecting = run(process.execPath, [cli, "gc", "--max-age", "0", "--apply", "--json"], { cwd: root });
+      await waitFor(() => fs.access(path.join(paths.root, "pool-maintenance.lock")).then(() => true, () => false));
+      const reserved = await reserveAvailableWorkspace(paths, {
+        owner: "concurrent-agent",
+        hostname: "host",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        branch: "agent/concurrent",
+      }, first.created[1]);
+      assert.ok(reserved?.assignment && reserved.operationId);
+      claimed = await recordSuccessfulAcquisition(paths, reserved.assignment.id, reserved.operationId, true);
+      warming = run(process.execPath, [cli, "warm", "--count", "1", "--json"], { cwd: root });
+    });
   });
   const [collected, warmed] = await Promise.all([collecting, warming]);
-  assert.equal(JSON.parse(collected.stdout).removed[0].path, first.created[0]);
+  assert.deepEqual(JSON.parse(collected.stdout).removed.map((entry: { path: string }) => entry.path), [first.created[0]]);
   assert.equal(JSON.parse(warmed.stdout).available, 1);
   await assert.rejects(fs.access(first.created[0]));
+  await run(process.execPath, [cli, "release", claimed.assignment!.id, "--json"], { cwd: root });
 });
 
 test("gc recovers an interrupted acquire handoff", async (t) => {

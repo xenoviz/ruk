@@ -274,10 +274,12 @@ export async function renewAssignment(
   assignmentId: string,
   expiresAt: string,
   now?: string,
+  expectedRenewedAt?: string,
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "assigned");
+    if (expectedRenewedAt && workspace.assignment!.renewedAt !== expectedRenewedAt) return workspace;
     const renewedAt = timestamp(now, "now");
     const nextExpiry = timestamp(expiresAt, "expiresAt");
     if (Date.parse(nextExpiry) <= Date.parse(renewedAt)) {

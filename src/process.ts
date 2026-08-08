@@ -118,8 +118,9 @@ export async function run(
           const expectedIdentity = await spawnedIdentity;
           const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
           if (!killed) child.kill("SIGKILL");
-        } catch {
+        } catch (cleanupError) {
           child.kill("SIGKILL");
+          if (cleanupError instanceof ProcessIdentityUnavailableError) spawnError = cleanupError;
         }
       });
     });
@@ -367,13 +368,18 @@ async function terminateProcessTerminal(
   return members.length > 0;
 }
 
-export async function trackedProcessExists(record: TrackedProcessRecord): Promise<boolean> {
+export async function trackedProcessExists(
+  record: TrackedProcessRecord,
+  identify: (pid: number) => Promise<string | null> = processIdentity,
+  descendantsExist: (pid: number) => Promise<boolean> = processDescendantsExist,
+): Promise<boolean> {
   if (record.terminalId !== undefined) return processTerminalExists(record.terminalId);
   if (record.sessionId !== undefined) return processSessionExists(record.sessionId);
-  if (record.groupId !== undefined) return processDescendantsExist(record.groupId);
-  const identity = await processIdentity(record.pid);
-  if (identity) return identity === record.startedAt;
-  return processDescendantsExist(record.pid);
+  if (record.groupId !== undefined) return descendantsExist(record.groupId);
+  const identity = await identify(record.pid);
+  if (identity === record.startedAt) return true;
+  if (await descendantsExist(record.pid)) throw new ProcessIdentityUnavailableError(record.pid);
+  return false;
 }
 
 export async function terminateTrackedProcess(record: TrackedProcessRecord, force = false): Promise<boolean> {
@@ -425,7 +431,13 @@ export async function killProcessTree(
 }
 
 async function terminateSpawnedProcess(pid: number, detached: boolean, expectedIdentity: string | null): Promise<boolean> {
-  if (process.platform === "win32") return expectedIdentity ? killProcessTree(pid, true, expectedIdentity) : false;
+  if (process.platform === "win32") {
+    if (expectedIdentity) return killProcessTree(pid, true, expectedIdentity);
+    const result = await run("taskkill", ["/PID", String(pid), "/T", "/F"], { allowFailure: true });
+    if (result.code === 0) return true;
+    if (await processDescendantsExist(pid)) throw new ProcessIdentityUnavailableError(pid);
+    return false;
+  }
   if (detached) {
     const identity = await processIdentity(pid);
     if (identity && expectedIdentity && identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
