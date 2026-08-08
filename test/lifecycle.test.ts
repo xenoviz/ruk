@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   addAssignmentProcess,
+  allocateAssignmentPorts,
   beginWorkspaceCollection,
   beginWorkspaceReturn,
   cancelWorkspaceCollection,
@@ -14,13 +15,16 @@ import {
   finishWorkspaceReturn,
   identifyGcCandidates,
   markWorkspaceAssigned,
+  markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
+  recordSuccessfulAcquisition,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
 } from "../src/lifecycle.js";
-import { readState, storePaths } from "../src/state.js";
+import { withDirectoryLock } from "../src/lock.js";
+import { readState, storePaths, treeKey } from "../src/state.js";
 import type { StorePaths, WorkspaceRecord } from "../src/types.js";
 
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -49,12 +53,13 @@ async function assign(
   expiresAt = T2,
 ): Promise<WorkspaceRecord> {
   const preparing = await prepare(paths, workspacePath, now);
-  return markWorkspaceAssigned(paths, workspacePath, preparing.operationId!, {
+  const assigned = await markWorkspaceAssigned(paths, workspacePath, preparing.operationId!, {
     owner: "agent",
     hostname: "host",
     expiresAt,
     now,
   });
+  return recordSuccessfulAcquisition(paths, assigned.assignment!.id, assigned.operationId!, false, now);
 }
 
 async function makeAvailable(
@@ -87,7 +92,16 @@ test("preparation and assignment finalizers are fenced by immutable IDs", async 
     now: T0,
   });
   assert.match(first.assignment!.id, /^[0-9a-f-]{36}$/i);
-  await beginWorkspaceReturn(paths, first.assignment!.id, T1);
+  await assert.rejects(beginWorkspaceReturn(paths, first.assignment!.id, T1), /acquisition is still in progress/);
+  await assert.rejects(
+    beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, crypto.randomUUID()),
+    /acquisition is still in progress/,
+  );
+  await assert.rejects(
+    beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, first.operationId!, T1),
+    /changed before collection/,
+  );
+  await beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, first.operationId!, T0);
   await finishWorkspaceReturn(paths, first.assignment!.id, T1);
   const second = await reserveAvailableWorkspace(paths, {
     owner: "other",
@@ -108,7 +122,16 @@ test("renewal requires the exact active assignment", async (t) => {
   assert.equal(renewed.assignment!.assignedAt, T0);
   assert.equal(renewed.assignment!.renewedAt, T1);
   assert.equal(renewed.assignment!.expiresAt, T3);
+  const preserved = await renewAssignment(paths, workspace.assignment!.id, T2, T0, T0);
+  assert.equal(preserved.assignment!.renewedAt, T1);
+  assert.equal(preserved.assignment!.expiresAt, T3);
   await assert.rejects(renewAssignment(paths, crypto.randomUUID(), T3, T1), /does not exist/);
+  await assert.rejects(
+    beginWorkspaceReturn(paths, workspace.assignment!.id, T2, undefined, crypto.randomUUID()),
+    /acquisition operation does not match/,
+  );
+  await assert.rejects(beginWorkspaceReturn(paths, workspace.assignment!.id, T2, T2), /renewed before collection/);
+  assert.equal((await readState(paths)).workspaces[treeKey(workspace.path)]!.lifecycle, "assigned");
 });
 
 test("return transitions retain ownership until tracked processes are removed", async (t) => {
@@ -118,7 +141,7 @@ test("return transitions retain ownership until tracked processes are removed", 
   await addAssignmentProcess(
     paths,
     assignmentId,
-    { pid: 42, groupId: 42, command: ["node", "server.js"], startedAt: "process-identity" },
+    { pid: 42, terminalId: "ttys001", command: ["node", "server.js"], startedAt: "process-identity" },
     T1,
   );
   const returning = await beginWorkspaceReturn(paths, assignmentId, T1);
@@ -140,9 +163,58 @@ test("return transitions retain ownership until tracked processes are removed", 
   assert.equal(available.assignment, null);
 });
 
+test("failed return restores an interrupted acquisition marker", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspacePath = path.join(root, "workspace");
+  const preparing = await prepare(paths, workspacePath);
+  const assigned = await markWorkspaceAssigned(paths, workspacePath, preparing.operationId!, {
+    owner: "agent",
+    hostname: "host",
+    expiresAt: T2,
+    now: T0,
+  });
+
+  await assert.rejects(
+    beginWorkspaceReturn(paths, assigned.assignment!.id, T1),
+    /acquisition is still in progress/,
+  );
+  const returning = await beginWorkspaceReturn(
+    paths,
+    assigned.assignment!.id,
+    T1,
+    undefined,
+    assigned.operationId!,
+  );
+  assert.equal(returning.operationId, assigned.operationId);
+  const cancelled = await cancelWorkspaceReturn(paths, assigned.assignment!.id, "cleanup failed", T2);
+  assert.equal(cancelled.operationId, assigned.operationId);
+  assert.equal(
+    (await identifyGcCandidates(paths, T2, T2, true)).some(({ reason }) => reason === "abandoned-acquisition"),
+    true,
+  );
+
+  await beginWorkspaceReturn(paths, assigned.assignment!.id, T2, undefined, assigned.operationId!);
+  const available = await finishWorkspaceReturn(paths, assigned.assignment!.id, T3);
+  assert.equal(available.operationId, null);
+});
+
 test("only one concurrent caller reserves an available workspace", async (t) => {
   const { root, paths } = await fixture(t);
   await makeAvailable(paths, path.join(root, "workspace"));
+  let blockedReservation!: ReturnType<typeof reserveAvailableWorkspace>;
+  await withDirectoryLock(path.join(paths.root, "warm.lock"), async () => {
+    blockedReservation = reserveAvailableWorkspace(paths, {
+      owner: "blocked",
+      hostname: "host",
+      expiresAt: T3,
+      now: T2,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(Object.values((await readState(paths)).workspaces)[0]!.lifecycle, "available");
+  });
+  const reserved = (await blockedReservation)!;
+  await beginWorkspaceReturn(paths, reserved.assignment!.id, T2, undefined, reserved.operationId!);
+  await finishWorkspaceReturn(paths, (await blockedReservation)!.assignment!.id, T2);
   const results = await Promise.all(
     ["one", "two"].map((owner) =>
       reserveAvailableWorkspace(paths, { owner, hostname: "host", expiresAt: T3, now: T2 }),
@@ -150,6 +222,82 @@ test("only one concurrent caller reserves an available workspace", async (t) => 
   );
   assert.equal(results.filter(Boolean).length, 1);
   assert.equal((await findAssignments(paths, { now: T2 })).length, 1);
+});
+
+test("warm workspaces become available and named ports remain unique", async (t) => {
+  const { root, paths } = await fixture(t);
+  const warm = await prepare(paths, path.join(root, "warm"));
+  const available = await markWorkspaceAvailable(paths, warm.path, warm.operationId!, T1);
+  assert.equal(available.lifecycle, "available");
+
+  const first = await reserveAvailableWorkspace(paths, {
+    owner: "one",
+    hostname: "host",
+    expiresAt: T3,
+    now: T2,
+  });
+  const second = await assign(paths, path.join(root, "second"), T1, T3);
+  const allocator = async (excluded: ReadonlySet<number>) => excluded.has(4100) ? 4101 : 4100;
+  const [firstPorts, secondPorts] = await Promise.all([
+    allocateAssignmentPorts(paths, first!.assignment!.id, ["app"], allocator),
+    allocateAssignmentPorts(paths, second.assignment!.id, ["debug"], allocator),
+  ]);
+  assert.notEqual(firstPorts.assignment!.ports["app"], secondPorts.assignment!.ports["debug"]);
+  await assert.rejects(
+    allocateAssignmentPorts(paths, first!.assignment!.id, ["web-app", "web_app"], allocator),
+    /unique after normalization/,
+  );
+  await recordSuccessfulAcquisition(paths, first!.assignment!.id, first!.operationId!, true);
+
+  const state = await readState(paths);
+  assert.equal(state.metrics.acquisitions, 2);
+  assert.equal(state.metrics.workspaceReuses, 1);
+});
+
+test("named port reservations preserve prototype-like names", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"));
+  const allocated = await allocateAssignmentPorts(
+    paths,
+    workspace.assignment!.id,
+    ["__proto__"],
+    async () => 4100,
+  );
+
+  assert.equal(Object.hasOwn(allocated.assignment!.ports, "__proto__"), true);
+  assert.equal(allocated.assignment!.ports["__proto__"], 4100);
+  const persisted = Object.values((await readState(paths)).workspaces)[0]!;
+  assert.equal(persisted.assignment!.ports["__proto__"], 4100);
+});
+
+test("corrupt assignment state cannot release a host port reservation", async (t) => {
+  const { root, paths } = await fixture(t);
+  const assigned = await assign(paths, path.join(root, "workspace"));
+  await allocateAssignmentPorts(paths, assigned.assignment!.id, ["app"], async () => 4199);
+  const validState = await fs.readFile(paths.state, "utf8");
+  await fs.writeFile(paths.state, "{");
+  await assert.rejects(
+    allocateAssignmentPorts(paths, assigned.assignment!.id, ["debug"], async () => 4200),
+    SyntaxError,
+  );
+  await fs.writeFile(paths.state, validState);
+  await beginWorkspaceReturn(paths, assigned.assignment!.id);
+  await finishWorkspaceReturn(paths, assigned.assignment!.id);
+});
+
+test("named ports remain unique across repositories", async (t) => {
+  const { root, paths } = await fixture(t);
+  const otherPaths = storePaths(path.join(root, "other-repository"));
+  const first = await assign(paths, path.join(root, "first"));
+  const second = await assign(otherPaths, path.join(root, "second"));
+  const allocator = async (excluded: ReadonlySet<number>) => excluded.has(4100) ? 4101 : 4100;
+
+  const [firstPorts, secondPorts] = await Promise.all([
+    allocateAssignmentPorts(paths, first.assignment!.id, ["app"], allocator),
+    allocateAssignmentPorts(otherPaths, second.assignment!.id, ["app"], allocator),
+  ]);
+
+  assert.notEqual(firstPorts.assignment!.ports["app"], secondPorts.assignment!.ports["app"]);
 });
 
 test("GC selects stale safe records and reports expired assignments without reclaiming them", async (t) => {
@@ -160,8 +308,17 @@ test("GC selects stale safe records and reports expired assignments without recl
   const expired = await assign(paths, path.join(root, "expired"), T0, T1);
   await assign(paths, path.join(root, "active"), T1, T3);
   await prepare(paths, path.join(root, "preparing"), T0);
+  const acquiringPreparation = await prepare(paths, path.join(root, "acquiring"), T0);
+  await markWorkspaceAssigned(paths, acquiringPreparation.path, acquiringPreparation.operationId!, {
+    owner: "agent",
+    hostname: "host",
+    expiresAt: T3,
+    now: T0,
+  });
+  const interruptedCollection = await makeAvailable(paths, path.join(root, "collecting"), T0);
+  await beginWorkspaceCollection(paths, interruptedCollection.path, interruptedCollection.updatedAt, T1);
 
-  const candidates = await identifyGcCandidates(paths, T1, T2);
+  const candidates = await identifyGcCandidates(paths, T1, T2, true);
   assert.deepEqual(
     candidates.map(({ workspace, reason, requiresForce }) => ({
       name: path.basename(workspace.path),
@@ -169,9 +326,12 @@ test("GC selects stale safe records and reports expired assignments without recl
       requiresForce,
     })),
     [
+      { name: "acquiring", reason: "abandoned-acquisition", requiresForce: false },
       { name: "available", reason: "available", requiresForce: false },
+      { name: "collecting", reason: "interrupted-collection", requiresForce: false },
       { name: "expired", reason: "expired-assignment", requiresForce: true },
       { name: "failed", reason: "failed", requiresForce: false },
+      { name: "preparing", reason: "abandoned-preparation", requiresForce: false },
     ],
   );
   assert.equal((await findAssignments(paths, { id: expired.assignment!.id, now: T2 }))[0]?.expired, true);

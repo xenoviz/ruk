@@ -5,6 +5,7 @@ import path from "node:path";
 import { loadConfig, detectPackageManager } from "./config.js";
 import {
   assertSharedBackendSupported,
+  dependencyProjectionsAreValid,
   dependenciesPresent,
   ensureDependencies,
 } from "./dependencies.js";
@@ -12,6 +13,8 @@ import { dependencyFingerprint } from "./fingerprint.js";
 import {
   addWorktree,
   assignWorktree,
+  fetchDefaultRemote,
+  fetchRemote,
   getRepository,
   listWorktrees,
   lockWorktree,
@@ -30,15 +33,29 @@ import {
   finishWorkspaceReturn,
   identifyGcCandidates,
   markWorkspaceAssigned,
+  markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
+  recordSuccessfulAcquisition,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
+  allocateAssignmentPorts,
 } from "./lifecycle.js";
 import { withDirectoryLock } from "./lock.js";
-import { killProcessTree, processIdentity, run } from "./process.js";
+import { portEnvironment } from "./ports.js";
+import {
+  commandExists,
+  ProcessIdentityUnavailableError,
+  processIdentity,
+  requireChildProcessSession,
+  requireProcessIdentity,
+  run,
+  terminateTrackedProcess,
+  trackedProcessExists,
+} from "./process.js";
 import { deleteTreeState, readState, storePaths, treeKey, treeLockPath } from "./state.js";
+import { diskStatistics, usageStatistics } from "./statistics.js";
 import type { CliIo, DependencyReporter, StorePaths, TrackedProcessRecord, WorkspaceRecord } from "./types.js";
 import { formatUpdate, updateRuk } from "./update.js";
 import type { Distribution } from "./update.js";
@@ -48,15 +65,19 @@ const HELP = `Ruk — dependency-aware Git workspaces for parallel coding agents
 
 Usage:
   ruk init [--json]
-  ruk create <branch> [--path <directory>] [--from <ref>] [--detach] [--json]
-  ruk acquire <branch> [--from <ref>] [--ttl <minutes>] [--owner <id>] [--json]
+  ruk create <branch> [--path <directory>] [--from <ref>] [--fetch] [--detach] [--json]
+  ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] [--json]
   ruk renew <assignment-id> [--ttl <minutes>] [--json]
   ruk release <assignment-id> [--force] [--json]
   ruk sync [--json]
   ruk run -- <command> [args...]
+  ruk exec <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] -- <command> [args...]
+  ruk warm --count <n> [--from <ref>] [--fetch] [--json]
+  ruk shell <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...]
   ruk list [--json]
   ruk remove <path> [--force]
-  ruk status [--json]
+  ruk status [--explain] [--json]
+  ruk stats [--disk] [--json]
   ruk gc [--max-age <minutes>] [--apply] [--force-expired] [--json]
   ruk update [--check] [--json]
 
@@ -76,6 +97,11 @@ interface ParsedOptions {
   maxAge?: string;
   apply?: boolean;
   forceExpired?: boolean;
+  fetch?: boolean;
+  explain?: boolean;
+  disk?: boolean;
+  count?: string;
+  ports?: string[];
 }
 
 function parseOptions(
@@ -102,7 +128,8 @@ function parseOptions(
       const value = args[index + 1];
       if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
       const key = argument.slice(2).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
-      (options as Record<string, string | boolean | undefined>)[key] = value;
+      if (argument === "--port") options.ports = [...(options.ports ?? []), value];
+      else (options as Record<string, string | boolean | undefined>)[key] = value;
       index += 1;
       continue;
     }
@@ -138,10 +165,8 @@ async function context(cwd: string) {
 function dependencyReporter(io: CliIo, json: boolean): DependencyReporter {
   return json
     ? {
-        write: (message: string) => {
-          io.stderr.write(message);
-        },
-        stdio: ["ignore", io.stderr, io.stderr],
+        write: () => {},
+        stdio: "ignore",
       }
     : {
         write: (message: string) => {
@@ -175,7 +200,12 @@ async function sync(cwd: string, io: CliIo, json = false, emit = true) {
 
 function minutes(value: string | undefined, fallback: number, name: string, allowZero = false): number {
   const parsed = value === undefined ? fallback : Number(value);
-  if (!Number.isFinite(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+  const timestamp = Date.now() + parsed * 60_000;
+  if (
+    !Number.isFinite(parsed) ||
+    (allowZero ? parsed < 0 : parsed <= 0) ||
+    !Number.isFinite(new Date(timestamp).getTime())
+  ) {
     throw new Error(`${name} must be ${allowZero ? "a non-negative" : "a positive"} number of minutes`);
   }
   return parsed;
@@ -183,6 +213,22 @@ function minutes(value: string | undefined, fallback: number, name: string, allo
 
 function expiresIn(durationMinutes: number): string {
   return new Date(Date.now() + durationMinutes * 60_000).toISOString();
+}
+
+async function fetchIfRequested(repository: string, startPoint: string, requested: boolean): Promise<void> {
+  if (requested) await fetchRemote(repository, startPoint);
+}
+
+async function resolveStartPoint(
+  repository: string,
+  requested: string | undefined,
+  fetch: boolean,
+): Promise<string> {
+  if (requested) {
+    await fetchIfRequested(repository, requested, fetch);
+    return requested;
+  }
+  return fetch ? fetchDefaultRemote(repository) : "HEAD";
 }
 
 async function canonicalPath(value: string): Promise<string> {
@@ -193,88 +239,134 @@ async function canonicalPath(value: string): Promise<string> {
   }
 }
 
-async function acquire(args: readonly string[], cwd: string, io: CliIo) {
+async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = true) {
   const { options, positional } = parseOptions(args, {
-    values: ["--from", "--ttl", "--owner"],
-    flags: ["--json"],
+    values: ["--from", "--ttl", "--owner", "--port"],
+    flags: ["--fetch", "--json"],
   });
   requirePositionals(positional, 1, "acquire requires exactly one branch name");
   const branch = positional[0]!;
-  const { repository } = await repositoryContext(cwd);
-  const paths = storePaths(repository.commonDir);
   const ttl = minutes(options.ttl, 480, "--ttl");
+  const { repository } = await repositoryContext(cwd);
+  const startPoint = await resolveStartPoint(repository.root, options.from, options.fetch ?? false);
+  const paths = storePaths(repository.commonDir);
   const assignmentBase = {
     owner: options.owner ?? process.env["RUK_AGENT_ID"] ?? `${os.hostname()}:${process.pid}`,
     hostname: os.hostname(),
     branch,
   };
-  let workspace = await reserveAvailableWorkspace(paths, { ...assignmentBase, expiresAt: expiresIn(ttl) });
-  const reused = workspace !== null;
-  let operationId: string | null = null;
+  const finishAcquisition = async (workspace: WorkspaceRecord, reused: boolean) => {
+    let operationId = reused ? null : workspace.operationId;
+    const initialRenewedAt = workspace.assignment?.renewedAt;
+    let dependenciesReady = false;
+    try {
+      if (!reused) {
+        await addWorktree({
+          cwd: repository.root,
+          destination: workspace.path,
+          branch,
+          startPoint,
+          detach: true,
+          stdio: options.json ? "pipe" : "inherit",
+        });
+        await lockWorktree(repository.root, workspace.path);
+      }
+      await assignWorktree({
+        repository: repository.root,
+        workspace: workspace.path,
+        branch,
+        startPoint,
+      });
+      const prepared = await sync(workspace.path, io, options.json ?? false, false);
+      dependenciesReady = true;
+      if (operationId) {
+        workspace = await markWorkspaceAssigned(paths, workspace.path, operationId, {
+          ...assignmentBase,
+          expiresAt: expiresIn(ttl),
+        });
+        operationId = null;
+      } else {
+        workspace = await renewAssignment(paths, workspace.assignment!.id, expiresIn(ttl), undefined, initialRenewedAt);
+      }
+      if (options.ports?.length) {
+        workspace = await allocateAssignmentPorts(paths, workspace.assignment!.id, options.ports);
+      }
+      workspace = await recordSuccessfulAcquisition(
+        paths,
+        workspace.assignment!.id,
+        workspace.operationId!,
+        reused,
+      );
+      const result = {
+        status: "assigned",
+        assignmentId: workspace.assignment!.id,
+        path: workspace.path,
+        branch,
+        expiresAt: workspace.assignment!.expiresAt,
+        reused,
+        fingerprint: prepared.fingerprint,
+        mode: prepared.mode,
+        ports: workspace.assignment!.ports,
+      };
+      if (emit && options.json) io.stdout.write(jsonLine(result));
+      else if (emit) {
+        io.stdout.write(`Assigned ${workspace.path}\nAssignment: ${result.assignmentId}\nExpires: ${result.expiresAt}\n`);
+        for (const [name, port] of Object.entries(result.ports)) io.stdout.write(`${name}: ${port}\n`);
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      let returning = false;
+      try {
+        if (operationId) {
+          await markWorkspaceFailed(paths, workspace.path, operationId, message);
+        } else if (workspace.assignment) {
+          await beginWorkspaceReturn(paths, workspace.assignment.id, undefined, undefined, workspace.operationId!);
+          returning = true;
+          const projections = (await readState(paths)).trees[treeKey(workspace.path)]?.projections ?? [];
+          await returnWorktree(workspace.path, true, dependenciesReady ? projections : []);
+          if (!dependenciesReady) await deleteTreeState(paths, workspace.path);
+          await finishWorkspaceReturn(paths, workspace.assignment.id);
+        }
+      } catch (cleanupError) {
+        if (returning) {
+          const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          try { await cancelWorkspaceReturn(paths, workspace.assignment!.id, cleanupMessage); } catch { /* Preserve both failures. */ }
+        }
+        throw new AggregateError([error, cleanupError], `Workspace acquisition failed and cleanup also failed for ${workspace.path}`);
+      }
+      throw error;
+    }
+  };
 
-  if (!workspace) {
+  while (true) {
+    const available = Object.values((await readState(paths)).workspaces)
+      .filter((workspace) => workspace.lifecycle === "available" && workspace.operationId === null)
+      .sort(
+        (left, right) =>
+          (left.availableAt ?? "").localeCompare(right.availableAt ?? "") || left.path.localeCompare(right.path),
+      )[0];
+    if (available) {
+      const result = await withDirectoryLock(`${treeLockPath(paths, available.path)}.acquire`, async () => {
+        const reserved = await reserveAvailableWorkspace(
+          paths,
+          { ...assignmentBase, expiresAt: expiresIn(ttl) },
+          available.path,
+        );
+        return reserved ? finishAcquisition(reserved, true) : null;
+      });
+      if (result) return result;
+      continue;
+    }
+
     const destination = path.join(
       path.dirname(repository.root),
       `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
     );
-    workspace = await recordPreparingWorkspace(paths, { path: destination, branch });
-    operationId = workspace.operationId;
-  }
-
-  try {
-    if (!reused) {
-      await addWorktree({
-        cwd: repository.root,
-        destination: workspace.path,
-        branch,
-        startPoint: options.from ?? "HEAD",
-        detach: true,
-        stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
-      });
-      await lockWorktree(repository.root, workspace.path);
-    }
-    await assignWorktree({
-      repository: repository.root,
-      workspace: workspace.path,
-      branch,
-      startPoint: options.from ?? "HEAD",
+    return withDirectoryLock(`${treeLockPath(paths, destination)}.acquire`, async () => {
+      const workspace = await recordPreparingWorkspace(paths, { path: destination, branch });
+      return finishAcquisition(workspace, false);
     });
-    const prepared = await sync(workspace.path, io, options.json ?? false, false);
-    if (operationId) {
-      workspace = await markWorkspaceAssigned(paths, workspace.path, operationId, {
-        ...assignmentBase,
-        expiresAt: expiresIn(ttl),
-      });
-    } else {
-      workspace = await renewAssignment(paths, workspace.assignment!.id, expiresIn(ttl));
-    }
-    const result = {
-      status: "assigned",
-      assignmentId: workspace.assignment!.id,
-      path: workspace.path,
-      branch,
-      expiresAt: workspace.assignment!.expiresAt,
-      reused,
-      fingerprint: prepared.fingerprint,
-      mode: prepared.mode,
-    };
-    if (options.json) io.stdout.write(jsonLine(result));
-    else io.stdout.write(`Assigned ${workspace.path}\nAssignment: ${result.assignmentId}\nExpires: ${result.expiresAt}\n`);
-    return result;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    try {
-      if (operationId) {
-        await markWorkspaceFailed(paths, workspace.path, operationId, message);
-      } else if (workspace.assignment) {
-        await beginWorkspaceReturn(paths, workspace.assignment.id);
-        await returnWorktree(workspace.path, true);
-        await finishWorkspaceReturn(paths, workspace.assignment.id);
-      }
-    } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], `Workspace acquisition failed and cleanup also failed for ${workspace.path}`);
-    }
-    throw error;
   }
 }
 
@@ -306,8 +398,7 @@ const delay = (milliseconds: number): Promise<void> =>
 async function processExited(record: TrackedProcessRecord, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   do {
-    const identity = await processIdentity(record.pid);
-    if (!identity || identity !== record.startedAt) return true;
+    if (!(await trackedProcessExists(record))) return true;
     await delay(50);
   } while (Date.now() < deadline);
   return false;
@@ -321,13 +412,11 @@ async function cleanTrackedProcesses(
 ): Promise<number> {
   let cleaned = 0;
   for (const record of processes) {
-    const identity = await processIdentity(record.pid);
-    if (identity === record.startedAt) {
-      await killProcessTree(record.groupId ?? record.pid, false, identity);
-      cleaned += 1;
+    if (await trackedProcessExists(record)) {
+      if (await terminateTrackedProcess(record)) cleaned += 1;
       if (!(await processExited(record, 1_500))) {
         if (!force) throw new Error(`Tracked process ${record.pid} survived graceful termination; retry with --force`);
-        await killProcessTree(record.groupId ?? record.pid, true, identity);
+        await terminateTrackedProcess(record, true);
         if (!(await processExited(record, 1_500))) throw new Error(`Could not terminate tracked process ${record.pid}`);
       }
     }
@@ -347,6 +436,9 @@ async function releaseAssignment(
   repository: Awaited<ReturnType<typeof getRepository>>,
   assignmentId: string,
   force: boolean,
+  requireExpiredBy?: string,
+  acquisitionOperationId?: string,
+  expectedUpdatedAt?: string,
 ): Promise<{ workspace: WorkspaceRecord; cleanedProcesses: number }> {
   const paths = storePaths(repository.commonDir);
   const matches = await findAssignments(paths, { id: assignmentId });
@@ -355,10 +447,22 @@ async function releaseAssignment(
   return withDirectoryLock(treeLockPath(paths, workspacePath), async () => {
     let returning = false;
     try {
-      const workspace = await beginWorkspaceReturn(paths, assignmentId);
+      const workspace = await beginWorkspaceReturn(
+        paths,
+        assignmentId,
+        undefined,
+        requireExpiredBy,
+        acquisitionOperationId,
+        expectedUpdatedAt,
+      );
       returning = true;
       const cleanedProcesses = await cleanTrackedProcesses(paths, assignmentId, workspace.processes, force);
-      await returnWorktree(workspace.path, force);
+      const tree = (await readState(paths)).trees[treeKey(workspace.path)];
+      const projections = tree && (await dependencyProjectionsAreValid(workspace.path, tree))
+        ? tree.projections
+        : [];
+      await returnWorktree(workspace.path, force, projections);
+      if (tree && projections.length === 0) await deleteTreeState(paths, workspace.path);
       const available = await finishWorkspaceReturn(paths, assignmentId);
       return { workspace: available, cleanedProcesses };
     } catch (error) {
@@ -389,11 +493,12 @@ async function release(args: readonly string[], cwd: string, io: CliIo) {
 async function create(args: readonly string[], cwd: string, io: CliIo) {
   const { options, positional } = parseOptions(args, {
     values: ["--path", "--from"],
-    flags: ["--detach", "--json"],
+    flags: ["--detach", "--fetch", "--json"],
   });
   requirePositionals(positional, 1, "create requires exactly one branch name");
   const branch = positional[0]!;
   const { repository, manager } = await context(cwd);
+  const startPoint = await resolveStartPoint(repository.root, options.from, options.fetch ?? false);
   const backend = await dependencyFingerprint({ root: repository.root, manager });
   if (manager.dependencyMode === "shared") assertSharedBackendSupported(backend.manager);
   const destination = path.resolve(
@@ -405,9 +510,9 @@ async function create(args: readonly string[], cwd: string, io: CliIo) {
     cwd: repository.root,
     destination,
     branch,
-    startPoint: options.from ?? "HEAD",
+    startPoint,
     detach: options.detach ?? false,
-    stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
+    stdio: options.json ? "pipe" : "inherit",
   });
 
   try {
@@ -424,7 +529,7 @@ async function create(args: readonly string[], cwd: string, io: CliIo) {
         cwd: repository.root,
         destination,
         force: true,
-        stdio: options.json ? ["ignore", io.stderr, io.stderr] : "inherit",
+        stdio: options.json ? "pipe" : "inherit",
       });
     } catch (cleanupError) {
       throw new AggregateError(
@@ -469,7 +574,7 @@ async function list(args: readonly string[], cwd: string, io: CliIo) {
 }
 
 async function status(args: readonly string[], cwd: string, io: CliIo) {
-  const { options, positional } = parseOptions(args, { flags: ["--json"] });
+  const { options, positional } = parseOptions(args, { flags: ["--explain", "--json"] });
   requirePositionals(positional, 0, "status does not accept positional arguments");
   const value = await context(cwd);
   const paths = storePaths(value.repository.commonDir);
@@ -481,7 +586,17 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     value.repository.root,
     record?.projections ?? ["node_modules"],
   );
-  const ready = record?.fingerprint === current.fingerprint && modulesPresent;
+  const projectionsValid = record ? await dependencyProjectionsAreValid(value.repository.root, record) : false;
+  const ready = record?.fingerprint === current.fingerprint && projectionsValid;
+  const reason = ready
+    ? null
+    : !record
+      ? "not-prepared"
+      : !modulesPresent
+        ? "dependencies-missing"
+        : record.fingerprint !== current.fingerprint
+          ? "fingerprint-changed"
+          : "projection-changed";
   const result = {
     path: value.repository.root,
     fingerprint: current.fingerprint,
@@ -489,6 +604,8 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     mode: record?.mode ?? null,
     nodeModulesPresent: modulesPresent,
     status: ready ? "ready" : "sync-required",
+    reason,
+    recovery: ready ? null : "ruk sync",
     lifecycle: lifecycle?.lifecycle ?? null,
     assignmentId: lifecycle?.assignment?.id ?? null,
     expiresAt: lifecycle?.assignment?.expiresAt ?? null,
@@ -502,9 +619,10 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     io.stdout.write(`Mode:        ${result.mode ?? "-"}\n`);
     io.stdout.write(`node_modules:${modulesPresent ? " present" : " missing"}\n`);
     io.stdout.write(`Status:      ${result.status}\n`);
+    if (options.explain && reason) io.stdout.write(`Reason:      ${reason}\nRecovery:    ${result.recovery}\n`);
     io.stdout.write(`Lifecycle:   ${result.lifecycle ?? "unmanaged"}\n`);
     if (result.assignmentId) io.stdout.write(`Assignment:  ${result.assignmentId} (expires ${result.expiresAt})\n`);
-    if (!ready) io.stdout.write("Next:        ruk sync\n");
+    if (!ready && !options.explain) io.stdout.write("Next:        ruk sync\n");
   }
   return result;
 }
@@ -531,31 +649,47 @@ async function remove(args: readonly string[], cwd: string) {
   });
 }
 
-async function collectWorkspace(
+async function collectWorkspaceWithAcquisitionLock(
   repository: Awaited<ReturnType<typeof getRepository>>,
   paths: StorePaths,
   workspace: WorkspaceRecord,
+  stdio: "pipe" | "inherit" = "inherit",
 ): Promise<void> {
   await withDirectoryLock(treeLockPath(paths, workspace.path), async () => {
     const collecting = await beginWorkspaceCollection(paths, workspace.path, workspace.updatedAt);
     let gitRemoved = false;
+    let unlocked = false;
     try {
       const worktrees = await listWorktrees(repository.root);
       const managedPath = await canonicalPath(workspace.path);
       if (await Promise.all(worktrees.map((entry) => canonicalPath(entry.path))).then((entries) => entries.includes(managedPath))) {
         await unlockWorktree(repository.root, workspace.path);
-        await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true });
+        unlocked = true;
+        await removeWorktree({ cwd: repository.root, destination: workspace.path, force: true, stdio });
       }
       gitRemoved = true;
       await deleteWorkspaceRecord(paths, workspace.path, collecting.operationId!);
       await deleteTreeState(paths, workspace.path);
     } catch (error) {
       if (!gitRemoved) {
-        try { await cancelWorkspaceCollection(paths, workspace.path, collecting.operationId!); } catch { /* Preserve the original failure. */ }
+        let cleanupError: unknown;
+        if (unlocked) {
+          try { await lockWorktree(repository.root, workspace.path); } catch (failure) { cleanupError = failure; }
+        }
+        if (!cleanupError) {
+          try {
+            await cancelWorkspaceCollection(paths, workspace.path, collecting.operationId!);
+          } catch (failure) {
+            cleanupError = failure;
+          }
+        }
+        if (cleanupError) {
+          throw new AggregateError([error, cleanupError], `Workspace collection failed and recovery also failed for ${workspace.path}`);
+        }
       }
       throw error;
     }
-  });
+  }, { staleMs: 0 });
 }
 
 async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
@@ -569,41 +703,165 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   const paths = storePaths(repository.commonDir);
   const cutoff = new Date(Date.now() - minutes(options.maxAge, 1440, "--max-age", true) * 60_000).toISOString();
   const current = await canonicalPath(repository.root);
-  const candidates = await identifyGcCandidates(paths, cutoff);
+  return withDirectoryLock(path.join(paths.root, "pool-maintenance.lock"), async () => {
+  const candidates = await withDirectoryLock(
+    path.join(paths.root, "warm.lock"),
+    () => identifyGcCandidates(paths, cutoff, undefined, true),
+    { staleMs: 0 },
+  );
   const expiredCandidates = candidates.filter((candidate) => candidate.requiresForce);
   const safeCandidates = candidates.filter((candidate) => !candidate.requiresForce);
   const removed: Array<{ path: string; lifecycle: string; reason: string }> = [];
+  const candidateReason = (reason: (typeof safeCandidates)[number]["reason"]): string => {
+    if (reason === "abandoned-preparation") return "abandoned preparation";
+    if (reason === "abandoned-acquisition") return "abandoned acquisition";
+    if (reason === "interrupted-collection") return "interrupted collection";
+    return "older than max age";
+  };
 
   if (options.apply) {
     for (const candidate of safeCandidates) {
       if (await canonicalPath(candidate.workspace.path) === current) continue;
-      await collectWorkspace(repository, paths, candidate.workspace);
-      removed.push({ path: candidate.workspace.path, lifecycle: candidate.workspace.lifecycle, reason: "older than max age" });
+      if (candidate.reason === "abandoned-acquisition") {
+        const collected = await withDirectoryLock(
+          `${treeLockPath(paths, candidate.workspace.path)}.acquire`,
+          async () => {
+            const currentCandidate = (await identifyGcCandidates(paths, cutoff, undefined, true)).find(
+              (entry) =>
+                entry.reason === "abandoned-acquisition" &&
+                treeKey(entry.workspace.path) === treeKey(candidate.workspace.path) &&
+                entry.workspace.operationId === candidate.workspace.operationId &&
+                entry.workspace.assignment?.id === candidate.workspace.assignment?.id,
+            );
+            if (!currentCandidate) return false;
+            const assignmentId = currentCandidate.workspace.assignment!.id;
+            let released: Awaited<ReturnType<typeof releaseAssignment>>;
+            try {
+              released = await releaseAssignment(
+                repository,
+                assignmentId,
+                true,
+                undefined,
+                currentCandidate.workspace.operationId!,
+                currentCandidate.workspace.updatedAt,
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (
+                message === `Assignment ${assignmentId} changed before collection` ||
+                message === `Assignment ${assignmentId} acquisition operation does not match` ||
+                message === `Assignment ${assignmentId} does not exist`
+              ) return false;
+              throw error;
+            }
+            await collectWorkspaceWithAcquisitionLock(
+              repository,
+              paths,
+              released.workspace,
+              options.json ? "pipe" : "inherit",
+            );
+            return true;
+          },
+          { staleMs: 0 },
+        );
+        if (!collected) continue;
+      } else {
+        const collected = await withDirectoryLock(
+          `${treeLockPath(paths, candidate.workspace.path)}.acquire`,
+          async () => {
+            const currentCandidate = (await identifyGcCandidates(paths, cutoff, undefined, true)).find(
+              (entry) =>
+                !entry.requiresForce &&
+                entry.reason === candidate.reason &&
+                treeKey(entry.workspace.path) === treeKey(candidate.workspace.path) &&
+                entry.workspace.updatedAt === candidate.workspace.updatedAt,
+            );
+            if (!currentCandidate) return false;
+            await collectWorkspaceWithAcquisitionLock(
+              repository,
+              paths,
+              currentCandidate.workspace,
+              options.json ? "pipe" : "inherit",
+            );
+            return true;
+          },
+          { staleMs: 0 },
+        );
+        if (!collected) continue;
+      }
+      removed.push({
+        path: candidate.workspace.path,
+        lifecycle: candidate.workspace.lifecycle,
+        reason: candidateReason(candidate.reason),
+      });
     }
     if (options.forceExpired) {
       for (const candidate of expiredCandidates) {
         if (await canonicalPath(candidate.workspace.path) === current) continue;
-        const assignmentId = candidate.workspace.assignment!.id;
-        const released = await releaseAssignment(repository, assignmentId, true);
-        await collectWorkspace(repository, paths, released.workspace);
+        const collected = await withDirectoryLock(
+          `${treeLockPath(paths, candidate.workspace.path)}.acquire`,
+          async () => {
+            const collectionTime = new Date().toISOString();
+            const currentCandidate = (await identifyGcCandidates(paths, cutoff, collectionTime, true)).find(
+              (entry) =>
+                entry.reason === "expired-assignment" &&
+                treeKey(entry.workspace.path) === treeKey(candidate.workspace.path) &&
+                entry.workspace.assignment?.id === candidate.workspace.assignment?.id,
+            );
+            if (!currentCandidate) return false;
+            const assignmentId = currentCandidate.workspace.assignment!.id;
+            let released: Awaited<ReturnType<typeof releaseAssignment>>;
+            try {
+              released = await releaseAssignment(repository, assignmentId, true, collectionTime);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (
+                message === `Assignment ${assignmentId} was renewed before collection` ||
+                message === `Assignment ${assignmentId} does not exist`
+              ) return false;
+              throw error;
+            }
+            await collectWorkspaceWithAcquisitionLock(
+              repository,
+              paths,
+              released.workspace,
+              options.json ? "pipe" : "inherit",
+            );
+            return true;
+          },
+          { staleMs: 0 },
+        );
+        if (!collected) continue;
         removed.push({ path: candidate.workspace.path, lifecycle: candidate.workspace.lifecycle, reason: "expired assignment (forced)" });
       }
     }
   } else {
     for (const candidate of safeCandidates) {
       if (await canonicalPath(candidate.workspace.path) === current) continue;
-      removed.push({ path: candidate.workspace.path, lifecycle: candidate.workspace.lifecycle, reason: "older than max age" });
+      removed.push({
+        path: candidate.workspace.path,
+        lifecycle: candidate.workspace.lifecycle,
+        reason: candidateReason(candidate.reason),
+      });
     }
   }
 
+  const currentExpiredCandidates = options.apply
+    ? await identifyGcCandidates(paths, cutoff, new Date().toISOString(), true)
+    : expiredCandidates;
+  const expired: Array<{ path: string; assignmentId: string; expiresAt: string }> = [];
+  for (const candidate of currentExpiredCandidates) {
+    if (!candidate.requiresForce) continue;
+    expired.push({
+      path: candidate.workspace.path,
+      assignmentId: candidate.workspace.assignment!.id,
+      expiresAt: candidate.workspace.assignment!.expiresAt,
+    });
+  }
   const result = {
     status: options.apply ? "collected" : "planned",
     removed,
-    expired: expiredCandidates.map(({ workspace }) => ({
-      path: workspace.path,
-      assignmentId: workspace.assignment!.id,
-      expiresAt: workspace.assignment!.expiresAt,
-    })),
+    expired,
   };
   if (options.json) io.stdout.write(jsonLine(result));
   else {
@@ -611,64 +869,365 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
     if (result.expired.length) io.stdout.write(`Expired assignments: ${result.expired.length}\n`);
   }
   return result;
+  });
 }
 
-async function execute(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
+async function execute(
+  args: readonly string[],
+  cwd: string,
+  io: CliIo,
+  detached = true,
+  sessionMarker?: string,
+  forwardInterrupt = detached,
+): Promise<number> {
   const separator = args.indexOf("--");
-  if (separator < 0) throw new Error("run requires -- before the command");
-  const command = args.slice(separator + 1);
-  if (command.length === 0) throw new Error("run requires a command after --");
+  const command = separator < 0 ? [...args] : args.slice(separator + 1);
+  if (command.length === 0) throw new Error("run requires a command");
   if (separator > 0) throw new Error(`Unknown run option ${args[0]}`);
-  const { repository } = await context(cwd);
-  await sync(repository.root, io);
+  const value = await context(cwd);
+  const { repository } = value;
   const [program, ...programArgs] = command;
   const paths = storePaths(repository.commonDir);
-  const lifecycle = (await readState(paths)).workspaces[treeKey(repository.root)];
-  if (!lifecycle || lifecycle.lifecycle !== "assigned" || !lifecycle.assignment) {
+  let state = await readState(paths);
+  let lifecycle = state.workspaces[treeKey(repository.root)];
+  if (lifecycle && (
+    lifecycle.lifecycle !== "assigned" ||
+    !lifecycle.assignment ||
+    lifecycle.operationId !== null
+  )) {
+    throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
+  }
+  const expectedAssignmentId = lifecycle?.assignment?.id;
+  const tree = state.trees[treeKey(repository.root)];
+  if (
+    !lifecycle?.assignment ||
+    !tree ||
+    tree.fingerprint !== (await dependencyFingerprint({ root: repository.root, manager: value.manager })).fingerprint ||
+    !(await dependencyProjectionsAreValid(repository.root, tree))
+  ) {
+    await sync(repository.root, io);
+    state = await readState(paths);
+    lifecycle = state.workspaces[treeKey(repository.root)];
+    if (expectedAssignmentId && lifecycle?.assignment?.id !== expectedAssignmentId) {
+      throw new Error(`Assignment ${expectedAssignmentId} no longer owns ${repository.root}`);
+    }
+    if (!expectedAssignmentId && lifecycle) {
+      throw new Error(`Workspace ${repository.root} became managed during dependency synchronization`);
+    }
+  }
+  if (!lifecycle) {
     const result = await run(program!, programArgs, {
       cwd: repository.root,
+      env: process.env,
       stdio: "inherit",
       allowFailure: true,
     });
     return result.code;
   }
+  if (lifecycle.lifecycle !== "assigned" || !lifecycle.assignment) {
+    throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
+  }
 
-  const assignmentId = lifecycle.assignment.id;
+  const assignmentId = expectedAssignmentId ?? lifecycle.assignment.id;
+  const environment = { ...process.env, ...portEnvironment(lifecycle.assignment.ports) };
   const tracking: { record?: TrackedProcessRecord } = {};
+  let pendingSignal: NodeJS.Signals | undefined;
+  const forwardSignal = (signal: NodeJS.Signals) => {
+    pendingSignal = signal;
+    const groupId = tracking.record?.groupId;
+    if (!groupId) return;
+    pendingSignal = undefined;
+    try { process.kill(-groupId, signal); } catch { /* The command may already have exited. */ }
+  };
   let execution!: ReturnType<typeof run>;
-  await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
-    let registered!: () => void;
-    const registration = new Promise<void>((resolve) => { registered = resolve; });
-    execution = run(program!, programArgs, {
-      cwd: repository.root,
-      stdio: "inherit",
-      allowFailure: true,
-      detached: true,
-      onSpawn: async (pid) => {
-        const startedAt = await processIdentity(pid);
-        if (!startedAt) throw new Error(`Could not identify process ${pid}`);
-        const record: TrackedProcessRecord = {
-          pid,
-          ...(process.platform === "win32" ? {} : { groupId: pid }),
-          command: [...command],
-          startedAt,
-        };
-        await addAssignmentProcess(paths, assignmentId, record);
-        tracking.record = record;
-        registered();
-      },
+  if (forwardInterrupt && process.platform !== "win32") {
+    process.on("SIGINT", forwardSignal);
+    process.on("SIGTERM", forwardSignal);
+  }
+  try {
+    await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
+      const current = (await readState(paths)).workspaces[treeKey(repository.root)];
+      if (
+        current?.lifecycle !== "assigned" ||
+        current.operationId !== null ||
+        current.assignment?.id !== assignmentId
+      ) {
+        throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
+      }
+      let registered!: () => void;
+      const registration = new Promise<void>((resolve) => { registered = resolve; });
+      execution = run(program!, programArgs, {
+        cwd: repository.root,
+        env: environment,
+        stdio: "inherit",
+        allowFailure: true,
+        detached,
+        onSpawn: async (pid) => {
+          const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
+          const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
+          if (!startedAt) {
+            registered();
+            return;
+          }
+          const record: TrackedProcessRecord = {
+            pid: session?.pid ?? pid,
+            ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
+            ...(session?.sessionId === undefined
+              ? {}
+              : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
+            ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
+            command: [...command],
+            startedAt,
+          };
+          await addAssignmentProcess(paths, assignmentId, record);
+          tracking.record = record;
+          if (pendingSignal) forwardSignal(pendingSignal);
+          registered();
+        },
+      });
+      await Promise.race([registration, execution.then(() => undefined)]);
     });
-    await Promise.race([registration, execution.then(() => undefined)]);
-  });
-  const result = await execution;
-  if (tracking.record) {
-    try {
-      await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
-    } catch {
-      // Release may already have consumed the tracked record.
+    const result = await execution;
+    if (tracking.record && !(await trackedProcessExists(tracking.record))) {
+      try {
+        await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
+      } catch {
+        // Release may already have consumed the tracked record.
+      }
+    }
+    return result.code;
+  } finally {
+    if (forwardInterrupt && process.platform !== "win32") {
+      process.off("SIGINT", forwardSignal);
+      process.off("SIGTERM", forwardSignal);
     }
   }
-  return result.code;
+}
+
+async function warm(args: readonly string[], cwd: string, io: CliIo) {
+  const { options, positional } = parseOptions(args, {
+    values: ["--count", "--from"],
+    flags: ["--fetch", "--json"],
+  });
+  requirePositionals(positional, 0, "warm does not accept positional arguments");
+  const count = Number(options.count);
+  if (!Number.isSafeInteger(count) || count < 1) throw new Error("--count must be a positive integer");
+  const { repository } = await repositoryContext(cwd);
+  const startPoint = await resolveStartPoint(repository.root, options.from, options.fetch ?? false);
+  const targetHead = (await run("git", ["rev-parse", startPoint], { cwd: repository.root })).stdout.trim();
+  const paths = storePaths(repository.commonDir);
+  // ponytail: one host-wide warm lock; reserve per-slot if concurrent warming needs higher throughput.
+  return withDirectoryLock(path.join(paths.root, "pool-maintenance.lock"), () =>
+    withDirectoryLock(path.join(paths.root, "warm.lock"), async () => {
+    const initial = await readState(paths);
+    const worktreeHeads = new Map(
+      (await listWorktrees(repository.root)).map((worktree) => [treeKey(worktree.path), worktree.head]),
+    );
+    let available = 0;
+    for (const workspace of Object.values(initial.workspaces)) {
+      if (workspace.lifecycle !== "available" || workspace.operationId !== null) continue;
+      if (worktreeHeads.get(treeKey(workspace.path)) !== targetHead) continue;
+      const record = initial.trees[treeKey(workspace.path)];
+      if (!record || !(await dependencyProjectionsAreValid(workspace.path, record))) continue;
+      const value = await context(workspace.path);
+      const current = await dependencyFingerprint({ root: value.repository.root, manager: value.manager });
+      if (record.fingerprint === current.fingerprint) available += 1;
+    }
+    const created: string[] = [];
+
+    for (let index = available; index < count; index += 1) {
+      const destination = path.join(
+        path.dirname(repository.root),
+        `${path.basename(repository.root)}-ruk-${crypto.randomUUID().slice(0, 8)}`,
+      );
+      const workspace = await recordPreparingWorkspace(paths, { path: destination, branch: "(warm)" });
+      try {
+        await addWorktree({
+          cwd: repository.root,
+          destination,
+          branch: "(warm)",
+          startPoint,
+          detach: true,
+          stdio: options.json ? "pipe" : "inherit",
+        });
+        await lockWorktree(repository.root, destination);
+        await sync(destination, io, options.json ?? false, false);
+        await markWorkspaceAvailable(paths, destination, workspace.operationId!);
+        created.push(destination);
+      } catch (error) {
+        await markWorkspaceFailed(
+          paths,
+          destination,
+          workspace.operationId!,
+          error instanceof Error ? error.message : String(error),
+        );
+        throw error;
+      }
+    }
+
+    const result = { status: "warmed", requested: count, available: available + created.length, created };
+    if (options.json) io.stdout.write(jsonLine(result));
+    else io.stdout.write(`Available workspaces: ${result.available} (${created.length} created)\n`);
+    return result;
+    })
+  );
+}
+
+function splitExecArguments(args: readonly string[]): { acquireArgs: string[]; command: string[] } {
+  const separator = args.indexOf("--");
+  if (separator >= 0) {
+    return { acquireArgs: args.slice(0, separator), command: args.slice(separator + 1) };
+  }
+  if (!args[0]) return { acquireArgs: [], command: [] };
+  const acquireArgs = [args[0]];
+  let index = 1;
+  while (index < args.length) {
+    const argument = args[index]!;
+    if (["--fetch"].includes(argument)) {
+      acquireArgs.push(argument);
+      index += 1;
+      continue;
+    }
+    if (["--from", "--ttl", "--owner", "--port"].includes(argument)) {
+      if (!args[index + 1]) throw new Error(`${argument} requires a value`);
+      acquireArgs.push(argument, args[index + 1]!);
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return { acquireArgs, command: args.slice(index) };
+}
+
+function retainedAssignment(io: CliIo, result: Awaited<ReturnType<typeof acquire>>, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  io.stderr.write(
+    `Workspace retained: ${result.path}\nAssignment: ${result.assignmentId}\nExpires: ${result.expiresAt}\nReason: ${message}\nRelease: ruk release ${result.assignmentId}\n`,
+  );
+}
+
+async function runAssignedAndRelease(
+  assigned: Awaited<ReturnType<typeof acquire>>,
+  command: readonly string[],
+  sourceCwd: string,
+  io: CliIo,
+  detached = true,
+  sessionMarker?: string,
+  forwardInterrupt = detached,
+): Promise<number> {
+  let code = 1;
+  let commandError: unknown;
+  try {
+    code = await execute(["--", ...command], assigned.path, io, detached, sessionMarker, forwardInterrupt);
+  } catch (error) {
+    commandError = error;
+  }
+  if (commandError instanceof ProcessIdentityUnavailableError) {
+    retainedAssignment(io, assigned, commandError);
+    throw commandError;
+  }
+  const { repository } = await repositoryContext(sourceCwd);
+  try {
+    await releaseAssignment(repository, assigned.assignmentId, false);
+    io.stderr.write(`Released ${assigned.path}\n`);
+  } catch (releaseError) {
+    retainedAssignment(io, assigned, releaseError);
+    if (commandError) {
+      throw new AggregateError([commandError, releaseError], "Command failed and its workspace could not be released");
+    }
+    return code === 0 ? 1 : code;
+  }
+  if (commandError) throw commandError;
+  return code;
+}
+
+async function executeAssigned(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
+  const { acquireArgs, command } = splitExecArguments(args);
+  if (acquireArgs.length === 0) throw new Error("exec requires a branch");
+  if (command.length === 0) throw new Error("exec requires a command");
+  const assigned = await acquire(acquireArgs, cwd, io, false);
+  io.stderr.write(`Assigned ${assigned.path} (${assigned.assignmentId})\n`);
+  return runAssignedAndRelease(assigned, command, cwd, io);
+}
+
+async function shell(args: readonly string[], cwd: string, io: CliIo): Promise<number> {
+  const { options, positional } = parseOptions(args, {
+    values: ["--from", "--ttl", "--owner", "--port"],
+    flags: ["--fetch"],
+  });
+  requirePositionals(positional, 1, "shell requires exactly one branch name");
+  if (process.platform === "linux" && process.stdin.isTTY && !(await commandExists("script"))) {
+    throw new Error("Interactive shells on Linux require the util-linux script command on PATH");
+  }
+  const acquireArgs = [positional[0]!];
+  if (options.from) acquireArgs.push("--from", options.from);
+  if (options.ttl) acquireArgs.push("--ttl", options.ttl);
+  if (options.owner) acquireArgs.push("--owner", options.owner);
+  if (options.fetch) acquireArgs.push("--fetch");
+  for (const name of options.ports ?? []) acquireArgs.push("--port", name);
+  const assigned = await acquire(acquireArgs, cwd, io, false);
+  const executable = process.env["RUK_SHELL"] ?? process.env["SHELL"] ??
+    (process.platform === "win32" ? process.env["COMSPEC"] ?? "cmd.exe" : "/bin/sh");
+  const sessionMarker = process.platform === "win32" || !process.stdin.isTTY
+    ? undefined
+    : path.join((await repositoryContext(assigned.path)).repository.commonDir, "ruk", `shell-${crypto.randomUUID()}`);
+  const wrapper = process.platform === "darwin"
+    ? `sleep 2147483647 </dev/null >/dev/null 2>&1 & sentinel=$!; started=$(ps -o lstart= -p "$sentinel"); terminal=$(ps -o tty= -p "$sentinel"); printf "%s\\n%s\\n%s\\n" "$sentinel" "$started" "$terminal" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`
+    : `sid=$(ps -o sid= -p $$ | tr -d ' '); started=$(ps -o lstart= -p "$sid"); printf "%s\\n%s\\n" "$sid" "$started" > "$RUK_SHELL_SESSION_FILE"; exec "$RUK_SHELL"`;
+  const command = !sessionMarker
+    ? [executable]
+    : process.platform === "darwin"
+      ? ["/usr/bin/script", "-q", "/dev/null", "/bin/sh", "-c", wrapper]
+      : ["script", "-qec", wrapper, "/dev/null"];
+  io.stderr.write(`Shell workspace: ${assigned.path}\nAssignment: ${assigned.assignmentId}\n`);
+  const ignoreInterrupt = () => {};
+  const previousShell = process.env["RUK_SHELL"];
+  if (process.platform !== "win32" && sessionMarker) process.on("SIGINT", ignoreInterrupt);
+  if (sessionMarker) {
+    process.env["RUK_SHELL"] = executable;
+    process.env["RUK_SHELL_SESSION_FILE"] = sessionMarker;
+  }
+  try {
+    return await runAssignedAndRelease(
+      assigned,
+      command,
+      cwd,
+      io,
+      process.platform !== "win32" && !sessionMarker,
+      sessionMarker,
+      process.platform !== "win32" && !sessionMarker,
+    );
+  } finally {
+    if (process.platform !== "win32" && sessionMarker) process.off("SIGINT", ignoreInterrupt);
+    if (sessionMarker) {
+      if (previousShell === undefined) delete process.env["RUK_SHELL"];
+      else process.env["RUK_SHELL"] = previousShell;
+      delete process.env["RUK_SHELL_SESSION_FILE"];
+      await fs.rm(sessionMarker, { force: true });
+    }
+  }
+}
+
+async function stats(args: readonly string[], cwd: string, io: CliIo) {
+  const { options, positional } = parseOptions(args, { flags: ["--disk", "--json"] });
+  requirePositionals(positional, 0, "stats does not accept positional arguments");
+  const { repository } = await repositoryContext(cwd);
+  const state = await readState(storePaths(repository.commonDir));
+  const result = {
+    ...usageStatistics(state),
+    ...(options.disk ? { disk: await diskStatistics(state) } : {}),
+  };
+  if (options.json) io.stdout.write(jsonLine(result));
+  else {
+    io.stdout.write(`Acquisitions:       ${result.acquisitions}\n`);
+    io.stdout.write(`Workspace reuses:   ${result.workspaceReuses}\n`);
+    io.stdout.write(`Preparations:       ${result.preparations}\n`);
+    io.stdout.write(`Preparation skips:  ${result.preparationSkips}\n`);
+    io.stdout.write(`Preparation failures: ${result.preparationFailures}\n`);
+    io.stdout.write(`Average prepare ms: ${result.averagePreparationMs}\n`);
+    if ("disk" in result) io.stdout.write(`Estimated bytes avoided: ${result.disk.estimatedBytesAvoided}\n`);
+  }
+  return result;
 }
 
 export interface MainOptions {
@@ -715,13 +1274,26 @@ export async function main(argv: readonly string[], options: MainOptions = {}): 
     await release(args, cwd, io);
     return 0;
   }
-  if (command === "run" || command === "exec") return execute(args, cwd, io);
+  if (command === "run") return execute(args, cwd, io);
+  if (command === "exec") {
+    if (args[0] === "--") return execute(args, cwd, io);
+    return executeAssigned(args, cwd, io);
+  }
+  if (command === "warm") {
+    await warm(args, cwd, io);
+    return 0;
+  }
+  if (command === "shell") return shell(args, cwd, io);
   if (command === "list") {
     await list(args, cwd, io);
     return 0;
   }
   if (command === "status") {
     await status(args, cwd, io);
+    return 0;
+  }
+  if (command === "stats") {
+    await stats(args, cwd, io);
     return 0;
   }
   if (command === "remove") {

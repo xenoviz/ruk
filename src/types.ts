@@ -34,6 +34,7 @@ export interface FingerprintDetails {
 export interface TreeRecord {
   path: string;
   fingerprint: string;
+  projectionFingerprint?: string;
   mode: string;
   projections: string[];
   branch: string;
@@ -49,11 +50,25 @@ export interface AssignmentRecord {
   assignedAt: string;
   renewedAt: string;
   expiresAt: string;
+  ports: Record<string, number>;
+}
+
+export interface UsageMetrics {
+  acquisitions: number;
+  workspaceReuses: number;
+  preparations: number;
+  preparationSkips: number;
+  preparationFailures: number;
+  totalPreparationMs: number;
+  lastPreparationMs: number | null;
 }
 
 export interface TrackedProcessRecord {
   pid: number;
   groupId?: number;
+  sessionId?: number;
+  sessionStartedAt?: string;
+  terminalId?: string;
   command?: string[];
   startedAt: string;
 }
@@ -73,9 +88,10 @@ export interface WorkspaceRecord {
 }
 
 export interface RukState {
-  version: 2;
+  version: 3;
   trees: Record<string, TreeRecord>;
   workspaces: Record<string, WorkspaceRecord>;
+  metrics: UsageMetrics;
 }
 
 export interface StorePaths {

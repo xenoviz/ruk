@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { assertSharedBackendSupported, ensureDependencies } from "../src/dependencies.js";
+import { assertSharedBackendSupported, ensureDependencies, projectionFingerprint } from "../src/dependencies.js";
 import { getRepository } from "../src/git.js";
 import { run } from "../src/process.js";
+import { readState, setTreeState, storePaths } from "../src/state.js";
 import type { PackageManager } from "../src/types.js";
 
 interface DependencyFixture {
@@ -87,6 +88,49 @@ test("each worktree gets a local projection while unchanged trees skip reinstall
   const noOp = await ensureDependencies({ repository: agentRepository, manager: fixture.manager });
   assert.equal(noOp.alreadyAttached, true);
   assert.equal(await fs.readFile(fixture.counter, "utf8"), "3");
+  const metrics = (await readState(storePaths(mainRepository.commonDir))).metrics;
+  assert.equal(metrics.preparations, 3);
+  assert.equal(metrics.preparationSkips, 1);
+  assert.equal(metrics.preparationFailures, 0);
+  assert.ok(metrics.totalPreparationMs > 0);
+});
+
+test("projection integrity follows linked package content", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-projection-link-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const target = path.join(root, "store", "package");
+  const projection = path.join(root, "workspace", "node_modules");
+  await fs.mkdir(target, { recursive: true });
+  await fs.mkdir(projection, { recursive: true });
+  await fs.writeFile(path.join(target, "index.js"), "one");
+  await fs.symlink(target, path.join(projection, "package"), process.platform === "win32" ? "junction" : "dir");
+  const before = await projectionFingerprint(path.join(root, "workspace"), ["node_modules"]);
+  await fs.writeFile(path.join(target, "index.js"), "two");
+  const after = await projectionFingerprint(path.join(root, "workspace"), ["node_modules"]);
+  assert.notEqual(after, before);
+});
+
+test("dependency cleanup rejects a symlinked projection ancestor", async (t) => {
+  const fixture = await createFixture();
+  t.after(() => fs.rm(fixture.parent, { recursive: true, force: true }));
+  const repository = await getRepository(fixture.root);
+  await ensureDependencies({ repository, manager: fixture.manager });
+  const paths = storePaths(repository.commonDir);
+  const treeRecord = Object.values((await readState(paths)).trees)[0]!;
+  const { path: _treePath, ...tree } = treeRecord;
+  const outside = path.join(fixture.parent, "outside");
+  await fs.mkdir(path.join(outside, "node_modules"), { recursive: true });
+  await fs.writeFile(path.join(outside, "node_modules", "sentinel"), "keep");
+  await fs.mkdir(path.join(fixture.root, "packages"));
+  await fs.symlink(outside, path.join(fixture.root, "packages", "app"), process.platform === "win32" ? "junction" : "dir");
+  await setTreeState(paths, treeRecord.path, { ...tree, projections: ["packages/app/node_modules"] });
+  await fs.writeFile(path.join(fixture.root, "package.json"), '{"name":"fixture","dependencies":{"demo":"2"}}\n');
+
+  await assert.rejects(
+    ensureDependencies({ repository, manager: fixture.manager }),
+    /symlinked ancestor/,
+  );
+  assert.equal(await fs.readFile(path.join(outside, "node_modules", "sentinel"), "utf8"), "keep");
 });
 
 test("pnpm uses its global virtual store for each local projection", async (t) => {
@@ -156,6 +200,8 @@ test("pnpm rejects an explicitly disabled global virtual store", async (t) => {
     ensureDependencies({ repository, manager: fixture.manager }),
     /requires the global virtual store/,
   );
+  const repositoryState = await readState(storePaths(repository.commonDir));
+  assert.equal(repositoryState.metrics.preparationFailures, 1);
 });
 
 test("shared backends reject package-manager versions without the feature", () => {

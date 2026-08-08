@@ -34,6 +34,37 @@ export async function localBranchExists(cwd: string, branch: string): Promise<bo
   return result.code === 0;
 }
 
+export async function fetchRemote(cwd: string, startPoint = "origin/main"): Promise<string> {
+  const slash = startPoint.indexOf("/");
+  const qualifiedRemote = /^refs\/remotes\/([^/]+)\//.exec(startPoint)?.[1];
+  const candidate = qualifiedRemote ??
+    (slash > 0 ? startPoint.slice(0, slash) : "origin");
+  const remotes = (await run("git", ["remote"], { cwd })).stdout.split(/\r?\n/).filter(Boolean);
+  const selectedRemote = qualifiedRemote ??
+    (slash > 0 && !(await localBranchExists(cwd, startPoint)) ? candidate : undefined);
+  if (selectedRemote && !remotes.includes(selectedRemote)) {
+    throw new Error(`Git remote ${selectedRemote} does not exist`);
+  }
+  const remote = selectedRemote ?? (remotes.includes(candidate) ? candidate : "origin");
+  if (!remotes.includes(remote)) throw new Error(`Git remote ${remote} does not exist`);
+  await run("git", ["fetch", "--prune", remote], { cwd });
+  return remote;
+}
+
+export async function fetchDefaultRemote(cwd: string): Promise<string> {
+  const remotes = (await run("git", ["remote"], { cwd })).stdout.split(/\r?\n/).filter(Boolean);
+  if (!remotes.includes("origin") && remotes.length > 1) {
+    throw new Error("Multiple Git remotes exist; use --from to select one explicitly");
+  }
+  const remote = remotes.includes("origin") ? "origin" : remotes[0];
+  if (!remote) throw new Error("Git remote does not exist");
+  const result = await run("git", ["ls-remote", "--symref", remote, "HEAD"], { cwd });
+  const branch = /^ref:\s+refs\/heads\/(.+)\s+HEAD$/m.exec(result.stdout)?.[1];
+  if (!branch) throw new Error(`Git remote ${remote} does not advertise a default branch`);
+  await fetchRemote(cwd, `${remote}/${branch}`);
+  return `refs/remotes/${remote}/${branch}`;
+}
+
 export async function addWorktree({
   cwd,
   destination,
@@ -100,14 +131,22 @@ export async function assignWorktree({
   }
 }
 
-export async function returnWorktree(cwd: string, force = false): Promise<void> {
+export async function returnWorktree(
+  cwd: string,
+  force = false,
+  preservedProjections: readonly string[] = [],
+): Promise<void> {
   if (!force && !(await worktreeIsClean(cwd))) {
     throw new Error("Workspace has uncommitted changes. Commit them or retry release with --force.");
   }
   if (force) {
     await run("git", ["reset", "--hard", "HEAD"], { cwd });
   }
-  await run("git", ["clean", "-ffdx"], { cwd });
+  const exclusions = preservedProjections.flatMap((projection) => {
+    const normalized = projection.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    return ["-e", `/${normalized.replace(/[\\*?\[\]]/g, "\\$&")}/`];
+  });
+  await run("git", ["clean", "-ffdx", ...exclusions], { cwd });
   await run("git", ["switch", "--detach"], { cwd });
 }
 

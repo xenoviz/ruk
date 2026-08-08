@@ -17,8 +17,9 @@ Install that manager at the declared version or configure a deterministic
 
 ## Status says `sync-required`
 
-The dependency fingerprint changed, the recorded projection is missing, or the
-workspace has not been prepared.
+The dependency fingerprint changed, the recorded projection is missing or was
+modified (including a linked package target), or the workspace has not been
+prepared.
 
 ```sh
 ruk sync --json

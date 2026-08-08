@@ -1,11 +1,13 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { currentBranch } from "./git.js";
+import { DependencyPreparationError } from "./errors.js";
 import { dependencyFingerprint } from "./fingerprint.js";
 import { withDirectoryLock } from "./lock.js";
 import { run } from "./process.js";
-import { readState, setTreeState, storePaths, treeKey, treeLockPath } from "./state.js";
-import type { DependencyReporter, PackageManager, Repository } from "./types.js";
+import { readState, recordPreparationMetric, setTreeState, storePaths, treeKey, treeLockPath } from "./state.js";
+import type { DependencyReporter, PackageManager, Repository, TreeRecord } from "./types.js";
 
 async function exists(file: string): Promise<boolean> {
   try {
@@ -73,6 +75,96 @@ export async function dependenciesPresent(
   return present.every(Boolean);
 }
 
+function projectionPath(root: string, relative: string): string {
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(resolvedRoot, relative);
+  if (resolved === resolvedRoot || !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error(`Dependency projection must stay inside the workspace: ${relative}`);
+  }
+  return resolved;
+}
+
+function hashFields(hash: ReturnType<typeof crypto.createHash>, ...fields: readonly string[]): void {
+  for (const field of fields) hash.update(field).update("\0");
+}
+
+async function hashProjectionEntry(
+  entry: string,
+  label: string,
+  hash: ReturnType<typeof crypto.createHash>,
+  visitedDirectories: Set<string>,
+): Promise<void> {
+  const stat = await fs.lstat(entry);
+  if (stat.isSymbolicLink()) {
+    hashFields(hash, "symlink", label, await fs.readlink(entry));
+    await hashProjectionEntry(await fs.realpath(entry), `${label}/@target`, hash, visitedDirectories);
+    return;
+  }
+  if (stat.isDirectory()) {
+    hashFields(hash, "directory", label, String(stat.mode & 0o777));
+    const real = await fs.realpath(entry);
+    if (visitedDirectories.has(real)) {
+      hashFields(hash, "visited-directory", label, real);
+      return;
+    }
+    visitedDirectories.add(real);
+    const entries = (await fs.readdir(entry)).sort();
+    for (const name of entries) {
+      await hashProjectionEntry(path.join(entry, name), `${label}/${name}`, hash, visitedDirectories);
+    }
+    return;
+  }
+  hashFields(
+    hash,
+    stat.isFile() ? "file" : "other",
+    label,
+    String(stat.mode & 0o777),
+    String(stat.size),
+    String(stat.mtimeMs),
+    String(stat.ctimeMs),
+  );
+}
+
+export async function projectionFingerprint(root: string, projections: readonly string[]): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  const visitedDirectories = new Set<string>();
+  for (const relative of [...projections].sort()) {
+    await hashProjectionEntry(
+      projectionPath(root, relative),
+      relative.replaceAll("\\", "/"),
+      hash,
+      visitedDirectories,
+    );
+  }
+  return hash.digest("hex");
+}
+
+export async function dependencyProjectionsAreValid(root: string, record: TreeRecord): Promise<boolean> {
+  if (!record.projectionFingerprint || !(await dependenciesPresent(root, record.projections))) return false;
+  try {
+    return await projectionFingerprint(root, record.projections) === record.projectionFingerprint;
+  } catch {
+    return false;
+  }
+}
+
+async function removeDependencyProjections(root: string, projections: readonly string[]): Promise<void> {
+  for (const relative of projections) {
+    const target = projectionPath(root, relative);
+    for (let ancestor = path.dirname(target); ancestor !== path.resolve(root); ancestor = path.dirname(ancestor)) {
+      try {
+        if ((await fs.lstat(ancestor)).isSymbolicLink()) {
+          throw new Error(`Dependency projection has a symlinked ancestor: ${relative}`);
+        }
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") break;
+        throw error;
+      }
+    }
+    await fs.rm(target, { recursive: true, force: true });
+  }
+}
+
 const DEFAULT_REPORTER: DependencyReporter = {
   write: (message) => process.stdout.write(message),
   stdio: "inherit",
@@ -115,7 +207,12 @@ async function installDependencies(
   }
 
   reporter.write(`Installing dependencies with ${[command, ...args].join(" ")}...\n`);
-  await run(command, args, { cwd: root, env: environment, stdio: reporter.stdio });
+  try {
+    await run(command, args, { cwd: root, env: environment, stdio: reporter.stdio });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DependencyPreparationError(`Dependency installation failed: ${message}`, { cause: error });
+  }
 }
 
 export interface EnsureDependenciesInput {
@@ -144,10 +241,7 @@ async function ensureDependenciesUnlocked({
 
   const state = await readState(paths);
   const currentTree = state.trees[treeKey(root)];
-  if (
-    currentTree?.fingerprint === fingerprint &&
-    (await dependenciesPresent(root, currentTree.projections))
-  ) {
+  if (currentTree?.fingerprint === fingerprint && (await dependencyProjectionsAreValid(root, currentTree))) {
     return {
       fingerprint,
       mode: currentTree.mode,
@@ -155,6 +249,8 @@ async function ensureDependenciesUnlocked({
       alreadyAttached: true,
     };
   }
+
+  if (currentTree) await removeDependencyProjections(root, currentTree.projections);
 
   await installDependencies(root, manager, reporter);
   details = await dependencyFingerprint({ root, manager });
@@ -166,6 +262,7 @@ async function ensureDependenciesUnlocked({
   }
   await setTreeState(paths, root, {
     fingerprint,
+    projectionFingerprint: await projectionFingerprint(root, projections),
     mode,
     projections,
     branch: await currentBranch(root),
@@ -176,7 +273,19 @@ async function ensureDependenciesUnlocked({
 
 export async function ensureDependencies(value: EnsureDependenciesInput): Promise<EnsureDependenciesResult> {
   const paths = storePaths(value.repository.commonDir);
-  return withDirectoryLock(treeLockPath(paths, value.repository.root), () =>
-    ensureDependenciesUnlocked(value),
-  );
+  const startedAt = Date.now();
+  try {
+    const result = await withDirectoryLock(treeLockPath(paths, value.repository.root), () =>
+      ensureDependenciesUnlocked(value),
+    );
+    await recordPreparationMetric(paths, result.alreadyAttached ? "skipped" : "prepared", Date.now() - startedAt);
+    return result;
+  } catch (error) {
+    try {
+      await recordPreparationMetric(paths, "failed", Date.now() - startedAt);
+    } catch {
+      // Preserve the dependency failure; metrics must not hide it.
+    }
+    throw error;
+  }
 }

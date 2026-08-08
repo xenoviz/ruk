@@ -39,6 +39,7 @@ export default defineConfig({
           { text: "Dependency modes", link: "/guides/dependency-modes" },
           { text: "Assignments and renewal", link: "/guides/assignments" },
           { text: "Garbage collection", link: "/guides/garbage-collection" },
+          { text: "Pools, ports, and statistics", link: "/guides/pools-ports-and-stats" },
         ],
       },
       {

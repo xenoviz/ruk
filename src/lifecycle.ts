@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { withDirectoryLock } from "./lock.js";
+import { availablePort, portEnvironmentName, releaseHostPorts, withHostPortRegistry } from "./ports.js";
 import { readState, treeKey, updateState } from "./state.js";
 import type {
   AssignmentRecord,
@@ -35,7 +37,13 @@ export interface AssignmentQuery {
   now?: string;
 }
 
-export type GcCandidateReason = "available" | "failed" | "expired-assignment";
+export type GcCandidateReason =
+  | "available"
+  | "failed"
+  | "expired-assignment"
+  | "abandoned-preparation"
+  | "abandoned-acquisition"
+  | "interrupted-collection";
 
 export interface GcCandidate {
   workspace: WorkspaceRecord;
@@ -65,6 +73,7 @@ function assignment(input: AssignmentInput): AssignmentRecord {
     assignedAt: now,
     renewedAt: now,
     expiresAt,
+    ports: {},
   };
 }
 
@@ -86,10 +95,11 @@ function requireLifecycle(
   }
 }
 
-function assign(workspace: WorkspaceRecord, input: AssignmentInput): WorkspaceRecord {
+function assign(workspace: WorkspaceRecord, input: AssignmentInput, operationId: string | null = null): WorkspaceRecord {
   const nextAssignment = assignment(input);
   if (input.branch !== undefined) workspace.branch = nonempty(input.branch, "branch");
   workspace.lifecycle = "assigned";
+  workspace.operationId = operationId;
   workspace.assignment = nextAssignment;
   workspace.updatedAt = nextAssignment.assignedAt;
   workspace.availableAt = null;
@@ -124,20 +134,50 @@ export async function recordPreparingWorkspace(
   });
 }
 
+export async function markWorkspaceAvailable(
+  paths: StorePaths,
+  workspacePath: string,
+  operationId: string,
+  now?: string,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const resolved = path.resolve(workspacePath);
+    const workspace = state.workspaces[treeKey(resolved)];
+    if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
+    requireLifecycle(workspace, "preparing");
+    if (workspace.operationId !== operationId) throw new Error("Preparation operation does not match");
+    const availableAt = timestamp(now, "now");
+    workspace.lifecycle = "available";
+    workspace.operationId = null;
+    workspace.updatedAt = availableAt;
+    workspace.availableAt = availableAt;
+    return workspace;
+  });
+}
+
 export async function reserveAvailableWorkspace(
   paths: StorePaths,
   input: AssignmentInput,
+  workspacePath?: string,
 ): Promise<WorkspaceRecord | null> {
-  return updateState(paths, (state) => {
-    const workspace = Object.values(state.workspaces)
-      .filter((entry) => entry.lifecycle === "available" && entry.operationId === null)
-      .sort(
-        (left, right) =>
-          (left.availableAt ?? "").localeCompare(right.availableAt ?? "") ||
-          left.path.localeCompare(right.path),
-      )[0];
-    return workspace ? assign(workspace, input) : null;
-  });
+  const requestedKey = workspacePath === undefined ? undefined : treeKey(path.resolve(workspacePath));
+  return withDirectoryLock(path.join(paths.root, "warm.lock"), () =>
+    updateState(paths, (state) => {
+      const workspace = Object.values(state.workspaces)
+        .filter(
+          (entry) =>
+            entry.lifecycle === "available" &&
+            entry.operationId === null &&
+            (requestedKey === undefined || treeKey(entry.path) === requestedKey),
+        )
+        .sort(
+          (left, right) =>
+            (left.availableAt ?? "").localeCompare(right.availableAt ?? "") ||
+            left.path.localeCompare(right.path),
+        )[0];
+      if (!workspace) return null;
+      return assign(workspace, input, crypto.randomUUID());
+    }));
 }
 
 export async function markWorkspaceAssigned(
@@ -152,9 +192,60 @@ export async function markWorkspaceAssigned(
     if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
     requireLifecycle(workspace, "preparing");
     if (workspace.operationId !== operationId) throw new Error("Preparation operation does not match");
-    workspace.operationId = null;
-    return assign(workspace, input);
+    return assign(workspace, input, crypto.randomUUID());
   });
+}
+
+export async function recordSuccessfulAcquisition(
+  paths: StorePaths,
+  assignmentId: string,
+  operationId: string,
+  reused: boolean,
+  now?: string,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    if (workspace.operationId !== operationId) throw new Error("Acquisition operation does not match");
+    workspace.operationId = null;
+    workspace.updatedAt = timestamp(now, "now");
+    state.metrics.acquisitions += 1;
+    if (reused) state.metrics.workspaceReuses += 1;
+    return workspace;
+  });
+}
+
+export async function allocateAssignmentPorts(
+  paths: StorePaths,
+  assignmentId: string,
+  names: readonly string[],
+  allocate: (excluded: ReadonlySet<number>) => Promise<number> = availablePort,
+): Promise<WorkspaceRecord> {
+  const environmentNames = names.map(portEnvironmentName);
+  if (new Set(environmentNames).size !== environmentNames.length) {
+    throw new Error("Port names must be unique after normalization");
+  }
+  return withHostPortRegistry((host) => updateState(paths, async (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    const excluded = new Set([
+      ...host.reserved,
+      ...Object.values(state.workspaces).flatMap((entry) => Object.values(entry.assignment?.ports ?? {})),
+    ]);
+    const ports: Record<string, number> = Object.create(null);
+    for (const name of names) {
+      const port = await allocate(excluded);
+      if (!Number.isSafeInteger(port) || port < 1 || port > 65_535 || excluded.has(port)) {
+        throw new Error(`Port allocator returned unavailable port ${port}`);
+      }
+      excluded.add(port);
+      ports[name] = port;
+      host.reserve(port, assignmentId, paths.state);
+    }
+    await host.commit();
+    workspace.assignment!.ports = ports;
+    return workspace;
+  }));
 }
 
 export async function markWorkspaceFailed(
@@ -183,10 +274,12 @@ export async function renewAssignment(
   assignmentId: string,
   expiresAt: string,
   now?: string,
+  expectedRenewedAt?: string,
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "assigned");
+    if (expectedRenewedAt && workspace.assignment!.renewedAt !== expectedRenewedAt) return workspace;
     const renewedAt = timestamp(now, "now");
     const nextExpiry = timestamp(expiresAt, "expiresAt");
     if (Date.parse(nextExpiry) <= Date.parse(renewedAt)) {
@@ -203,11 +296,29 @@ export async function beginWorkspaceReturn(
   paths: StorePaths,
   assignmentId: string,
   now?: string,
+  requireExpiredBy?: string,
+  acquisitionOperationId?: string,
+  expectedUpdatedAt?: string,
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     if (workspace.lifecycle === "returning") return workspace;
     requireLifecycle(workspace, "assigned");
+    if (workspace.operationId !== null && workspace.operationId !== acquisitionOperationId) {
+      throw new Error(`Assignment ${assignmentId} acquisition is still in progress`);
+    }
+    if (acquisitionOperationId !== undefined && workspace.operationId !== acquisitionOperationId) {
+      throw new Error(`Assignment ${assignmentId} acquisition operation does not match`);
+    }
+    if (expectedUpdatedAt !== undefined && workspace.updatedAt !== expectedUpdatedAt) {
+      throw new Error(`Assignment ${assignmentId} changed before collection`);
+    }
+    if (
+      requireExpiredBy &&
+      Date.parse(workspace.assignment!.expiresAt) > Date.parse(timestamp(requireExpiredBy, "requireExpiredBy"))
+    ) {
+      throw new Error(`Assignment ${assignmentId} was renewed before collection`);
+    }
     workspace.lifecycle = "returning";
     workspace.failure = null;
     workspace.updatedAt = timestamp(now, "now");
@@ -220,19 +331,30 @@ export async function finishWorkspaceReturn(
   assignmentId: string,
   now?: string,
 ): Promise<WorkspaceRecord> {
-  return updateState(paths, (state) => {
+  let hasPorts = false;
+  const workspace = await updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "returning");
     if (workspace.processes.length > 0) {
       throw new Error(`Workspace ${workspace.path} still has tracked processes`);
     }
+    hasPorts = Object.keys(workspace.assignment!.ports).length > 0;
     const returnedAt = timestamp(now, "now");
     workspace.lifecycle = "available";
+    workspace.operationId = null;
     workspace.assignment = null;
     workspace.updatedAt = returnedAt;
     workspace.availableAt = returnedAt;
     return workspace;
   });
+  if (hasPorts) {
+    try {
+      await releaseHostPorts(assignmentId);
+    } catch {
+      // The registry prunes this inactive assignment on its next successful update.
+    }
+  }
+  return workspace;
 }
 
 export async function cancelWorkspaceReturn(
@@ -273,6 +395,18 @@ export async function addAssignmentProcess(
       (!Number.isSafeInteger(processRecord.groupId) || processRecord.groupId <= 0)
     ) {
       throw new Error("groupId must be a positive safe integer");
+    }
+    if (
+      processRecord.sessionId !== undefined &&
+      (!Number.isSafeInteger(processRecord.sessionId) || processRecord.sessionId <= 0)
+    ) {
+      throw new Error("sessionId must be a positive safe integer");
+    }
+    if ((processRecord.sessionId === undefined) !== (processRecord.sessionStartedAt === undefined)) {
+      throw new Error("sessionId and sessionStartedAt must be provided together");
+    }
+    if (processRecord.terminalId !== undefined && (!processRecord.terminalId || processRecord.terminalId === "??")) {
+      throw new Error("terminalId must identify a controlling terminal");
     }
     if (workspace.processes.some((entry) => entry.pid === processRecord.pid)) {
       throw new Error(`Process ${processRecord.pid} is already tracked`);
@@ -336,6 +470,7 @@ export async function identifyGcCandidates(
   paths: StorePaths,
   olderThan: string,
   now?: string,
+  includeAbandonedPreparations = false,
 ): Promise<GcCandidate[]> {
   const state = await readState(paths);
   const cutoff = Date.parse(timestamp(olderThan, "olderThan"));
@@ -343,6 +478,27 @@ export async function identifyGcCandidates(
   const candidates: GcCandidate[] = [];
   for (const workspace of Object.values(state.workspaces)) {
     if (
+      includeAbandonedPreparations &&
+      workspace.lifecycle === "preparing" &&
+      workspace.operationId !== null &&
+      Date.parse(workspace.updatedAt) <= cutoff
+    ) {
+      candidates.push({ workspace, reason: "abandoned-preparation", requiresForce: false });
+    } else if (
+      includeAbandonedPreparations &&
+      workspace.lifecycle === "assigned" &&
+      workspace.operationId !== null &&
+      Date.parse(workspace.updatedAt) <= cutoff
+    ) {
+      candidates.push({ workspace, reason: "abandoned-acquisition", requiresForce: false });
+    } else if (
+      includeAbandonedPreparations &&
+      (workspace.lifecycle === "available" || workspace.lifecycle === "failed") &&
+      workspace.operationId !== null &&
+      Date.parse(workspace.updatedAt) <= cutoff
+    ) {
+      candidates.push({ workspace, reason: "interrupted-collection", requiresForce: false });
+    } else if (
       workspace.operationId === null &&
       workspace.lifecycle === "available" &&
       Date.parse(workspace.availableAt!) <= cutoff
@@ -374,11 +530,17 @@ export async function beginWorkspaceCollection(
     const resolved = path.resolve(workspacePath);
     const workspace = state.workspaces[treeKey(resolved)];
     if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
-    if (workspace.lifecycle !== "available" && workspace.lifecycle !== "failed") {
+    const abandonedPreparation = workspace.lifecycle === "preparing";
+    if (!abandonedPreparation && workspace.lifecycle !== "available" && workspace.lifecycle !== "failed") {
       throw new Error(`Workspace ${resolved} is not safe to collect`);
     }
-    if (workspace.operationId !== null || workspace.updatedAt !== expectedUpdatedAt) {
+    if (workspace.updatedAt !== expectedUpdatedAt) {
       throw new Error(`Workspace ${resolved} changed before collection`);
+    }
+    if (!abandonedPreparation && workspace.operationId !== null) return workspace;
+    if (abandonedPreparation) {
+      workspace.lifecycle = "failed";
+      workspace.failure = "Workspace preparation was abandoned";
     }
     workspace.operationId = crypto.randomUUID();
     workspace.updatedAt = timestamp(now, "now");

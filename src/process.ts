@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
 import type { StdioOptions } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { isErrnoException } from "./types.js";
+import type { TrackedProcessRecord } from "./types.js";
 
 export interface RunOptions {
   cwd?: string;
@@ -17,6 +20,16 @@ export interface RunResult {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+}
+
+export class ProcessIdentityUnavailableError extends Error {
+  readonly pid: number;
+
+  constructor(pid: number) {
+    super(`Process ${pid} could not be identified, so its workspace cannot be released safely`);
+    this.name = "ProcessIdentityUnavailableError";
+    this.pid = pid;
+  }
 }
 
 function environmentValue(environment: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -98,12 +111,16 @@ export async function run(
         child.kill();
         return;
       }
+      const spawnedIdentity = processIdentity(child.pid).catch(() => null);
       spawnHook = Promise.resolve().then(() => options.onSpawn!(child.pid!)).catch(async (error: unknown) => {
         spawnError = error;
         try {
-          await killProcessTree(child.pid!, true);
-        } catch {
-          child.kill();
+          const expectedIdentity = await spawnedIdentity;
+          const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
+          if (!killed) child.kill("SIGKILL");
+        } catch (cleanupError) {
+          child.kill("SIGKILL");
+          if (cleanupError instanceof ProcessIdentityUnavailableError) spawnError = cleanupError;
         }
       });
     });
@@ -128,7 +145,7 @@ export async function run(
         reject(spawnError);
         return;
       }
-      const result = { code: code ?? 1, signal, stdout, stderr };
+      const result = { code: code ?? (signal ? 128 + os.constants.signals[signal] : 1), signal, stdout, stderr };
       if (result.code === 0 || options.allowFailure) {
         resolve(result);
         return;
@@ -162,14 +179,223 @@ export async function processIdentity(pid: number): Promise<string | null> {
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `$process=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($process){$process.StartTime.ToUniversalTime().Ticks}`,
+        `$process=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if(-not $process){'__RUK_MISSING__';exit 0};try{$process.StartTime.ToUniversalTime().Ticks}catch{Write-Error $_;exit 1}`,
       ],
       { allowFailure: true },
     );
-    return result.code === 0 && result.stdout.trim() ? result.stdout.trim() : null;
+    if (result.code !== 0) throw new ProcessIdentityUnavailableError(pid);
+    const identity = result.stdout.trim();
+    if (identity === "__RUK_MISSING__") return null;
+    if (!identity) throw new ProcessIdentityUnavailableError(pid);
+    return identity;
   }
   const result = await run("ps", ["-o", "lstart=", "-p", String(pid)], { allowFailure: true });
   return result.code === 0 && result.stdout.trim() ? result.stdout.trim().replace(/\s+/g, " ") : null;
+}
+
+export async function requireProcessIdentity(
+  pid: number,
+  identify: (pid: number) => Promise<string | null> = processIdentity,
+  descendantsExist: (pid: number) => Promise<boolean> = processDescendantsExist,
+): Promise<string | null> {
+  const identity = await identify(pid);
+  if (!identity) {
+    let hasDescendants: boolean;
+    try {
+      hasDescendants = await descendantsExist(pid);
+    } catch {
+      throw new ProcessIdentityUnavailableError(pid);
+    }
+    if (hasDescendants) throw new ProcessIdentityUnavailableError(pid);
+  }
+  return identity;
+}
+
+export async function processDescendantsExist(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (process.platform === "win32") {
+    const powershell = path.join(
+      environmentValue(process.env, "SYSTEMROOT") ?? "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const result = await run(
+      powershell,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$pending=@(${pid});$found=$false;$all=@(Get-CimInstance Win32_Process);while($pending.Count){$children=@($all|Where-Object{$pending -contains [int]$_.ParentProcessId});if(!$children.Count){break};$found=$true;$pending=@($children|ForEach-Object{[int]$_.ProcessId})};if($found){'1'}`,
+      ],
+      { allowFailure: true },
+    );
+    return result.code !== 0 || result.stdout.trim() === "1";
+  }
+  const result = await run("ps", ["-e", "-o", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "stat="], {
+    allowFailure: true,
+  });
+  if (result.code !== 0) throw new Error(`Could not enumerate POSIX processes: ${result.stderr.trim()}`);
+  const processes = result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
+    .filter((entry) => entry.length === 4 && !entry[3]!.startsWith("Z"))
+    .map(([child, parent, group]) => ({ pid: Number(child), parent: Number(parent), group: Number(group) }))
+    .filter((entry) => [entry.pid, entry.parent, entry.group].every(Number.isSafeInteger));
+  const parents = new Set([pid]);
+  while (true) {
+    const children = processes.filter((entry) => parents.has(entry.parent) && !parents.has(entry.pid));
+    if (children.length === 0) break;
+    for (const child of children) parents.add(child.pid);
+  }
+  return parents.size > 1 || processes.some((entry) => entry.group === pid);
+}
+
+interface PosixProcess {
+  pid: number;
+  sessionId?: number;
+  terminalId?: string;
+  state: string;
+}
+
+async function posixProcesses(): Promise<PosixProcess[]> {
+  const scopeField = process.platform === "darwin" ? "tty" : "sid";
+  const result = await run("ps", ["-e", "-o", "pid=", "-o", `${scopeField}=`, "-o", "stat="], {
+    allowFailure: true,
+  });
+  if (result.code !== 0) throw new Error(`Could not enumerate POSIX processes: ${result.stderr.trim()}`);
+  return result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
+    .filter((entry) => entry.length === 3 && Number.isSafeInteger(Number(entry[0])))
+    .flatMap(([rawPid, scope, state]): PosixProcess[] => {
+      const pid = Number(rawPid);
+      if (process.platform === "darwin") return [{ pid, terminalId: scope!, state: state! }];
+      const sessionId = Number(scope);
+      return Number.isSafeInteger(sessionId) ? [{ pid, sessionId, state: state! }] : [];
+    });
+}
+
+export async function requireChildProcessSession(
+  pid: number,
+  marker: string,
+): Promise<{
+  pid: number;
+  startedAt: string;
+  sessionId?: number;
+  sessionStartedAt?: string;
+  terminalId?: string;
+}> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const [rawSessionId, rawIdentity, rawTerminalId] = (await fs.readFile(marker, "utf8")).trim().split(/\r?\n/);
+      const sessionId = Number(rawSessionId?.trim());
+      const sessionStartedAt = rawIdentity?.trim().replace(/\s+/g, " ") ?? "";
+      if (Number.isSafeInteger(sessionId) && sessionId > 0 && sessionStartedAt) {
+        const terminalId = rawTerminalId?.trim();
+        if (process.platform === "darwin") {
+          if (terminalId && terminalId !== "??") return { pid: sessionId, startedAt: sessionStartedAt, terminalId };
+        } else {
+          return { pid: sessionId, startedAt: sessionStartedAt, sessionId, sessionStartedAt };
+        }
+      }
+    } catch (error) {
+      if (!isErrnoException(error) || error.code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new ProcessIdentityUnavailableError(pid);
+}
+
+async function processSessionExists(sessionId: number): Promise<boolean> {
+  return (await posixProcesses()).some((process) => process.sessionId === sessionId && !process.state.startsWith("Z"));
+}
+
+async function processTerminalExists(terminalId: string): Promise<boolean> {
+  return (await posixProcesses()).some((process) =>
+    process.terminalId === terminalId && !process.state.startsWith("Z")
+  );
+}
+
+async function terminateProcessSession(
+  sessionId: number,
+  sessionStartedAt: string,
+  force: boolean,
+): Promise<boolean> {
+  const leaderIdentity = await processIdentity(sessionId);
+  if (!leaderIdentity && await processSessionExists(sessionId)) throw new ProcessIdentityUnavailableError(sessionId);
+  if (!leaderIdentity) return false;
+  if (leaderIdentity !== sessionStartedAt) {
+    throw new Error(`Refusing to terminate reused process session ${sessionId}`);
+  }
+  const members = (await posixProcesses()).filter((process) =>
+    process.sessionId === sessionId && !process.state.startsWith("Z")
+  );
+  for (const member of members) {
+    if (member.pid === process.pid) throw new Error(`Refusing to terminate current process session ${sessionId}`);
+    try {
+      process.kill(member.pid, force ? "SIGKILL" : "SIGTERM");
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+  }
+  return members.length > 0;
+}
+
+async function terminateProcessTerminal(
+  terminalId: string,
+  leaderPid: number,
+  leaderStartedAt: string,
+  force: boolean,
+): Promise<boolean> {
+  const leaderIdentity = await processIdentity(leaderPid);
+  if (!leaderIdentity) {
+    if (await processTerminalExists(terminalId)) throw new ProcessIdentityUnavailableError(leaderPid);
+    return false;
+  }
+  if (leaderIdentity !== leaderStartedAt) {
+    throw new Error(`Refusing to terminate reused process ${leaderPid}`);
+  }
+  const members = (await posixProcesses()).filter((process) =>
+    process.terminalId === terminalId && !process.state.startsWith("Z")
+  );
+  for (const member of members) {
+    if (member.pid === process.pid) throw new Error(`Refusing to terminate current terminal ${terminalId}`);
+    try {
+      process.kill(member.pid, force ? "SIGKILL" : "SIGTERM");
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+  }
+  return members.length > 0;
+}
+
+export async function trackedProcessExists(
+  record: TrackedProcessRecord,
+  identify: (pid: number) => Promise<string | null> = processIdentity,
+  descendantsExist: (pid: number) => Promise<boolean> = processDescendantsExist,
+): Promise<boolean> {
+  if (record.terminalId !== undefined) return processTerminalExists(record.terminalId);
+  if (record.sessionId !== undefined) return processSessionExists(record.sessionId);
+  if (record.groupId !== undefined) return descendantsExist(record.groupId);
+  const identity = await identify(record.pid);
+  if (identity === record.startedAt) return true;
+  if (await descendantsExist(record.pid)) throw new ProcessIdentityUnavailableError(record.pid);
+  return false;
+}
+
+export async function terminateTrackedProcess(record: TrackedProcessRecord, force = false): Promise<boolean> {
+  if (record.terminalId !== undefined) {
+    return terminateProcessTerminal(record.terminalId, record.pid, record.startedAt, force);
+  }
+  if (record.sessionId !== undefined && record.sessionStartedAt !== undefined) {
+    return terminateProcessSession(record.sessionId, record.sessionStartedAt, force);
+  }
+  const identity = await processIdentity(record.pid);
+  if (identity === record.startedAt) {
+    return killProcessTree(record.groupId ?? record.pid, force, identity);
+  }
+  if (identity) return false;
+  if (await processDescendantsExist(record.groupId ?? record.pid)) throw new ProcessIdentityUnavailableError(record.pid);
+  return false;
 }
 
 export async function killProcessTree(
@@ -202,6 +428,49 @@ export async function killProcessTree(
     throw error;
   }
   return true;
+}
+
+async function terminateSpawnedProcess(pid: number, detached: boolean, expectedIdentity: string | null): Promise<boolean> {
+  if (process.platform === "win32") {
+    if (expectedIdentity && await killProcessTree(pid, true, expectedIdentity)) return true;
+    throw new ProcessIdentityUnavailableError(pid);
+  }
+  if (detached) {
+    const identity = await processIdentity(pid);
+    if (identity && expectedIdentity && identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
+    try { process.kill(-pid, "SIGKILL"); return true; } catch (error) { if (!isMissingProcess(error)) throw error; }
+    return false;
+  }
+  if (!expectedIdentity) return false;
+  const identity = await processIdentity(pid);
+  if (!identity) return false;
+  if (identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
+  const result = await run("ps", ["-e", "-o", "pid=", "-o", "ppid=", "-o", "stat="], { allowFailure: true });
+  if (result.code !== 0) throw new Error(`Could not enumerate POSIX processes: ${result.stderr.trim()}`);
+  const processes = result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
+    .filter((entry) => entry.length === 3 && !entry[2]!.startsWith("Z"))
+    .map(([rawPid, rawParent]) => ({ pid: Number(rawPid), parent: Number(rawParent) }))
+    .filter((entry) => Number.isSafeInteger(entry.pid) && Number.isSafeInteger(entry.parent));
+  const descendants: number[] = [];
+  const parents = new Set([pid]);
+  while (true) {
+    const children = processes.filter((entry) => parents.has(entry.parent) && !parents.has(entry.pid));
+    if (children.length === 0) break;
+    for (const child of children) {
+      parents.add(child.pid);
+      descendants.push(child.pid);
+    }
+  }
+  for (const childPid of descendants.reverse()) {
+    try { process.kill(childPid, "SIGKILL"); } catch (error) { if (!isMissingProcess(error)) throw error; }
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+    return true;
+  } catch (error) {
+    if (isMissingProcess(error)) return descendants.length > 0;
+    throw error;
+  }
 }
 
 function isMissingProcess(error: unknown): boolean {

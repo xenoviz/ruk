@@ -37,9 +37,9 @@ cd /absolute/path/to/workspace
 ruk run -- bun test
 ```
 
-`ruk run` checks dependency readiness before starting the command. Inside an
-assigned workspace, it also records the child process so release can clean it
-up safely.
+`ruk run` checks dependency inputs and projection integrity before starting the
+command. Inside an assigned workspace, it also records the child process so
+release can clean it up safely.
 
 Use the repository's normal Git workflow. Commit or otherwise save every file
 you intend to keep before release.

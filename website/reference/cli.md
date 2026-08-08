@@ -15,7 +15,7 @@ record or local dependency projection is stale.
 ### `ruk create <branch>`
 
 ```text
-ruk create <branch> [--path <directory>] [--from <ref>] [--detach] [--json]
+ruk create <branch> [--path <directory>] [--from <ref>] [--fetch] [--detach] [--json]
 ```
 
 Create and prepare an ordinary Git worktree. This command does not create an
@@ -26,11 +26,13 @@ assignment or add the worktree to Ruk's reusable pool.
 ### `ruk acquire <branch>`
 
 ```text
-ruk acquire <branch> [--from <ref>] [--ttl <minutes>] [--owner <id>] [--json]
+ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] [--json]
 ```
 
 Assign an available managed workspace or create one. The default TTL is 480
-minutes.
+minutes. `--fetch` refreshes the remote used by `--from` before assignment.
+Without `--from`, it resolves the primary remote's advertised default branch.
+Repeated `--port` options reserve named cooperative host-local ports.
 
 ### `ruk renew <assignment-id>`
 
@@ -55,14 +57,48 @@ recorded processes and discard worktree changes.
 
 Ensure dependencies are ready, launch the command, and return its exit code.
 Inside an assigned workspace, Ruk records the child process for release.
+The separator remains recommended. Ruk also accepts the command without it for
+PowerShell npm shims that consume a standalone `--`.
 
-### `ruk status [--json]`
+### `ruk exec <branch> -- <command>`
+
+Acquire a workspace, run one command, and release it when cleanup is safe.
+Acquire options include `--from`, `--fetch`, `--ttl`, `--owner`, and repeated
+`--port`. A dirty tree or cleanup failure retains the assignment and prints its
+recovery ID.
+
+### `ruk shell <branch>`
+
+Open a terminal-attached interactive assigned shell. Set `RUK_SHELL` to override
+the platform default. On POSIX, an isolated terminal session keeps surviving
+shell descendants tracked. Ruk releases a clean workspace on shell exit and
+retains a dirty one.
+
+### `ruk warm --count <n>`
+
+```text
+ruk warm --count <n> [--from <ref>] [--fetch] [--json]
+```
+
+Ensure that the pool contains the requested number of available prepared
+workspaces. The count is a target, so an already-warm pool creates nothing.
+Capacity checks are serialized with acquisition.
+
+### `ruk status [--explain] [--json]`
 
 Report dependency readiness and lifecycle state for the current worktree.
+Readiness reasons distinguish an unprepared workspace, missing dependency
+projection, and changed fingerprint.
 
 ### `ruk list [--json]`
 
 List Git worktrees with Ruk preparation and assignment information.
+
+### `ruk stats [--disk] [--json]`
+
+Report recorded acquisitions, reuse, preparation hits, failures, and timings.
+`--disk` performs an on-demand scan and labels deduplication savings as an
+estimate.
 
 ## Remove and collect
 
@@ -90,4 +126,5 @@ contact GitHub for updates.
 ## Global output behavior
 
 `--json` applies only where shown. Successful JSON commands write one value to
-stdout and diagnostics to stderr. Argument and operation failures exit nonzero.
+stdout and diagnostics to stderr. Failures exit nonzero and write one JSON
+error with a stable `code` and `retryable` field to stderr.

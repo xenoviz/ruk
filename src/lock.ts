@@ -54,7 +54,14 @@ async function ownerIsAlive(owner: LockOwner): Promise<boolean> {
   const key = `${owner.pid}:${owner.processIdentity}`;
   const cached = ownerIdentityChecks.get(key);
   if (cached && Date.now() - cached.checkedAt < 1_000) return cached.result;
-  const result = processIdentity(owner.pid).then((identity) => identity === owner.processIdentity);
+  const result = (async () => {
+    try {
+      const identity = await processIdentity(owner.pid);
+      return identity === null || identity === owner.processIdentity;
+    } catch {
+      return true;
+    }
+  })();
   ownerIdentityChecks.set(key, { checkedAt: Date.now(), result });
   return result;
 }
@@ -109,10 +116,9 @@ export async function withDirectoryLock<T>(
         }
       } catch (statError) {
         if (
-          isErrnoException(statError) &&
-          (statError.code === "ENOENT" || statError.code === "EEXIST" || statError.code === "ENOTEMPTY" || statError.code === "EPERM")
-        ) continue;
-        throw statError;
+          !isErrnoException(statError) ||
+          !["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM", "EBUSY"].includes(statError.code ?? "")
+        ) throw statError;
       }
       if (abandoned) continue;
       if (Date.now() - started > timeoutMs) {
