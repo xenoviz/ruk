@@ -130,7 +130,7 @@ cannot be collected concurrently.
 `removed` contains candidates in dry-run output and selected removals in apply
 output. Expired assigned or returning workspaces are only reported unless both
 `--apply` and `--force-expired` are present; successfully forced removals are
-omitted from `expired`.
+omitted from `expired`, and apply output is recomputed from final lifecycle state.
 Forced collection rechecks the current expiry in the lifecycle state transaction,
 so a concurrent renewal prevents collection.
 
@@ -145,7 +145,8 @@ rechecks the assignment fence and records the child process only when invoked
 inside an assigned managed workspace. Use the returned acquire path as the
 working directory.
 Detached managed `run` and `exec` commands forward wrapper `SIGINT` and
-`SIGTERM` signals to their recorded POSIX process group.
+`SIGTERM` signals to their recorded POSIX process group and return conventional
+130 or 143 exit codes when the child uses the default signal disposition.
 
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
 retains the assignment when the command leaves a dirty tree, cleanup fails, or

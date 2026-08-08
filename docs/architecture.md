@@ -129,6 +129,8 @@ reassignment or an initially unassigned pool slot instead of adopting another
 agent's lease. Explicit `--fetch` is
 the only workspace operation in this layer that contacts a Git remote, and an
 explicit remote name must exist.
+This includes shorthand `remote/branch` start points unless the name resolves to
+an existing local branch.
 Default fetch rejects multiple remotes when `origin` is absent.
 
 Garbage collection can recover abandoned preparation, acquisition handoff, and

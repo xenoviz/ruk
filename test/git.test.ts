@@ -79,8 +79,10 @@ test("fetch recognizes fully qualified remote-tracking refs", async (t) => {
   await run("git", ["remote", "add", "upstream", upstream], { cwd: root });
 
   assert.equal(await fetchRemote(root, "refs/remotes/upstream/main"), "upstream");
+  assert.equal(await fetchRemote(root, "upstream/main"), "upstream");
   await run("git", ["remote", "remove", "upstream"], { cwd: root });
   await assert.rejects(fetchRemote(root, "refs/remotes/upstream/main"), /Git remote upstream does not exist/);
+  await assert.rejects(fetchRemote(root, "upstream/main"), /Git remote upstream does not exist/);
 });
 
 test("default fetch rejects multiple remotes when origin is absent", async (t) => {

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import type { StdioOptions } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { isErrnoException } from "./types.js";
 import type { TrackedProcessRecord } from "./types.js";
@@ -143,7 +144,7 @@ export async function run(
         reject(spawnError);
         return;
       }
-      const result = { code: code ?? 1, signal, stdout, stderr };
+      const result = { code: code ?? (signal ? 128 + os.constants.signals[signal] : 1), signal, stdout, stderr };
       if (result.code === 0 || options.allowFailure) {
         resolve(result);
         return;

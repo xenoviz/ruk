@@ -40,10 +40,12 @@ export async function fetchRemote(cwd: string, startPoint = "origin/main"): Prom
   const candidate = qualifiedRemote ??
     (slash > 0 ? startPoint.slice(0, slash) : "origin");
   const remotes = (await run("git", ["remote"], { cwd })).stdout.split(/\r?\n/).filter(Boolean);
-  if (qualifiedRemote && !remotes.includes(qualifiedRemote)) {
-    throw new Error(`Git remote ${qualifiedRemote} does not exist`);
+  const selectedRemote = qualifiedRemote ??
+    (slash > 0 && !(await localBranchExists(cwd, startPoint)) ? candidate : undefined);
+  if (selectedRemote && !remotes.includes(selectedRemote)) {
+    throw new Error(`Git remote ${selectedRemote} does not exist`);
   }
-  const remote = remotes.includes(candidate) ? candidate : "origin";
+  const remote = selectedRemote ?? (remotes.includes(candidate) ? candidate : "origin");
   if (!remotes.includes(remote)) throw new Error(`Git remote ${remote} does not exist`);
   await run("git", ["fetch", "--prune", remote], { cwd });
   return remote;

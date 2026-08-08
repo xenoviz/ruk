@@ -810,15 +810,22 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
     }
   }
 
-  const removedPaths = new Set(removed.map((entry) => treeKey(entry.path)));
+  const currentExpiredCandidates = options.apply
+    ? await identifyGcCandidates(paths, cutoff, new Date().toISOString(), true)
+    : expiredCandidates;
+  const expired: Array<{ path: string; assignmentId: string; expiresAt: string }> = [];
+  for (const candidate of currentExpiredCandidates) {
+    if (!candidate.requiresForce) continue;
+    expired.push({
+      path: candidate.workspace.path,
+      assignmentId: candidate.workspace.assignment!.id,
+      expiresAt: candidate.workspace.assignment!.expiresAt,
+    });
+  }
   const result = {
     status: options.apply ? "collected" : "planned",
     removed,
-    expired: expiredCandidates.filter(({ workspace }) => !removedPaths.has(treeKey(workspace.path))).map(({ workspace }) => ({
-      path: workspace.path,
-      assignmentId: workspace.assignment!.id,
-      expiresAt: workspace.assignment!.expiresAt,
-    })),
+    expired,
   };
   if (options.json) io.stdout.write(jsonLine(result));
   else {

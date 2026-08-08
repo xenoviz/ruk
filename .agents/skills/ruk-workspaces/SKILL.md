@@ -29,7 +29,8 @@ leaderless POSIX process groups retain the assignment rather than being signaled
 failed registration also terminates the detached group after a short-lived leader exits.
 Ruk fences the assignment again immediately before launching a command.
 Managed detached `run` and `exec` commands forward `SIGINT` and `SIGTERM` to
-their POSIX process group. Ordinary release is rejected until acquisition handoff finishes.
+their POSIX process group and preserve conventional 130/143 exit codes. Ordinary
+release is rejected until acquisition handoff finishes.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
 an interactive, terminal-attached assigned shell; its isolated terminal session
 keeps surviving descendants tracked after the shell exits (by session ID on
@@ -81,3 +82,5 @@ Shared-backend version failures are retryable dependency-preparation errors.
 Active acquisition handoffs are retryable `RESOURCE_BUSY` errors; unknown
 configuration keys are non-retryable `INVALID_ARGUMENT` errors.
 Forced GC reports only expired assignments that remain active after collection.
+Explicit shorthand `remote/branch` fetches reject missing remotes unless the
+start point is an existing local branch.

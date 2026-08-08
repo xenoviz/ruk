@@ -62,3 +62,5 @@ versioning.
   for reliable JSON automation.
 - Serialize warm capacity with GC, bound linked-target scans, and omit collected
   assignments from expired recovery output.
+- Validate shorthand remotes, recompute expired output after GC, and preserve
+  conventional signal exit codes.

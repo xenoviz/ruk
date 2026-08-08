@@ -369,7 +369,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     const interruptReady = path.join(parent, "interrupt-ready");
     await fs.writeFile(
       interruptProbe,
-      "#!/bin/sh\ntrap 'printf received > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 130' INT\ntrap 'printf terminated > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 143' TERM\nprintf ready > \"$RUK_TEST_INTERRUPT_READY\"\nwhile :; do sleep 5 & wait $!; done\n",
+      "#!/bin/sh\ntrap 'printf received > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 130' INT\nprintf ready > \"$RUK_TEST_INTERRUPT_READY\"\nwhile :; do sleep 5 & wait $!; done\n",
     );
     await fs.chmod(interruptProbe, 0o755);
     const interruptedShell = await run(process.execPath, [cli, "shell", "agent/interrupted-shell"], {
@@ -428,12 +428,11 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     await releaseRetained(interruptedExec.stderr);
 
     const terminatedExec = await interruptCommand(
-      ["exec", "agent/terminated-exec", interruptProbe],
+      ["exec", "agent/terminated-exec", "sh", "-c", 'printf ready > "$RUK_TEST_INTERRUPT_READY"; exec sleep 60'],
       root,
       "SIGTERM",
     );
     assert.equal(terminatedExec.code, 143);
-    assert.equal(await fs.readFile(interruptMarker, "utf8"), "terminated");
     await releaseRetained(terminatedExec.stderr);
 
     const shellProbe = path.join(parent, "shell-probe.sh");
@@ -506,6 +505,23 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   assert.equal(expiredCollection.removed[0].reason, "expired assignment (forced)");
   assert.equal(expiredCollection.expired.length, 0);
   await assert.rejects(fs.access(expiring.path));
+
+  const renewedDuringGc = JSON.parse((await run(
+    process.execPath,
+    [cli, "acquire", "agent/renewed-during-gc", "--ttl", "0.001", "--json"],
+    { cwd: root },
+  )).stdout);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  let renewedGc!: ReturnType<typeof run>;
+  await withDirectoryLock(`${treeLockPath(paths, renewedDuringGc.path)}.acquire`, async () => {
+    renewedGc = run(process.execPath, [cli, "gc", "--apply", "--force-expired", "--json"], { cwd: root });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await run(process.execPath, [cli, "renew", renewedDuringGc.assignmentId, "--json"], { cwd: root });
+  });
+  const renewedCollection = JSON.parse((await renewedGc).stdout);
+  assert.equal(renewedCollection.removed.length, 0);
+  assert.equal(renewedCollection.expired.length, 0);
+  await run(process.execPath, [cli, "release", renewedDuringGc.assignmentId, "--json"], { cwd: root });
 });
 
 test("failed preparation invalidates a reused workspace projection", { timeout: 60_000 }, async (t) => {
