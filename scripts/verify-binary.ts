@@ -17,7 +17,7 @@ try {
   });
 
   const version = await run(executable, ["--version"], { cwd: temporary });
-  assert.match(version.stdout, /^0\.1\.0\n$/);
+  assert.match(version.stdout, /^0\.1\.1\n$/);
   const help = await run(executable, ["--help"], { cwd: temporary });
   assert.match(help.stdout, /^Ruk —/);
 

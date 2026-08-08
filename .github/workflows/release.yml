@@ -1,14 +1,15 @@
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.release.tag_name }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -24,7 +25,7 @@ jobs:
       - name: Checkout release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.ref_name }}
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -41,7 +42,7 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Verify release tag
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/verify-release.ts
       - name: Validate and test
         run: |
@@ -81,7 +82,7 @@ jobs:
       - name: Checkout release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.ref_name }}
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -90,7 +91,7 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Verify release tag
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/verify-release.ts
       - name: Build executable
         env:
@@ -125,33 +126,63 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Prepare mutable draft release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if RELEASE=$(gh release view "$RELEASE_TAG" --json isDraft,assets 2>/dev/null); then
+            if [[ $(jq -r '.isDraft' <<<"$RELEASE") == "false" ]]; then
+              if jq -e '.assets | any(.name == "ruk-release.json")' <<<"$RELEASE" >/dev/null; then
+                echo "ready=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Published release $RELEASE_TAG is missing its readiness manifest." >&2
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --verify-tag \
+              --generate-notes \
+              --title "Ruk ${RELEASE_TAG#v}"
+          fi
+          echo "ready=false" >> "$GITHUB_OUTPUT"
       - name: Checkout release commit
+        if: steps.release.outputs.ready != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.ref_name }}
       - name: Setup Bun
+        if: steps.release.outputs.ready != 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
       - name: Download staged assets
+        if: steps.release.outputs.ready != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: binary-*
           path: artifacts
           merge-multiple: true
       - name: Create and verify readiness manifest
+        if: steps.release.outputs.ready != 'true'
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/create-release-manifest.ts
       - name: Attest readiness manifest
+        if: steps.release.outputs.ready != 'true'
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
         with:
           subject-path: artifacts/ruk-release.json
-      - name: Publish assets and readiness manifest last
+      - name: Upload assets and readiness manifest last
+        if: steps.release.outputs.ready != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           EXISTING_ASSETS=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
           if grep -Fxq ruk-release.json <<<"$EXISTING_ASSETS"; then
@@ -160,6 +191,13 @@ jobs:
           mapfile -d '' ASSETS < <(find artifacts -maxdepth 1 -type f ! -name ruk-release.json -print0 | sort -z)
           gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber
           gh release upload "$RELEASE_TAG" artifacts/ruk-release.json --clobber
+      - name: Publish immutable ready release
+        if: steps.release.outputs.ready != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
 
   windows-update-smoke:
     name: Windows release-to-release update
@@ -172,7 +210,7 @@ jobs:
       - name: Checkout release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.ref_name }}
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -180,5 +218,5 @@ jobs:
       - name: Exercise previous Windows executable updater
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/verify-release-update.ts

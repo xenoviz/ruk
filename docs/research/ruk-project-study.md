@@ -311,13 +311,14 @@ Bun, pnpm, or Yarn with the exact released version; unusual layouts can set
 [package delegation](../../src/update.ts#L249-L270),
 [update orchestration](../../src/update.ts#L402-L442))
 
-The release workflow starts when a GitHub release is published. It verifies tag
-and package version parity, tests and publishes the npm package through trusted
-publishing, builds and attests all binaries, verifies the complete staged asset
-set, attests the readiness manifest, uploads binaries/checksums first, and
-uploads `ruk-release.json` last. A later job exercises a real previous-ready to
-current Windows self-update; the first release skips because it has no source
-version.
+The release workflow starts when a version tag is pushed. It verifies tag and
+package version parity, tests and publishes the npm package through trusted
+publishing, builds and attests all binaries, and creates a mutable draft release.
+The finalizer verifies the complete staged asset set, attests the readiness
+manifest, uploads binaries/checksums first, uploads `ruk-release.json` last, and
+then publishes the immutable release. A later job exercises a real
+previous-ready to current Windows self-update; the first ready release skips
+because it has no source version.
 ([release workflow](../../.github/workflows/release.yml#L14-L162),
 [Windows smoke job](../../.github/workflows/release.yml#L164-L184),
 [upgrade verifier](../../scripts/verify-release-update.ts#L15-L92))
@@ -371,9 +372,9 @@ attestation.
 ## Maturity and evidenced limitations
 
 Ruk is small but not a sketch: the end-to-end CLI test creates, leases, renews,
-runs in, releases, reuses, expires, and collects real Git worktrees. However,
-the version is still marked `0.1.0 - Unreleased`, and the public README calls it
-an early release with a deliberately small surface.
+runs in, releases, reuses, expires, and collects real Git worktrees. The first
+public package release is available, and the public README describes it as an
+early release with a deliberately small surface.
 ([CLI integration test](../../test/cli.test.ts#L13-L177),
 [CHANGELOG](../../CHANGELOG.md#L6-L22),
 [README status](../../README.md#L19-L34))
@@ -384,10 +385,9 @@ thresholds are the ones documented in the package scripts and Node test runner.
 ([package scripts](../../package.json#L9-L24),
 [coverage runner](../../scripts/run-node-tests.ts#L16-L31))
 
-GitHub project-state observation on 2026-08-04: PR 1 was merged, no release or
-tag had been published, three Dependabot PRs were open, and there were no open
-issues. These are point-in-time hosting facts rather than durable product
-invariants.
+GitHub project-state observation on 2026-08-08: the repository is public and the
+first npm package and GitHub tag have been published. These are point-in-time
+hosting facts rather than durable product invariants.
 ([PR 1](https://github.com/xenoviz/ruk/pull/1),
 [releases](https://github.com/xenoviz/ruk/releases),
 [tags](https://github.com/xenoviz/ruk/tags),
