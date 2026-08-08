@@ -504,6 +504,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   });
   const expiredCollection = JSON.parse((await forcedGc).stdout);
   assert.equal(expiredCollection.removed[0].reason, "expired assignment (forced)");
+  assert.equal(expiredCollection.expired.length, 0);
   await assert.rejects(fs.access(expiring.path));
 });
 
@@ -636,6 +637,37 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   );
   assert.equal(failed.code, 1);
   assert.equal(JSON.parse(failed.stderr).status, "error");
+});
+
+test("warm waits for collection before reporting capacity", { timeout: 60_000 }, async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-warm-gc-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "repo");
+  await fs.mkdir(root);
+  await fs.writeFile(path.join(root, "package.json"), '{"name":"warm-gc"}\n');
+  await fs.writeFile(path.join(root, ".rukrc.json"), JSON.stringify({
+    dependencyMode: "managed",
+    installCommand: [process.execPath, "-e", "require('fs').mkdirSync('node_modules')"],
+  }));
+  await run("git", ["init", "-q", "-b", "main"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: root });
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "fixture"], { cwd: root });
+  const first = JSON.parse((await run(process.execPath, [cli, "warm", "--count", "1", "--json"], { cwd: root })).stdout);
+  const repository = await getRepository(root);
+  const paths = storePaths(repository.commonDir);
+  let collecting!: ReturnType<typeof run>;
+  let warming!: ReturnType<typeof run>;
+  await withDirectoryLock(`${treeLockPath(paths, first.created[0])}.acquire`, async () => {
+    collecting = run(process.execPath, [cli, "gc", "--max-age", "0", "--apply", "--json"], { cwd: root });
+    await waitFor(() => fs.access(path.join(paths.root, "pool-maintenance.lock")).then(() => true, () => false));
+    warming = run(process.execPath, [cli, "warm", "--count", "1", "--json"], { cwd: root });
+  });
+  const [collected, warmed] = await Promise.all([collecting, warming]);
+  assert.equal(JSON.parse(collected.stdout).removed[0].path, first.created[0]);
+  assert.equal(JSON.parse(warmed.stdout).available, 1);
+  await assert.rejects(fs.access(first.created[0]));
 });
 
 test("gc recovers an interrupted acquire handoff", async (t) => {

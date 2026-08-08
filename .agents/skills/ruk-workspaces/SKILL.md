@@ -66,6 +66,8 @@ GC recovers interrupted preparations, pre-handoff acquisitions, and collections
 after the age cutoff; it revalidates handoff state under the acquisition lock
 and preserves recovery markers after failed cleanup. Workspace and warm locks
 prevent recovery from racing live operations, including forced expiry cleanup.
+Warm and GC also share a pool-maintenance lock, so reported capacity cannot be
+removed by an already-running collection.
 An unreadable identity for a live lock owner is treated as busy, never stale.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
@@ -78,3 +80,4 @@ dependency installers have their output discarded to keep memory bounded.
 Shared-backend version failures are retryable dependency-preparation errors.
 Active acquisition handoffs are retryable `RESOURCE_BUSY` errors; unknown
 configuration keys are non-retryable `INVALID_ARGUMENT` errors.
+Forced GC reports only expired assignments that remain active after collection.

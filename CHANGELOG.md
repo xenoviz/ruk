@@ -60,3 +60,5 @@ versioning.
   default remotes; probe dual-stack ports and classify backend version failures.
 - Forward managed `SIGTERM` signals and classify handoff/configuration failures
   for reliable JSON automation.
+- Serialize warm capacity with GC, bound linked-target scans, and omit collected
+  assignments from expired recovery output.

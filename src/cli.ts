@@ -707,6 +707,7 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
   const paths = storePaths(repository.commonDir);
   const cutoff = new Date(Date.now() - minutes(options.maxAge, 1440, "--max-age", true) * 60_000).toISOString();
   const current = await canonicalPath(repository.root);
+  return withDirectoryLock(path.join(paths.root, "pool-maintenance.lock"), async () => {
   const candidates = await withDirectoryLock(
     path.join(paths.root, "warm.lock"),
     () => identifyGcCandidates(paths, cutoff, undefined, true),
@@ -809,10 +810,11 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
     }
   }
 
+  const removedPaths = new Set(removed.map((entry) => treeKey(entry.path)));
   const result = {
     status: options.apply ? "collected" : "planned",
     removed,
-    expired: expiredCandidates.map(({ workspace }) => ({
+    expired: expiredCandidates.filter(({ workspace }) => !removedPaths.has(treeKey(workspace.path))).map(({ workspace }) => ({
       path: workspace.path,
       assignmentId: workspace.assignment!.id,
       expiresAt: workspace.assignment!.expiresAt,
@@ -824,6 +826,7 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
     if (result.expired.length) io.stdout.write(`Expired assignments: ${result.expired.length}\n`);
   }
   return result;
+  });
 }
 
 async function execute(
@@ -971,7 +974,8 @@ async function warm(args: readonly string[], cwd: string, io: CliIo) {
   const targetHead = (await run("git", ["rev-parse", startPoint], { cwd: repository.root })).stdout.trim();
   const paths = storePaths(repository.commonDir);
   // ponytail: one host-wide warm lock; reserve per-slot if concurrent warming needs higher throughput.
-  return withDirectoryLock(path.join(paths.root, "warm.lock"), async () => {
+  return withDirectoryLock(path.join(paths.root, "pool-maintenance.lock"), () =>
+    withDirectoryLock(path.join(paths.root, "warm.lock"), async () => {
     const initial = await readState(paths);
     const worktreeHeads = new Map(
       (await listWorktrees(repository.root)).map((worktree) => [treeKey(worktree.path), worktree.head]),
@@ -1022,7 +1026,8 @@ async function warm(args: readonly string[], cwd: string, io: CliIo) {
     if (options.json) io.stdout.write(jsonLine(result));
     else io.stdout.write(`Available workspaces: ${result.available} (${created.length} created)\n`);
     return result;
-  });
+    })
+  );
 }
 
 function splitExecArguments(args: readonly string[]): { acquireArgs: string[]; command: string[] } {

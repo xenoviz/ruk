@@ -129,7 +129,8 @@ cannot be collected concurrently.
 `status` is `planned` for a dry run and `collected` when applying the plan.
 `removed` contains candidates in dry-run output and selected removals in apply
 output. Expired assigned or returning workspaces are only reported unless both
-`--apply` and `--force-expired` are present.
+`--apply` and `--force-expired` are present; successfully forced removals are
+omitted from `expired`.
 Forced collection rechecks the current expiry in the lifecycle state transaction,
 so a concurrent renewal prevents collection.
 
@@ -161,7 +162,8 @@ with an IPv4 fallback on hosts without IPv6.
 
 `ruk stats --json` returns aggregate acquisition, reuse, preparation, failure,
 and timing counters. `--disk` adds an on-demand scan; `estimatedBytesAvoided`
-is explicitly approximate, and nested linked targets are counted once.
+is explicitly approximate, nested linked targets are counted once, and target
+traversal is sequential to bound filesystem and memory pressure.
 
 ## Failure record
 

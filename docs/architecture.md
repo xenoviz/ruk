@@ -140,6 +140,8 @@ recovery restores its acquisition marker. Failed removal is re-locked before a
 workspace becomes available, and post-removal state remains retryable and is
 excluded from available-capacity statistics and warm counts. Forced-expiry
 release uses the handoff lock before it changes workspace state.
+Warm validation and garbage collection share a pool-maintenance lock so a slot
+cannot be removed after being reported as available.
 Ordinary release cannot cross an active acquisition marker, and an unreadable
 identity for a provably live lock owner never authorizes stale-lock recovery.
 

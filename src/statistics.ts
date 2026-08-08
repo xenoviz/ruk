@@ -28,8 +28,9 @@ async function entrySize(entry: string, visited: Set<string>): Promise<number> {
   } catch {
     return 0;
   }
-  const sizes = await Promise.all(entries.map((name) => entrySize(path.join(real, name), visited)));
-  return sizes.reduce((total, size) => total + size, 0);
+  let size = 0;
+  for (const name of entries) size += await entrySize(path.join(real, name), visited);
+  return size;
 }
 
 async function scanProjection(
