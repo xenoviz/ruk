@@ -369,7 +369,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     const interruptReady = path.join(parent, "interrupt-ready");
     await fs.writeFile(
       interruptProbe,
-      "#!/bin/sh\ntrap 'printf received > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 130' INT\nprintf ready > \"$RUK_TEST_INTERRUPT_READY\"\nwhile :; do sleep 5 & wait $!; done\n",
+      "#!/bin/sh\ntrap 'printf received > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 130' INT\ntrap 'printf terminated > \"$RUK_TEST_INTERRUPT_MARKER\"; exit 143' TERM\nprintf ready > \"$RUK_TEST_INTERRUPT_READY\"\nwhile :; do sleep 5 & wait $!; done\n",
     );
     await fs.chmod(interruptProbe, 0o755);
     const interruptedShell = await run(process.execPath, [cli, "shell", "agent/interrupted-shell"], {
@@ -390,7 +390,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     assert.equal(await fs.readFile(interruptMarker, "utf8"), "received");
     await releaseRetained(interruptedShell.stderr);
 
-    const interruptCommand = async (args: string[], commandCwd: string) => {
+    const interruptCommand = async (args: string[], commandCwd: string, signal: NodeJS.Signals = "SIGINT") => {
       await Promise.all([fs.rm(interruptMarker, { force: true }), fs.rm(interruptReady, { force: true })]);
       return run(process.execPath, [cli, ...args], {
         cwd: commandCwd,
@@ -402,7 +402,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
         },
         onSpawn: async (pid) => {
           await waitFor(async () => fs.access(interruptReady).then(() => true, () => false));
-          process.kill(pid, "SIGINT");
+          process.kill(pid, signal);
         },
       });
     };
@@ -426,6 +426,15 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     assert.equal(interruptedExec.code, 130);
     assert.equal(await fs.readFile(interruptMarker, "utf8"), "received");
     await releaseRetained(interruptedExec.stderr);
+
+    const terminatedExec = await interruptCommand(
+      ["exec", "agent/terminated-exec", interruptProbe],
+      root,
+      "SIGTERM",
+    );
+    assert.equal(terminatedExec.code, 143);
+    assert.equal(await fs.readFile(interruptMarker, "utf8"), "terminated");
+    await releaseRetained(terminatedExec.stderr);
 
     const shellProbe = path.join(parent, "shell-probe.sh");
     const shellChildPid = path.join(parent, "shell-child.pid");
@@ -657,6 +666,17 @@ test("gc recovers an interrupted acquire handoff", async (t) => {
     expiresAt: "2030-01-01T00:00:00.000Z",
     now: "2026-01-01T00:00:00.000Z",
   });
+  const handoffRelease = await run(
+    process.execPath,
+    [cli, "release", liveAssignment.assignment!.id, "--json"],
+    { cwd: root, allowFailure: true },
+  );
+  assert.deepEqual(JSON.parse(handoffRelease.stderr), {
+    status: "error",
+    code: "RESOURCE_BUSY",
+    message: `Assignment ${liveAssignment.assignment!.id} acquisition is still in progress`,
+    retryable: true,
+  });
   let blockedGc!: ReturnType<typeof run>;
   await withDirectoryLock(`${treeLockPath(paths, live)}.acquire`, async () => {
     blockedGc = run(process.execPath, [cli, "gc", "--max-age", "0", "--apply", "--json"], { cwd: root });
@@ -744,6 +764,17 @@ test("CLI exposes stable help, version, JSON, and argument errors", async (t) =>
     const result = await run(process.execPath, [cli, "sync", "--json"], { cwd: root, allowFailure: true });
     assert.equal(JSON.parse(result.stderr).code, "DEPENDENCY_PREPARATION_FAILED");
   }
+
+  const invalidConfig = path.join(parent, "invalid-config");
+  await fs.mkdir(invalidConfig);
+  await fs.writeFile(path.join(invalidConfig, "package.json"), '{"name":"invalid-config"}\n');
+  await fs.writeFile(path.join(invalidConfig, ".rukrc.json"), '{"unsupported":true}\n');
+  await run("git", ["init", "-q"], { cwd: invalidConfig });
+  const configFailure = await run(process.execPath, [cli, "sync", "--json"], {
+    cwd: invalidConfig,
+    allowFailure: true,
+  });
+  assert.equal(JSON.parse(configFailure.stderr).code, "INVALID_ARGUMENT");
 });
 
 async function waitFor(check: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {

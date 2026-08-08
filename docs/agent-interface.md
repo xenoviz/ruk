@@ -143,8 +143,8 @@ projection contents or linked package targets no longer match their fingerprint.
 rechecks the assignment fence and records the child process only when invoked
 inside an assigned managed workspace. Use the returned acquire path as the
 working directory.
-Detached managed `run` and `exec` commands forward wrapper interrupts to their
-recorded POSIX process group.
+Detached managed `run` and `exec` commands forward wrapper `SIGINT` and
+`SIGTERM` signals to their recorded POSIX process group.
 
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
 retains the assignment when the command leaves a dirty tree, cleanup fails, or

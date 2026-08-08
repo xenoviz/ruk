@@ -885,16 +885,19 @@ async function execute(
   const assignmentId = expectedAssignmentId ?? lifecycle.assignment.id;
   const environment = { ...process.env, ...portEnvironment(lifecycle.assignment.ports) };
   const tracking: { record?: TrackedProcessRecord } = {};
-  let interruptPending = false;
-  const forwardSignal = () => {
-    interruptPending = true;
+  let pendingSignal: NodeJS.Signals | undefined;
+  const forwardSignal = (signal: NodeJS.Signals) => {
+    pendingSignal = signal;
     const groupId = tracking.record?.groupId;
     if (!groupId) return;
-    interruptPending = false;
-    try { process.kill(-groupId, "SIGINT"); } catch { /* The command may already have exited. */ }
+    pendingSignal = undefined;
+    try { process.kill(-groupId, signal); } catch { /* The command may already have exited. */ }
   };
   let execution!: ReturnType<typeof run>;
-  if (forwardInterrupt && process.platform !== "win32") process.on("SIGINT", forwardSignal);
+  if (forwardInterrupt && process.platform !== "win32") {
+    process.on("SIGINT", forwardSignal);
+    process.on("SIGTERM", forwardSignal);
+  }
   try {
     await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
       const current = (await readState(paths)).workspaces[treeKey(repository.root)];
@@ -932,7 +935,7 @@ async function execute(
           };
           await addAssignmentProcess(paths, assignmentId, record);
           tracking.record = record;
-          if (interruptPending) forwardSignal();
+          if (pendingSignal) forwardSignal(pendingSignal);
           registered();
         },
       });
@@ -948,7 +951,10 @@ async function execute(
     }
     return result.code;
   } finally {
-    if (forwardInterrupt && process.platform !== "win32") process.off("SIGINT", forwardSignal);
+    if (forwardInterrupt && process.platform !== "win32") {
+      process.off("SIGINT", forwardSignal);
+      process.off("SIGTERM", forwardSignal);
+    }
   }
 }
 

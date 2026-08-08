@@ -28,8 +28,8 @@ assignment when child identity cannot be established while descendants remain;
 leaderless POSIX process groups retain the assignment rather than being signaled;
 failed registration also terminates the detached group after a short-lived leader exits.
 Ruk fences the assignment again immediately before launching a command.
-Managed detached `run` and `exec` commands forward interrupts to their POSIX
-process group. Ordinary release is rejected until acquisition handoff finishes.
+Managed detached `run` and `exec` commands forward `SIGINT` and `SIGTERM` to
+their POSIX process group. Ordinary release is rejected until acquisition handoff finishes.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
 an interactive, terminal-attached assigned shell; its isolated terminal session
 keeps surviving descendants tracked after the shell exits (by session ID on
@@ -76,3 +76,5 @@ When a JSON command fails, parse the JSON error from stderr and use its stable
 `RESOURCE_BUSY` errors, and stdout contains no success record. JSON-mode
 dependency installers have their output discarded to keep memory bounded.
 Shared-backend version failures are retryable dependency-preparation errors.
+Active acquisition handoffs are retryable `RESOURCE_BUSY` errors; unknown
+configuration keys are non-retryable `INVALID_ARGUMENT` errors.

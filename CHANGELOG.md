@@ -58,3 +58,5 @@ versioning.
   and fail closed on leaderless sessions or unreadable live lock identities.
 - Reject symlinked projection ancestors, leaderless reused groups, and ambiguous
   default remotes; probe dual-stack ports and classify backend version failures.
+- Forward managed `SIGTERM` signals and classify handoff/configuration failures
+  for reliable JSON automation.
