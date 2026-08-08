@@ -432,11 +432,8 @@ export async function killProcessTree(
 
 async function terminateSpawnedProcess(pid: number, detached: boolean, expectedIdentity: string | null): Promise<boolean> {
   if (process.platform === "win32") {
-    if (expectedIdentity) return killProcessTree(pid, true, expectedIdentity);
-    const result = await run("taskkill", ["/PID", String(pid), "/T", "/F"], { allowFailure: true });
-    if (result.code === 0) return true;
-    if (await processDescendantsExist(pid)) throw new ProcessIdentityUnavailableError(pid);
-    return false;
+    if (expectedIdentity && await killProcessTree(pid, true, expectedIdentity)) return true;
+    throw new ProcessIdentityUnavailableError(pid);
   }
   if (detached) {
     const identity = await processIdentity(pid);

@@ -27,8 +27,8 @@ retains the assignment and prints the exact recovery ID. It also retains the
 assignment when child identity cannot be established while descendants remain;
 leaderless POSIX process groups retain the assignment rather than being signaled;
 failed registration also terminates the detached group after a short-lived leader exits.
-On Windows it terminates the new tree when possible and otherwise retains the
-assignment while descendants remain or the leader PID is reused.
+On Windows it terminates the new tree only with a verified leader identity and
+otherwise retains the assignment while descendants remain or the leader PID is reused.
 Ruk fences the assignment again immediately before launching a command.
 Managed detached `run` and `exec` commands forward `SIGINT` and `SIGTERM` to
 their POSIX process group and preserve conventional 130/143 exit codes. Ordinary

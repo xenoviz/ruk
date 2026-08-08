@@ -788,12 +788,18 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
                 entry.workspace.assignment?.id === candidate.workspace.assignment?.id,
             );
             if (!currentCandidate) return false;
-            const released = await releaseAssignment(
-              repository,
-              currentCandidate.workspace.assignment!.id,
-              true,
-              collectionTime,
-            );
+            const assignmentId = currentCandidate.workspace.assignment!.id;
+            let released: Awaited<ReturnType<typeof releaseAssignment>>;
+            try {
+              released = await releaseAssignment(repository, assignmentId, true, collectionTime);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (
+                message === `Assignment ${assignmentId} was renewed before collection` ||
+                message === `Assignment ${assignmentId} does not exist`
+              ) return false;
+              throw error;
+            }
             await collectWorkspaceWithAcquisitionLock(
               repository,
               paths,

@@ -66,3 +66,5 @@ versioning.
   conventional signal exit codes.
 - Revalidate GC candidates, preserve handoff renewals, and fail closed for
   leaderless or reused Windows process trees.
+- Fence Windows registration cleanup by process identity and skip forced-GC
+  candidates whose leases change after revalidation.

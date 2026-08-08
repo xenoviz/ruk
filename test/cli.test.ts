@@ -536,8 +536,9 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   )).stdout);
   await new Promise((resolve) => setTimeout(resolve, 100));
   let renewedGc!: ReturnType<typeof run>;
-  await withDirectoryLock(`${treeLockPath(paths, renewedDuringGc.path)}.acquire`, async () => {
+  await withDirectoryLock(treeLockPath(paths, renewedDuringGc.path), async () => {
     renewedGc = run(process.execPath, [cli, "gc", "--apply", "--force-expired", "--json"], { cwd: root });
+    await waitFor(() => fs.access(`${treeLockPath(paths, renewedDuringGc.path)}.acquire`).then(() => true, () => false));
     await new Promise((resolve) => setTimeout(resolve, 300));
     await run(process.execPath, [cli, "renew", renewedDuringGc.assignmentId, "--json"], { cwd: root });
   });

@@ -115,8 +115,9 @@ Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. Leaderless POSIX process groups fail
 closed because their numeric IDs can be reused.
-Windows registration cleanup terminates the new process tree when possible and
-otherwise retains ownership while descendants remain or the leader PID is reused.
+Windows registration cleanup terminates the new process tree only with a verified
+leader identity and otherwise retains ownership while descendants remain or the
+leader PID is reused.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing

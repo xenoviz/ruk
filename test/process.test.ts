@@ -111,26 +111,32 @@ test("process runner terminates a detached group after its leader exits before r
   let workerPid = 0;
   const originalPath = process.env["PATH"];
   if (process.platform !== "win32") process.env["PATH"] = root;
+  const expectedFailure = process.platform === "win32" ? /cannot be released safely/ : /tracking failed/;
   try {
     await assert.rejects(
       run(
         process.execPath,
         [
           "-e",
-          `const{spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e',${JSON.stringify(workerScript)}],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(workerFile)},String(child.pid))`,
+          `const{spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e',${JSON.stringify(workerScript)}],{stdio:'ignore',detached:process.platform==='win32'});child.unref();fs.writeFileSync(${JSON.stringify(workerFile)},String(child.pid))`,
         ],
         {
           detached: true,
-          onSpawn: async () => {
+          onSpawn: async (pid) => {
             for (let attempt = 0; attempt < 100 && workerPid === 0; attempt += 1) {
               try { workerPid = Number(await fs.readFile(workerFile, "utf8")); } catch {}
               await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            if (process.platform === "win32") {
+              for (let attempt = 0; attempt < 100 && await processIdentity(pid); attempt += 1) {
+                await new Promise((resolve) => setTimeout(resolve, 10));
+              }
             }
             throw new Error("tracking failed");
           },
         },
       ),
-      /tracking failed/,
+      expectedFailure,
     );
   } finally {
     if (process.platform !== "win32") {
@@ -140,10 +146,9 @@ test("process runner terminates a detached group after its leader exits before r
   }
   assert.ok(workerPid > 0);
   if (process.platform === "win32") {
-    for (let attempt = 0; attempt < 20 && await processIdentity(workerPid); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    assert.equal(await processIdentity(workerPid), null);
+    const identity = await processIdentity(workerPid);
+    assert.ok(identity);
+    await killProcessTree(workerPid, true, identity);
   } else {
     await new Promise((resolve) => setTimeout(resolve, 750));
     await assert.rejects(fs.access(survivedFile), { code: "ENOENT" });
