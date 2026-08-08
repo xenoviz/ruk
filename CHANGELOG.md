@@ -3,6 +3,12 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## 0.1.1 - 2026-08-08
+
+- Publish immutable GitHub releases only after binaries, checksums, provenance,
+  and the update-readiness manifest have been attached to a mutable draft.
+- Correct the public installation guide now that the npm package is available.
+
 ## 0.1.0 - 2026-08-08
 
 - Establish Ruk as an independent dependency-aware Git workspace manager.
