@@ -3,7 +3,7 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-08-08
 
 - Establish Ruk as an independent dependency-aware Git workspace manager.
 - Add automatic Bun, pnpm, npm, Yarn, and custom install handling.
