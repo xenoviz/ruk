@@ -1,6 +1,6 @@
 {
   "name": "@xenoviz/ruk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Dependency-aware Git workspaces for parallel coding agents",
   "type": "module",
   "bin": {

@@ -131,6 +131,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           if RELEASE=$(gh release view "$RELEASE_TAG" --json isDraft,assets 2>/dev/null); then

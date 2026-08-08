@@ -3,6 +3,11 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## 0.1.2 - 2026-08-08
+
+- Give the draft-release finalizer explicit repository context before checkout
+  so tag-triggered releases can create their mutable draft reliably.
+
 ## 0.1.1 - 2026-08-08
 
 - Publish immutable GitHub releases only after binaries, checksums, provenance,
