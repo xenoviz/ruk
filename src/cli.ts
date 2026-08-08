@@ -432,6 +432,7 @@ async function releaseAssignment(
   force: boolean,
   requireExpiredBy?: string,
   acquisitionOperationId?: string,
+  expectedUpdatedAt?: string,
 ): Promise<{ workspace: WorkspaceRecord; cleanedProcesses: number }> {
   const paths = storePaths(repository.commonDir);
   const matches = await findAssignments(paths, { id: assignmentId });
@@ -446,6 +447,7 @@ async function releaseAssignment(
         undefined,
         requireExpiredBy,
         acquisitionOperationId,
+        expectedUpdatedAt,
       );
       returning = true;
       const cleanedProcesses = await cleanTrackedProcesses(paths, assignmentId, workspace.processes, force);
@@ -726,13 +728,26 @@ async function garbageCollect(args: readonly string[], cwd: string, io: CliIo) {
                 entry.workspace.assignment?.id === candidate.workspace.assignment?.id,
             );
             if (!currentCandidate) return false;
-            const released = await releaseAssignment(
-              repository,
-              currentCandidate.workspace.assignment!.id,
-              true,
-              undefined,
-              currentCandidate.workspace.operationId!,
-            );
+            const assignmentId = currentCandidate.workspace.assignment!.id;
+            let released: Awaited<ReturnType<typeof releaseAssignment>>;
+            try {
+              released = await releaseAssignment(
+                repository,
+                assignmentId,
+                true,
+                undefined,
+                currentCandidate.workspace.operationId!,
+                currentCandidate.workspace.updatedAt,
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (
+                message === `Assignment ${assignmentId} changed before collection` ||
+                message === `Assignment ${assignmentId} acquisition operation does not match` ||
+                message === `Assignment ${assignmentId} does not exist`
+              ) return false;
+              throw error;
+            }
             await collectWorkspaceWithAcquisitionLock(
               repository,
               paths,

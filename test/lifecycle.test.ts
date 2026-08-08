@@ -97,7 +97,11 @@ test("preparation and assignment finalizers are fenced by immutable IDs", async 
     beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, crypto.randomUUID()),
     /acquisition is still in progress/,
   );
-  await beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, first.operationId!);
+  await assert.rejects(
+    beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, first.operationId!, T1),
+    /changed before collection/,
+  );
+  await beginWorkspaceReturn(paths, first.assignment!.id, T1, undefined, first.operationId!, T0);
   await finishWorkspaceReturn(paths, first.assignment!.id, T1);
   const second = await reserveAvailableWorkspace(paths, {
     owner: "other",

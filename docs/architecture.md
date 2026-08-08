@@ -148,7 +148,8 @@ release uses the handoff lock before it changes workspace state.
 Warm validation and garbage collection share a pool-maintenance lock so a slot
 cannot be removed after being reported as available.
 Collection revalidates every stale snapshot under the slot's acquisition lock,
-and acquisition handoff does not overwrite a concurrent lease renewal.
+passes that update fence into the lifecycle transaction, and acquisition handoff
+does not overwrite a concurrent lease renewal.
 Ordinary release cannot cross an active acquisition marker, and an unreadable
 identity for a provably live lock owner never authorizes stale-lock recovery.
 

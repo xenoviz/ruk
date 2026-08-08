@@ -298,6 +298,7 @@ export async function beginWorkspaceReturn(
   now?: string,
   requireExpiredBy?: string,
   acquisitionOperationId?: string,
+  expectedUpdatedAt?: string,
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
@@ -308,6 +309,9 @@ export async function beginWorkspaceReturn(
     }
     if (acquisitionOperationId !== undefined && workspace.operationId !== acquisitionOperationId) {
       throw new Error(`Assignment ${assignmentId} acquisition operation does not match`);
+    }
+    if (expectedUpdatedAt !== undefined && workspace.updatedAt !== expectedUpdatedAt) {
+      throw new Error(`Assignment ${assignmentId} changed before collection`);
     }
     if (
       requireExpiredBy &&

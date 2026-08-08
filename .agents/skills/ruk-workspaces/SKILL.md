@@ -71,8 +71,8 @@ and preserves recovery markers after failed cleanup. Workspace and warm locks
 prevent recovery from racing live operations, including forced expiry cleanup.
 Warm and GC also share a pool-maintenance lock, so reported capacity cannot be
 removed by an already-running collection.
-GC revalidates each candidate under its acquisition lock, and a renewal made
-during acquisition handoff is preserved.
+GC revalidates each candidate under its acquisition lock and carries that fence
+through the lifecycle transition. A renewal made during acquisition handoff is preserved.
 An unreadable identity for a live lock owner is treated as busy, never stale.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.

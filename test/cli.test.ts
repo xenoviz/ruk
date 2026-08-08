@@ -777,6 +777,36 @@ test("gc recovers an interrupted acquire handoff", async (t) => {
   assert.equal(liveGc.removed.some((entry: { path: string }) => path.resolve(entry.path) === path.resolve(live)), false);
   await run(process.execPath, [cli, "release", liveAssignment.assignment!.id, "--json"], { cwd: root });
 
+  const renewed = path.join(parent, "renewed");
+  await run("git", ["worktree", "add", "--detach", renewed, "HEAD"], { cwd: root });
+  const renewedPreparation = await recordPreparingWorkspace(paths, {
+    path: renewed,
+    branch: "agent/renewed",
+    now: "2026-01-01T00:00:00.000Z",
+  });
+  const renewedAssignment = await markWorkspaceAssigned(paths, renewed, renewedPreparation.operationId!, {
+    owner: "renewing-agent",
+    hostname: "host",
+    expiresAt: "2030-01-01T00:00:00.000Z",
+    now: "2026-01-01T00:00:00.000Z",
+  });
+  let renewedGc!: ReturnType<typeof run>;
+  await withDirectoryLock(treeLockPath(paths, renewed), async () => {
+    renewedGc = run(process.execPath, [cli, "gc", "--max-age", "0", "--apply", "--json"], { cwd: root });
+    await waitFor(() => fs.access(`${treeLockPath(paths, renewed)}.acquire`).then(() => true, () => false));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await run(process.execPath, [cli, "renew", renewedAssignment.assignment!.id, "--ttl", "20", "--json"], { cwd: root });
+  });
+  const renewedResult = JSON.parse((await renewedGc).stdout);
+  assert.equal(renewedResult.removed.some((entry: { path: string }) => path.resolve(entry.path) === path.resolve(renewed)), false);
+  await recordSuccessfulAcquisition(
+    paths,
+    renewedAssignment.assignment!.id,
+    renewedAssignment.operationId!,
+    true,
+  );
+  await run(process.execPath, [cli, "release", renewedAssignment.assignment!.id, "--json"], { cwd: root });
+
   const preparing = await recordPreparingWorkspace(paths, {
     path: abandoned,
     branch: "agent/interrupted",
