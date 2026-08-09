@@ -38,7 +38,8 @@ if (
   developmentDependencies["typescript"] !== "7.0.2" ||
   developmentDependencies["@types/node"] !== "22.20.1" ||
   developmentDependencies["vitepress"] !== "1.6.4" ||
-  Object.keys(developmentDependencies).length !== 3
+  developmentDependencies["vue"] !== "3.5.40" ||
+  Object.keys(developmentDependencies).length !== 4
 ) {
   throw new Error("Development dependencies must match the pinned TypeScript and documentation toolchains");
 }

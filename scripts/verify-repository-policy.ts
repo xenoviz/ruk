@@ -3,13 +3,18 @@ import { fileURLToPath } from "node:url";
 import { isRecord } from "../src/types.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const ruleset: unknown = JSON.parse(
+const mainRuleset: unknown = JSON.parse(
   await fs.readFile(`${root}/config/github/main-ruleset.json`, "utf8"),
 );
-if (!isRecord(ruleset) || !Array.isArray(ruleset["rules"]) || !ruleset["rules"].every(isRecord)) {
+if (
+  !isRecord(mainRuleset) ||
+  mainRuleset["target"] !== "branch" ||
+  !Array.isArray(mainRuleset["rules"]) ||
+  !mainRuleset["rules"].every(isRecord)
+) {
   throw new Error("Main ruleset has an invalid structure");
 }
-const rules = ruleset["rules"];
+const rules = mainRuleset["rules"];
 const types = new Set(rules.map((rule) => rule["type"]));
 for (const required of [
   "deletion",
@@ -39,8 +44,31 @@ if (!Array.isArray(requiredChecks) || !requiredChecks.every(isRecord)) {
 const checks = requiredChecks.map((check) => check["context"]);
 if (!checks.includes("Required checks")) throw new Error("Main must require the aggregate CI check");
 
+const releaseTagRuleset: unknown = JSON.parse(
+  await fs.readFile(`${root}/config/github/release-tag-ruleset.json`, "utf8"),
+);
+if (
+  !isRecord(releaseTagRuleset) ||
+  releaseTagRuleset["target"] !== "tag" ||
+  !Array.isArray(releaseTagRuleset["rules"]) ||
+  !releaseTagRuleset["rules"].every(isRecord)
+) {
+  throw new Error("Release tag ruleset has an invalid structure");
+}
+const tagConditions = releaseTagRuleset["conditions"];
+const tagRefName = isRecord(tagConditions) ? tagConditions["ref_name"] : null;
+const tagIncludes = isRecord(tagRefName) ? tagRefName["include"] : null;
+if (!Array.isArray(tagIncludes) || !tagIncludes.includes("refs/tags/v*")) {
+  throw new Error("Release tag ruleset must target version tags");
+}
+const tagRuleTypes = new Set(releaseTagRuleset["rules"].map((rule) => rule["type"]));
+for (const required of ["deletion", "update"]) {
+  if (!tagRuleTypes.has(required)) throw new Error(`Release tag ruleset is missing ${required}`);
+}
+
 const workflows = [
   ".github/workflows/ci.yml",
+  ".github/workflows/docs.yml",
   ".github/workflows/release.yml",
 ];
 for (const workflow of workflows) {
@@ -50,5 +78,12 @@ for (const workflow of workflows) {
   if (/delete-asset[^\r\n]*\|\|\s*true/.test(content)) {
     throw new Error(`${workflow} ignores readiness-marker deletion failures`);
   }
+}
+const releaseWorkflow = await fs.readFile(`${root}/.github/workflows/release.yml`, "utf8");
+if (releaseWorkflow.includes("ref: ${{ github.ref_name }}")) {
+  throw new Error("Release checkouts must use the immutable triggering SHA");
+}
+if (!releaseWorkflow.includes("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")) {
+  throw new Error("Release workflow must require the triggering SHA to descend from main");
 }
 process.stdout.write("Validated repository protection and immutable workflow dependencies.\n");

@@ -25,8 +25,10 @@ canonical repository, enforce a size limit, verify the SHA-256 digest committed
 by the readiness manifest, and replace the executable through a same-directory
 staged file.
 
-GitHub release visibility is not update readiness. A version tag starts the
-release workflow, which publishes npm and builds and attests all executable
+GitHub release visibility is not update readiness. Protected version tags are
+immutable after creation, and the release workflow rejects a triggering commit
+that is not reachable from protected `main`. Every job checks out the immutable
+triggering SHA. The workflow publishes npm and builds and attests all executable
 assets. A final job creates a mutable draft release, verifies the staged
 checksums, uploads the assets, uploads `ruk-release.json` last, and only then
 publishes the immutable release.

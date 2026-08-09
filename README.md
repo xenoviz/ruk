@@ -238,6 +238,7 @@ locking, state, or dependency behavior.
 
 ## Security and releases
 
+- Report vulnerabilities privately by following [the security policy](./SECURITY.md).
 - Published runtime code has no third-party npm dependencies.
 - CI runs the compiled package on Node 22 and 24 across Linux, Windows, and
   macOS.
@@ -252,6 +253,8 @@ locking, state, or dependency behavior.
   last. Later releases exercise a real previous-to-current Windows self-update.
 - `main` is governed by a checked-in ruleset requiring reviewed pull requests,
   code-owner approval, linear history, resolved discussions, and passing CI.
+- Version tags cannot be updated or deleted after creation, and release jobs
+  accept only commits reachable from protected `main`.
 
 ## License
 

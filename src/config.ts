@@ -100,7 +100,7 @@ export async function detectPackageManager(root: string, config: RukConfig): Pro
     return {
       name,
       command: config.installCommand,
-      dependencyMode: resolvedDependencyMode(name, config.dependencyMode),
+      dependencyMode: config.dependencyMode ?? "managed",
     };
   }
 
