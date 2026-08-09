@@ -133,6 +133,15 @@ async function documentationFiles(directory: string): Promise<string[]> {
 
 const literalSinhala = /[\u0d80-\u0dff]/u;
 const escapedSinhala = /(?:\\u(?:0d[89a-f][0-9a-f]|\{0*d[89a-f][0-9a-f]\})|\\0{0,3}d[89a-f][0-9a-f](?=[^0-9a-f]|$))/i;
+function hasSinhalaHtmlReference(content: string): boolean {
+  for (const match of content.matchAll(/&#(?:x([0-9a-f]+)|([0-9]+));/gi)) {
+    const hexadecimal = match[1];
+    const decimal = match[2];
+    const codePoint = Number.parseInt(hexadecimal ?? decimal ?? "", hexadecimal ? 16 : 10);
+    if (codePoint >= 0x0d80 && codePoint <= 0x0dff) return true;
+  }
+  return false;
+}
 const documentation = [
   `${root}/README.md`,
   ...(await documentationFiles(`${root}/docs`)),
@@ -140,7 +149,7 @@ const documentation = [
 ];
 for (const file of documentation) {
   const content = await fs.readFile(file, "utf8");
-  if (literalSinhala.test(content) || escapedSinhala.test(content)) {
+  if (literalSinhala.test(content) || escapedSinhala.test(content) || hasSinhalaHtmlReference(content)) {
     throw new Error(`${file.slice(root.length + 1)} must remain English-only`);
   }
 }

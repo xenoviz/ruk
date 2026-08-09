@@ -6,8 +6,8 @@ const apply = process.argv.includes("--apply");
 const repository = process.env["RUK_GITHUB_REPOSITORY"] ?? "xenoviz/ruk";
 const token = process.env["RUK_GITHUB_ADMIN_TOKEN"] ?? process.env["GITHUB_TOKEN"];
 const rulesetFiles = [
-  fileURLToPath(new URL("../config/github/main-ruleset.json", import.meta.url)),
   fileURLToPath(new URL("../config/github/required-ci-ruleset.json", import.meta.url)),
+  fileURLToPath(new URL("../config/github/main-ruleset.json", import.meta.url)),
   fileURLToPath(new URL("../config/github/release-tag-ruleset.json", import.meta.url)),
 ];
 const rulesets: Record<string, unknown>[] = [];
