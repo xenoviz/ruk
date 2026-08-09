@@ -3,7 +3,7 @@
 Ruk creates dependency-aware Git workspaces for parallel coding agents. It is
 an independent worktree manager: no Treehouse runtime or service is required.
 
-The name comes from `රුක්`—tree. The command is pronounced “rook”.
+The command is pronounced “rook.”
 
 [Read the documentation](https://xenoviz.github.io/ruk/) for installation,
 agent workflows, configuration, command reference, and troubleshooting.

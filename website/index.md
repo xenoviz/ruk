@@ -48,4 +48,4 @@ new fencing token even when Ruk reuses the same workspace.
 - **Looking for a flag or JSON field?** Open the [CLI reference](/reference/cli)
   or [JSON contracts](/reference/json).
 
-The name comes from `රුක්`—tree. The command is pronounced “rook.”
+The command is pronounced “rook.”

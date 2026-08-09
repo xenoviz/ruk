@@ -68,10 +68,10 @@ The site will extend VitePress's default accessible theme instead of replacing
 it. Forest green will be the accent color. Light mode will use warm neutral
 surfaces; dark mode will use charcoal green.
 
-A small local tree or branch SVG will represent Ruk. The Sinhala name `රුක්`
-will appear as supporting detail while **Ruk** remains the primary product name.
-Code examples will dominate the pages. Warnings for assignment fencing and
-destructive commands will use clear callouts.
+A small local tree or branch SVG will represent Ruk. The design will use
+**Ruk** as the sole product name. Code examples will dominate the pages.
+Warnings for assignment fencing and destructive commands will use clear
+callouts.
 
 The site will retain conventional documentation navigation: search, persistent
 sidebar, page outline, previous and next links, and an edit-on-GitHub link.
