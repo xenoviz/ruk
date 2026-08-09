@@ -54,6 +54,7 @@ const requiredCiRuleset: unknown = JSON.parse(
 if (
   !isRecord(requiredCiRuleset) ||
   requiredCiRuleset["target"] !== "branch" ||
+  requiredCiRuleset["enforcement"] !== "active" ||
   !Array.isArray(requiredCiRuleset["bypass_actors"]) ||
   requiredCiRuleset["bypass_actors"].length !== 0 ||
   !Array.isArray(requiredCiRuleset["rules"]) ||
@@ -125,7 +126,8 @@ async function documentationFiles(directory: string): Promise<string[]> {
       if (entry.isDirectory()) {
         return generatedDocumentationDirectories.has(entry.name) ? [] : documentationFiles(target);
       }
-      return documentationExtensions.some((extension) => entry.name.endsWith(extension)) ? [target] : [];
+      const name = entry.name.toLowerCase();
+      return documentationExtensions.some((extension) => name.endsWith(extension)) ? [target] : [];
     }),
   );
   return files.flat();
@@ -142,8 +144,11 @@ function hasSinhalaHtmlReference(content: string): boolean {
   }
   return false;
 }
+const rootDocumentation = (await fs.readdir(root, { withFileTypes: true }))
+  .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
+  .map((entry) => `${root}/${entry.name}`);
 const documentation = [
-  `${root}/README.md`,
+  ...rootDocumentation,
   ...(await documentationFiles(`${root}/docs`)),
   ...(await documentationFiles(`${root}/website`)),
 ];
