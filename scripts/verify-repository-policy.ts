@@ -164,7 +164,28 @@ if (!releaseWorkflow.includes("git merge-base --is-ancestor \"$GITHUB_SHA\" orig
   throw new Error("Release workflow must require the triggering SHA to descend from main");
 }
 
-const documentationExtensions = [".css", ".json", ".md", ".svg", ".ts", ".vue"];
+const documentationExtensions = [
+  ".cjs",
+  ".css",
+  ".htm",
+  ".html",
+  ".js",
+  ".json",
+  ".jsx",
+  ".less",
+  ".md",
+  ".mjs",
+  ".sass",
+  ".scss",
+  ".svg",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".vue",
+  ".xml",
+  ".yaml",
+  ".yml",
+];
 const generatedDocumentationDirectories = new Set(["cache", "dist"]);
 async function documentationFiles(directory: string): Promise<string[]> {
   const entries = await fs.readdir(directory, { withFileTypes: true });

@@ -5,6 +5,7 @@ import { isRecord } from "../src/types.js";
 const apply = process.argv.includes("--apply");
 const repository = process.env["RUK_GITHUB_REPOSITORY"] ?? "xenoviz/ruk";
 const token = process.env["RUK_GITHUB_ADMIN_TOKEN"] ?? process.env["GITHUB_TOKEN"];
+const apiRoot = (process.env["RUK_GITHUB_API_URL"] ?? "https://api.github.com").replace(/\/$/, "");
 const rulesetFiles = [
   fileURLToPath(new URL("../config/github/required-ci-ruleset.json", import.meta.url)),
   fileURLToPath(new URL("../config/github/main-ruleset.json", import.meta.url)),
@@ -35,7 +36,7 @@ const headers = {
 };
 
 async function request(path: string, options: RequestInit = {}): Promise<unknown | null> {
-  const response = await fetch(`https://api.github.com${path}`, { ...options, headers });
+  const response = await fetch(`${apiRoot}${path}`, { ...options, headers });
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`GitHub ${options.method ?? "GET"} ${path} failed (${response.status}): ${detail}`);
