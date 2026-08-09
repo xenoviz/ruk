@@ -53,6 +53,9 @@ for (const required of [
 ]) {
   if (!types.has(required)) throw new Error(`Main ruleset is missing ${required}`);
 }
+if (rules.length !== 4 || types.size !== 4) {
+  throw new Error("Main ruleset must contain only the documented protection rules");
+}
 if (types.has("required_status_checks")) {
   throw new Error("Bypassable main ruleset must not contain required status checks");
 }
@@ -82,6 +85,7 @@ if (
   !Array.isArray(requiredCiRuleset["bypass_actors"]) ||
   requiredCiRuleset["bypass_actors"].length !== 0 ||
   !Array.isArray(requiredCiRuleset["rules"]) ||
+  requiredCiRuleset["rules"].length !== 1 ||
   !requiredCiRuleset["rules"].every(isRecord)
 ) {
   throw new Error("Required CI ruleset must be a non-bypassable branch ruleset");
@@ -137,6 +141,9 @@ const tagRuleTypes = new Set(releaseTagRuleset["rules"].map((rule) => rule["type
 for (const required of ["deletion", "update"]) {
   if (!tagRuleTypes.has(required)) throw new Error(`Release tag ruleset is missing ${required}`);
 }
+if (releaseTagRuleset["rules"].length !== 2 || tagRuleTypes.size !== 2) {
+  throw new Error("Release tag ruleset must contain only update and deletion protection");
+}
 const tagUpdate = releaseTagRuleset["rules"].find((rule) => rule["type"] === "update");
 const tagUpdateParameters = tagUpdate?.["parameters"];
 if (!isRecord(tagUpdateParameters) || tagUpdateParameters["update_allows_fetch_and_merge"] !== false) {
@@ -186,14 +193,17 @@ const documentationExtensions = [
   ".yaml",
   ".yml",
 ];
-const generatedDocumentationDirectories = new Set(["cache", "dist"]);
+const generatedDocumentationPaths = new Set([
+  `${root}/website/.vitepress/cache`,
+  `${root}/website/.vitepress/dist`,
+]);
 async function documentationFiles(directory: string): Promise<string[]> {
   const entries = await fs.readdir(directory, { withFileTypes: true });
   const files = await Promise.all(
     entries.map(async (entry): Promise<string[]> => {
       const target = `${directory}/${entry.name}`;
       if (entry.isDirectory()) {
-        return generatedDocumentationDirectories.has(entry.name) ? [] : documentationFiles(target);
+        return generatedDocumentationPaths.has(target) ? [] : documentationFiles(target);
       }
       const name = entry.name.toLowerCase();
       return documentationExtensions.some((extension) => name.endsWith(extension)) ? [target] : [];
