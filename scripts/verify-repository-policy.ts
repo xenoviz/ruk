@@ -15,6 +15,17 @@ if (
   throw new Error("Main ruleset has an invalid structure");
 }
 const rules = mainRuleset["rules"];
+const bypassActors = mainRuleset["bypass_actors"];
+if (
+  !Array.isArray(bypassActors) ||
+  bypassActors.length !== 1 ||
+  !isRecord(bypassActors[0]) ||
+  bypassActors[0]["actor_id"] !== 5 ||
+  bypassActors[0]["actor_type"] !== "RepositoryRole" ||
+  bypassActors[0]["bypass_mode"] !== "pull_request"
+) {
+  throw new Error("Main must allow repository administrators to bypass rules only through pull requests");
+}
 const types = new Set(rules.map((rule) => rule["type"]));
 for (const required of [
   "deletion",

@@ -256,6 +256,8 @@ locking, state, or dependency behavior.
   last. Later releases exercise a real previous-to-current Windows self-update.
 - `main` is governed by a checked-in ruleset requiring reviewed pull requests,
   code-owner approval, linear history, resolved discussions, and passing CI.
+  Repository administrators can bypass the approval rule only through a pull
+  request, which prevents sole-maintainer deadlock while blocking direct pushes.
 - Version tags cannot be updated or deleted after creation, and release jobs
   accept only commits reachable from protected `main`.
 
