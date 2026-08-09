@@ -50,6 +50,7 @@ try {
   for (const forbidden of [
     ".github/workflows/release.yml",
     "config/github/main-ruleset.json",
+    "config/github/required-ci-ruleset.json",
     "bin/ruk.ts",
     "dist/bin/ruk-standalone.js",
     "src/cli.ts",

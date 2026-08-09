@@ -32,9 +32,11 @@ for (const required of [
   "non_fast_forward",
   "required_linear_history",
   "pull_request",
-  "required_status_checks",
 ]) {
   if (!types.has(required)) throw new Error(`Main ruleset is missing ${required}`);
+}
+if (types.has("required_status_checks")) {
+  throw new Error("Bypassable main ruleset must not contain required status checks");
 }
 const pullRequestRule = rules.find((rule) => rule["type"] === "pull_request");
 const pullRequest = pullRequestRule?.["parameters"];
@@ -46,14 +48,29 @@ if (
 ) {
   throw new Error("Main must require at least one approval and a code-owner review");
 }
-const statusRule = rules.find((rule) => rule["type"] === "required_status_checks");
+const requiredCiRuleset: unknown = JSON.parse(
+  await fs.readFile(`${root}/config/github/required-ci-ruleset.json`, "utf8"),
+);
+if (
+  !isRecord(requiredCiRuleset) ||
+  requiredCiRuleset["target"] !== "branch" ||
+  !Array.isArray(requiredCiRuleset["bypass_actors"]) ||
+  requiredCiRuleset["bypass_actors"].length !== 0 ||
+  !Array.isArray(requiredCiRuleset["rules"]) ||
+  !requiredCiRuleset["rules"].every(isRecord)
+) {
+  throw new Error("Required CI ruleset must be a non-bypassable branch ruleset");
+}
+const statusRule = requiredCiRuleset["rules"].find(
+  (rule) => rule["type"] === "required_status_checks",
+);
 const statusParameters = statusRule?.["parameters"];
 const requiredChecks = isRecord(statusParameters) ? statusParameters["required_status_checks"] : null;
 if (!Array.isArray(requiredChecks) || !requiredChecks.every(isRecord)) {
-  throw new Error("Main ruleset has invalid required status checks");
+  throw new Error("Required CI ruleset has invalid status checks");
 }
 const checks = requiredChecks.map((check) => check["context"]);
-if (!checks.includes("Required checks")) throw new Error("Main must require the aggregate CI check");
+if (!checks.includes("Required checks")) throw new Error("Required CI ruleset must require the aggregate check");
 
 const releaseTagRuleset: unknown = JSON.parse(
   await fs.readFile(`${root}/config/github/release-tag-ruleset.json`, "utf8"),
@@ -97,4 +114,35 @@ if (releaseWorkflow.includes("ref: ${{ github.ref_name }}")) {
 if (!releaseWorkflow.includes("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")) {
   throw new Error("Release workflow must require the triggering SHA to descend from main");
 }
-process.stdout.write("Validated repository protection and immutable workflow dependencies.\n");
+
+const documentationExtensions = [".css", ".json", ".md", ".svg", ".ts", ".vue"];
+const generatedDocumentationDirectories = new Set(["cache", "dist"]);
+async function documentationFiles(directory: string): Promise<string[]> {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  const files = await Promise.all(
+    entries.map(async (entry): Promise<string[]> => {
+      const target = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) {
+        return generatedDocumentationDirectories.has(entry.name) ? [] : documentationFiles(target);
+      }
+      return documentationExtensions.some((extension) => entry.name.endsWith(extension)) ? [target] : [];
+    }),
+  );
+  return files.flat();
+}
+
+const literalSinhala = /[\u0d80-\u0dff]/u;
+const escapedSinhala = /(?:\\u(?:0d[89a-f][0-9a-f]|\{0*d[89a-f][0-9a-f]\})|\\0{0,3}d[89a-f][0-9a-f](?=[^0-9a-f]|$))/i;
+const documentation = [
+  `${root}/README.md`,
+  ...(await documentationFiles(`${root}/docs`)),
+  ...(await documentationFiles(`${root}/website`)),
+];
+for (const file of documentation) {
+  const content = await fs.readFile(file, "utf8");
+  if (literalSinhala.test(content) || escapedSinhala.test(content)) {
+    throw new Error(`${file.slice(root.length + 1)} must remain English-only`);
+  }
+}
+
+process.stdout.write("Validated repository protection, English-only documentation, and immutable workflows.\n");

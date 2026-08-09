@@ -258,6 +258,7 @@ locking, state, or dependency behavior.
   code-owner approval, linear history, resolved discussions, and passing CI.
   Repository administrators can bypass the approval rule only through a pull
   request, which prevents sole-maintainer deadlock while blocking direct pushes.
+  A separate ruleset without bypass actors always requires passing CI.
 - Version tags cannot be updated or deleted after creation, and release jobs
   accept only commits reachable from protected `main`.
 

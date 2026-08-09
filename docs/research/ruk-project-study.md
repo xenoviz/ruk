@@ -357,16 +357,18 @@ attestation.
   installs the packed npm tarball, and cross-compiles all seven release targets.
   An aggregate `Required checks` job gates the protected branch.
   ([CI](../../.github/workflows/ci.yml#L15-L113),
-  [ruleset](../../config/github/main-ruleset.json#L12-L35))
+  [CI ruleset](../../config/github/required-ci-ruleset.json))
 - The package smoke test verifies the tarball's allow/deny file set, installs it
   with npm, invokes its CLI, and also executes the installed entry point under
   Bun.
   ([pack verifier](../../scripts/verify-pack.ts#L33-L85))
 - The checked-in policy requires pull requests, at least one approval,
   code-owner and last-push approval, resolved threads, squash-only linear
-  history, and the aggregate CI check. A verifier also rejects mutable GitHub
-  Action references.
-  ([ruleset](../../config/github/main-ruleset.json#L12-L35),
+  history, and the aggregate CI check. Repository administrators can bypass
+  approval only through pull requests, while a separate ruleset keeps CI
+  non-bypassable. A verifier also rejects mutable GitHub Action references.
+  ([review ruleset](../../config/github/main-ruleset.json),
+  [CI ruleset](../../config/github/required-ci-ruleset.json),
   [policy verifier](../../scripts/verify-repository-policy.ts#L12-L53))
 
 ## Maturity and evidenced limitations
