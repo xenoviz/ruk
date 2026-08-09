@@ -5,14 +5,21 @@ import { isRecord } from "../src/types.js";
 const apply = process.argv.includes("--apply");
 const repository = process.env["RUK_GITHUB_REPOSITORY"] ?? "xenoviz/ruk";
 const token = process.env["RUK_GITHUB_ADMIN_TOKEN"] ?? process.env["GITHUB_TOKEN"];
-const rulesetFile = fileURLToPath(new URL("../config/github/main-ruleset.json", import.meta.url));
-const ruleset: unknown = JSON.parse(await fs.readFile(rulesetFile, "utf8"));
-if (!isRecord(ruleset) || typeof ruleset["name"] !== "string") {
-  throw new Error("The repository ruleset must be a JSON object with a name");
+const rulesetFiles = [
+  fileURLToPath(new URL("../config/github/main-ruleset.json", import.meta.url)),
+  fileURLToPath(new URL("../config/github/release-tag-ruleset.json", import.meta.url)),
+];
+const rulesets: Record<string, unknown>[] = [];
+for (const file of rulesetFiles) {
+  const ruleset: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+  if (!isRecord(ruleset) || typeof ruleset["name"] !== "string") {
+    throw new Error(`${file} must contain a ruleset object with a name`);
+  }
+  rulesets.push(ruleset);
 }
 
 if (!apply) {
-  process.stdout.write(`${JSON.stringify({ repository, settings: "hardened", ruleset }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ repository, settings: "hardened", rulesets }, null, 2)}\n`);
   process.exit(0);
 }
 if (!token) {
@@ -50,18 +57,20 @@ await request(`/repos/${repository}`, {
 
 const existing = await request(`/repos/${repository}/rulesets?includes_parents=false`);
 if (!Array.isArray(existing)) throw new Error("GitHub returned an invalid ruleset list");
-const current = existing.find(
-  (candidate): candidate is Record<string, unknown> =>
-    isRecord(candidate) && candidate["name"] === ruleset["name"] && typeof candidate["id"] === "number",
-);
-const method = current ? "PUT" : "POST";
-const endpoint = current
-  ? `/repos/${repository}/rulesets/${current["id"]}`
-  : `/repos/${repository}/rulesets`;
-const result = await request(endpoint, { method, body: JSON.stringify(ruleset) });
-if (!isRecord(result) || typeof result["name"] !== "string" || typeof result["id"] !== "number") {
-  throw new Error("GitHub returned an invalid ruleset result");
+for (const ruleset of rulesets) {
+  const current = existing.find(
+    (candidate): candidate is Record<string, unknown> =>
+      isRecord(candidate) && candidate["name"] === ruleset["name"] && typeof candidate["id"] === "number",
+  );
+  const method = current ? "PUT" : "POST";
+  const endpoint = current
+    ? `/repos/${repository}/rulesets/${current["id"]}`
+    : `/repos/${repository}/rulesets`;
+  const result = await request(endpoint, { method, body: JSON.stringify(ruleset) });
+  if (!isRecord(result) || typeof result["name"] !== "string" || typeof result["id"] !== "number") {
+    throw new Error("GitHub returned an invalid ruleset result");
+  }
+  process.stdout.write(
+    `${current ? "Updated" : "Created"} ruleset ${result["name"]} (${result["id"]}) for ${repository}.\n`,
+  );
 }
-process.stdout.write(
-  `${current ? "Updated" : "Created"} ruleset ${result["name"]} (${result["id"]}) for ${repository}.\n`,
-);

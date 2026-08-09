@@ -854,6 +854,7 @@ test("CLI exposes stable help, version, JSON, and argument errors", async (t) =>
   assert.match(help.stdout, /^Ruk —/);
   assert.match(help.stdout, /ruk create <branch> .*\[--fetch\]/);
   assert.match(help.stdout, /ruk update \[--check\] \[--json\]/);
+  assert.match(help.stdout, /custom installCommand defaults to managed/);
   const version = await run(process.execPath, [cli, "--version"], { cwd: parent });
   assert.match(version.stdout, /^0\.1\.2\n$/);
 

@@ -83,6 +83,9 @@ When a JSON command fails, parse the JSON error from stderr and use its stable
 `RESOURCE_BUSY` errors, and stdout contains no success record. JSON-mode
 dependency installers have their output discarded to keep memory bounded.
 Shared-backend version failures are retryable dependency-preparation errors.
+Custom `installCommand` values default to managed mode because Ruk cannot infer
+the underlying installer; select shared mode explicitly only when the custom
+command implements a supported Bun or pnpm shared layout.
 Active acquisition handoffs are retryable `RESOURCE_BUSY` errors; unknown
 configuration keys, malformed `.rukrc.json`, and invalid TTL ranges are
 non-retryable `INVALID_ARGUMENT` errors. Interactive Linux shells require the

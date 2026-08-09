@@ -3,6 +3,16 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Default custom install commands to managed dependency mode unless shared mode
+  is explicitly selected.
+- Type-check documentation theme code, declare Vue directly, and include the
+  documentation workflow in immutable-action validation.
+- Pin release builds to the triggering commit, require it to descend from
+  protected `main`, and protect version tags from updates and deletion.
+- Restore a prominent link to private vulnerability-reporting instructions.
+
 ## 0.1.2 - 2026-08-08
 
 - Give the draft-release finalizer explicit repository context before checkout

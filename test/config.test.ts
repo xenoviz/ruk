@@ -20,29 +20,29 @@ test("configuration defers the dependency default to package-manager detection",
   });
 });
 
-test("supported package managers use shared dependencies by default", async (t) => {
+test("custom install commands default to managed mode", async (t) => {
   const root = await directory(t);
   const bun = await detectPackageManager(root, {
     dependencyMode: null,
-    installCommand: ["bun", "install", "--frozen-lockfile"],
+    installCommand: ["bun", "run", "bootstrap"],
   });
   const pnpm = await detectPackageManager(root, {
     dependencyMode: null,
-    installCommand: ["pnpm", "install", "--frozen-lockfile"],
+    installCommand: ["pnpm", "run", "bootstrap"],
   });
   const npm = await detectPackageManager(root, {
     dependencyMode: null,
     installCommand: ["npm", "ci"],
   });
-  const managedBun = await detectPackageManager(root, {
-    dependencyMode: "managed",
+  const sharedBun = await detectPackageManager(root, {
+    dependencyMode: "shared",
     installCommand: ["bun", "install", "--frozen-lockfile"],
   });
 
-  assert.equal(bun.dependencyMode, "shared");
-  assert.equal(pnpm.dependencyMode, "shared");
+  assert.equal(bun.dependencyMode, "managed");
+  assert.equal(pnpm.dependencyMode, "managed");
   assert.equal(npm.dependencyMode, "managed");
-  assert.equal(managedBun.dependencyMode, "managed");
+  assert.equal(sharedBun.dependencyMode, "shared");
 });
 
 test("configuration validates modes, commands, and unknown keys", async (t) => {

@@ -168,6 +168,9 @@ Workspace links and package-manager metadata remain local:
 No configuration is required for this default. Save `.rukrc.json` in the
 repository root only when overriding it. npm, Yarn, and other detected
 executables use managed mode unless explicitly configured otherwise.
+Custom `installCommand` values also default to managed mode, even when their
+executable is Bun or pnpm; select shared mode explicitly only for a compatible
+custom command.
 
 If a repository is incompatible with an isolated shared-store layout, opt out:
 
@@ -238,6 +241,7 @@ locking, state, or dependency behavior.
 
 ## Security and releases
 
+- Report vulnerabilities privately by following [the security policy](./SECURITY.md).
 - Published runtime code has no third-party npm dependencies.
 - CI runs the compiled package on Node 22 and 24 across Linux, Windows, and
   macOS.
@@ -252,6 +256,8 @@ locking, state, or dependency behavior.
   last. Later releases exercise a real previous-to-current Windows self-update.
 - `main` is governed by a checked-in ruleset requiring reviewed pull requests,
   code-owner approval, linear history, resolved discussions, and passing CI.
+- Version tags cannot be updated or deleted after creation, and release jobs
+  accept only commits reachable from protected `main`.
 
 ## License
 
