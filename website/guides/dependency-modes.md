@@ -19,9 +19,10 @@ No configuration is required to select this default.
 
 ## Managed mode
 
-Managed mode uses the repository's normal install layout. npm, Yarn, and custom
-installers whose executable is not Bun or pnpm use it automatically because Ruk
-does not provide a shared backend for them.
+Managed mode uses the repository's normal install layout. Automatically
+detected npm and Yarn projects use it. Every custom `installCommand` also
+defaults to managed mode because Ruk cannot safely infer the command's dependency
+layout from its executable name.
 
 ```json
 {
@@ -52,7 +53,8 @@ fit the repository:
 ```
 
 The command must be a non-empty JSON string array. Ruk includes it in the
-dependency fingerprint.
+dependency fingerprint. To use a compatible custom Bun or pnpm command with
+Ruk's shared backend, set `dependencyMode` to `shared` explicitly.
 
 ## What invalidates readiness
 

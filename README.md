@@ -168,6 +168,9 @@ Workspace links and package-manager metadata remain local:
 No configuration is required for this default. Save `.rukrc.json` in the
 repository root only when overriding it. npm, Yarn, and other detected
 executables use managed mode unless explicitly configured otherwise.
+Custom `installCommand` values also default to managed mode, even when their
+executable is Bun or pnpm; select shared mode explicitly only for a compatible
+custom command.
 
 If a repository is incompatible with an isolated shared-store layout, opt out:
 

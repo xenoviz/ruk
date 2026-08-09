@@ -81,8 +81,10 @@ Usage:
   ruk gc [--max-age <minutes>] [--apply] [--force-expired] [--json]
   ruk update [--check] [--json]
 
-Ruk shares immutable package content by default with supported Bun and pnpm
-versions. Set dependencyMode to "managed" if a repository needs its normal layout.
+Ruk shares immutable package content by default when it automatically detects
+supported Bun and pnpm versions. A custom installCommand defaults to managed
+mode; set dependencyMode to "shared" explicitly only for a compatible custom
+Bun or pnpm command.
 `;
 
 interface ParsedOptions {

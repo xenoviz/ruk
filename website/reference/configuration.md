@@ -10,8 +10,11 @@ Create `.rukrc.json` in the repository root. Ruk rejects unknown keys.
 }
 ```
 
-Accepted values are `managed` and `shared`. Bun and pnpm default to `shared`;
-other detected executables default to `managed`.
+Accepted values are `managed` and `shared`. Automatically detected Bun and pnpm
+projects default to `shared`; other detected package managers default to
+`managed`. A custom `installCommand` always defaults to `managed`, regardless
+of its executable name. Select `shared` explicitly only when a custom Bun or
+pnpm command produces a compatible shared layout.
 
 ## `installCommand`
 
@@ -22,7 +25,9 @@ other detected executables default to `managed`.
 ```
 
 The value must be a non-empty array of non-empty strings. Ruk invokes it
-directly without a shell.
+directly without a shell. Supplying this option disables dependency-mode
+auto-detection, so its default mode is `managed` unless `dependencyMode` is also
+set.
 
 ## Environment variables
 
