@@ -35,15 +35,6 @@
   --vp-code-color: #87ddb3;
 }
 
-.VPNavBarTitle .title::after {
-  content: "රුක්";
-  margin-left: 0.55rem;
-  color: var(--vp-c-brand-1);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
 .VPHero .name,
 .VPHero .text {
   letter-spacing: -0.035em;

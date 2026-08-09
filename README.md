@@ -3,7 +3,7 @@
 Ruk creates dependency-aware Git workspaces for parallel coding agents. It is
 an independent worktree manager: no Treehouse runtime or service is required.
 
-The name comes from `රුක්`—tree. The command is pronounced “rook”.
+The command is pronounced “rook.”
 
 [Read the documentation](https://xenoviz.github.io/ruk/) for installation,
 agent workflows, configuration, command reference, and troubleshooting.
@@ -256,6 +256,9 @@ locking, state, or dependency behavior.
   last. Later releases exercise a real previous-to-current Windows self-update.
 - `main` is governed by a checked-in ruleset requiring reviewed pull requests,
   code-owner approval, linear history, resolved discussions, and passing CI.
+  Repository administrators can bypass the approval rule only through a pull
+  request, which prevents sole-maintainer deadlock while blocking direct pushes.
+  A separate ruleset without bypass actors always requires passing CI.
 - Version tags cannot be updated or deleted after creation, and release jobs
   accept only commits reachable from protected `main`.
 
