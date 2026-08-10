@@ -5,6 +5,9 @@ versioning.
 
 ## Unreleased
 
+- Allow repository administrators to bypass branch rules only through pull
+  requests, preventing sole-maintainer deadlock without allowing direct pushes;
+  keep required CI in a separate non-bypassable ruleset.
 - Default custom install commands to managed dependency mode unless shared mode
   is explicitly selected.
 - Type-check documentation theme code, declare Vue directly, and include the
