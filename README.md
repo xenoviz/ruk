@@ -1,5 +1,7 @@
 # Ruk
 
+[![npm version](https://img.shields.io/npm/v/@xenoviz/ruk.svg)](https://www.npmjs.com/package/@xenoviz/ruk)
+
 Ruk creates dependency-aware Git workspaces for parallel coding agents. It is
 an independent worktree manager: no Treehouse runtime or service is required.
 
