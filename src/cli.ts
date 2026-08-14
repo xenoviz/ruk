@@ -218,6 +218,7 @@ async function sync(
   emit = true,
   allowSharedCheckout = false,
   guardSharedCheckout = true,
+  allowedAcquisitionOperationId?: string,
 ) {
   const { repository, config } = await repositoryContext(cwd);
   const paths = storePaths(repository.commonDir);
@@ -249,7 +250,7 @@ async function sync(
               const current = (await readState(paths)).workspaces[treeKey(repository.root)];
               if (
                 current?.lifecycle !== "assigned" ||
-                current.operationId !== null ||
+                (current.operationId !== null && current.operationId !== allowedAcquisitionOperationId) ||
                 current.assignment?.id !== expectedSyncAssignmentId
               ) {
                 throw new Error(
@@ -368,7 +369,15 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
         branch,
         startPoint,
       });
-      const prepared = await sync(workspace.path, io, options.json ?? false, false);
+      const prepared = await sync(
+        workspace.path,
+        io,
+        options.json ?? false,
+        false,
+        false,
+        true,
+        workspace.operationId ?? undefined,
+      );
       dependenciesReady = true;
       if (operationId) {
         workspace = await markWorkspaceAssigned(paths, workspace.path, operationId, {
