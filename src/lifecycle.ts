@@ -446,7 +446,10 @@ export async function finishAssignmentActivity(
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "assigned");
-    const completedAt = timestamp(now, "now");
+    const observedAt = timestamp(now, "now");
+    const completedAt = Date.parse(observedAt) < Date.parse(workspace.assignment!.renewedAt)
+      ? workspace.assignment!.renewedAt
+      : observedAt;
     const expectedId = uuid(keeperId, "keeperId");
     const index = workspace.assignment!.leaseKeepers.findIndex(({ id }) => id === expectedId);
     if (index < 0) throw new Error(`Lease keeper ${expectedId} is not active`);

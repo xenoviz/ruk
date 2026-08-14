@@ -43,6 +43,8 @@ exact-ID release command can be used once the caller decides recovery is safe.
 On Windows it terminates the new tree only with a verified leader identity and
 otherwise retains the assignment while descendants remain or the leader PID is reused.
 Ruk fences the assignment again immediately before launching a command.
+Assigned `ruk sync` also rechecks the exact assignment from inside the dependency
+lock before reading or changing projections, so a queued repair cannot cross a release.
 Managed detached `run` and `exec` commands forward `SIGINT` and `SIGTERM` to
 their POSIX process group and preserve conventional 130/143 exit codes. Ordinary
 release is rejected until acquisition handoff finishes.
@@ -107,6 +109,8 @@ updates are monotonic with explicit renewal. If heartbeat-triggered process
 cleanup cannot verify the original detached leader or rule out surviving
 descendants, Ruk reports retryable resource contention and retains the exact
 assignment for recovery.
+Completion timestamps are clamped to the latest renewal, and nested heartbeat
+failures remain retryable `RESOURCE_BUSY` errors in JSON output.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read

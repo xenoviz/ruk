@@ -50,6 +50,9 @@ clears the incomplete acquisition marker before returning this error, so the
 exact recovery command is accepted when the caller decides cleanup is safe.
 The returned expiry is the current retained-state value, including a heartbeat
 renewal that completed while dependency synchronization was running.
+Assigned synchronization rechecks the exact assignment after acquiring the
+dependency lock; release or reassignment while waiting makes the operation fail
+without touching dependency projections.
 
 `--fetch` explicitly refreshes the remote selected by `--from`; without
 `--from`, Ruk resolves the primary remote's advertised default branch. Fully
@@ -166,6 +169,8 @@ immediately before signaling it; a reused descendant PID or an unreadable identi
 for a descendant that is still alive retains the assignment.
 The heartbeat failure is still reported if operation work resolves while its
 failure hook is running; concurrent success cannot hide a lost renewal fence.
+Nested activity-renewal failures are reported as retryable `RESOURCE_BUSY`, and
+keeper completion cannot shorten a newer renewal when the wall clock moves backward.
 Status reports `projection-changed` with a `ruk sync` recovery when recorded
 projection contents or linked package targets no longer match their fingerprint.
 `ruk run -- ...` validates dependency inputs and projection integrity, then

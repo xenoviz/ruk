@@ -132,6 +132,8 @@ cleanup to race an unowned process. Initial keeper time is captured only after
 the state lock is acquired, and heartbeat timestamps are monotonic inside the
 transaction, so lock contention or a delayed refresh cannot publish an expired
 keeper, shorten expiry, or overwrite a newer explicit renewal.
+Keeper completion uses the same monotonic fence, so wall-clock rollback cannot
+move activity or expiry behind the latest heartbeat or explicit renewal.
 Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. Leaderless POSIX process groups fail
@@ -169,7 +171,9 @@ making the workspace available automatically, and its structured response reads
 the current post-heartbeat expiry from the retained record. Command
 launch snapshots its original assignment across dependency repair and rejects
 reassignment or an initially unassigned pool slot instead of adopting another
-agent's lease. Explicit `--fetch` is
+agent's lease. Assigned dependency synchronization revalidates that same immutable
+assignment inside the tree lock before inspecting or modifying dependency projections.
+Explicit `--fetch` is
 the only workspace operation in this layer that contacts a Git remote, and an
 explicit remote name must exist.
 This includes shorthand `remote/branch` start points unless the name resolves to

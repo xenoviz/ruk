@@ -235,13 +235,33 @@ async function sync(
     const manager = await detectPackageManager(repository.root, config);
     const value = { repository, config, manager };
     const lifecycle = state.workspaces[treeKey(repository.root)];
+    const expectedSyncAssignmentId = lifecycle?.lifecycle === "assigned"
+      ? lifecycle.assignment?.id
+      : undefined;
     const prepare = (signal?: AbortSignal) => ensureDependencies({
       ...value,
       reporter: dependencyReporter(io, json),
       ...(signal ? { signal } : {}),
+      ...(expectedSyncAssignmentId
+        ? {
+            beforePrepare: async () => {
+              signal?.throwIfAborted();
+              const current = (await readState(paths)).workspaces[treeKey(repository.root)];
+              if (
+                current?.lifecycle !== "assigned" ||
+                current.operationId !== null ||
+                current.assignment?.id !== expectedSyncAssignmentId
+              ) {
+                throw new Error(
+                  `Assignment ${expectedSyncAssignmentId} does not exist or no longer owns ${repository.root}`,
+                );
+              }
+            },
+          }
+        : {}),
     });
-    const result = lifecycle?.lifecycle === "assigned" && lifecycle.assignment
-      ? await withAssignmentActivity(paths, lifecycle.assignment.id, prepare)
+    const result = expectedSyncAssignmentId
+      ? await withAssignmentActivity(paths, expectedSyncAssignmentId, prepare)
       : await prepare();
     const output = {
       status: result.alreadyAttached ? "ready" : "prepared",

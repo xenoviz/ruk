@@ -1,4 +1,4 @@
-import { AssignmentActivityError } from "./activity.js";
+import { containsAssignmentActivityError } from "./activity.js";
 import { SharedCheckoutError } from "./checkout.js";
 import { containsProcessIdentityUnavailableError } from "./process.js";
 
@@ -85,13 +85,13 @@ export function errorRecord(error: unknown): ErrorRecord {
       recovery: error.recovery,
     };
   }
-  const match = error instanceof DependencyPreparationError
-    ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
-    : containsProcessIdentityUnavailableError(error)
-      ? [/.*/, "RESOURCE_BUSY", true] as const
-      : error instanceof AssignmentActivityError
+  const match = containsAssignmentActivityError(error)
+    ? [/.*/, "RESOURCE_BUSY", true] as const
+    : error instanceof DependencyPreparationError
+      ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
+      : containsProcessIdentityUnavailableError(error)
         ? [/.*/, "RESOURCE_BUSY", true] as const
-      : CATEGORIES.find(([pattern]) => pattern.test(message));
+        : CATEGORIES.find(([pattern]) => pattern.test(message));
   return {
     status: "error",
     code: match?.[1] ?? "OPERATION_FAILED",

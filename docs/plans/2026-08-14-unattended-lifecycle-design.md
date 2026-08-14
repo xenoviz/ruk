@@ -151,6 +151,10 @@ A missing identity counts as process exit only when a separate liveness probe
 confirms the PID is gone; otherwise cleanup fails closed. Retained acquisition
 output reads the current state record so a completed heartbeat is reflected in
 the reported expiry.
+Completion clamps its observed timestamp to the assignment's current renewal,
+and structured error classification searches nested causes and aggregates for
+activity failures. Assigned dependency synchronization revalidates ownership
+inside the dependency lock before it reads or changes projections.
 
 ## Expiry and garbage collection
 

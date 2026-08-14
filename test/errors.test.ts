@@ -66,6 +66,19 @@ test("structured failures expose stable automation categories", () => {
     message: "Assignment assignment-id activity renewal failed: EPERM",
     retryable: true,
   });
+  assert.deepEqual(
+    errorRecord(new AggregateError([
+      new Error("dependency preparation aborted", {
+        cause: new AssignmentActivityError("assignment-id", new Error("EPERM")),
+      }),
+    ], "activity and dependency cleanup failed")),
+    {
+      status: "error",
+      code: "RESOURCE_BUSY",
+      message: "activity and dependency cleanup failed",
+      retryable: true,
+    },
+  );
   assert.equal(errorRecord(new Error("unexpected")).code, "OPERATION_FAILED");
   assert.equal(jsonRequested(["status", "--json"]), true);
   assert.equal(jsonRequested(["exec", "branch", "--", "tool", "--json"]), false);

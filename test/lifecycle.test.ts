@@ -240,6 +240,26 @@ test("a delayed activity refresh cannot shorten a newer explicit renewal", async
   );
 });
 
+test("activity completion cannot move a renewed lease backward", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"));
+  const assignmentId = workspace.assignment!.id;
+  const keeperId = "00000000-0000-4000-8000-000000000007";
+
+  await beginAssignmentActivity(paths, assignmentId, {
+    keeperId,
+    validUntil: T4,
+    now: T2,
+  });
+  await renewAssignment(paths, assignmentId, T5, T4);
+  const finished = await finishAssignmentActivity(paths, assignmentId, keeperId, T1);
+
+  assert.equal(finished.assignment!.renewedAt, T4);
+  assert.equal(finished.assignment!.lastActivityAt, T4);
+  assert.equal(finished.assignment!.expiresAt, T5);
+  assert.equal(finished.updatedAt, T4);
+});
+
 test("forced GC does not select an expired assignment with a current keeper", async (t) => {
   const { root, paths } = await fixture(t);
   const workspace = await assign(paths, path.join(root, "workspace"), T0, T1);

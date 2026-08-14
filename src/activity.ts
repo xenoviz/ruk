@@ -26,6 +26,16 @@ export class AssignmentActivityError extends Error {
   }
 }
 
+export function containsAssignmentActivityError(error: unknown): boolean {
+  if (error instanceof AssignmentActivityError) return true;
+  if (error instanceof AggregateError) {
+    return error.errors.some((nested) => containsAssignmentActivityError(nested));
+  }
+  return error instanceof Error && error.cause !== undefined
+    ? containsAssignmentActivityError(error.cause)
+    : false;
+}
+
 export function activityHeartbeatInterval(leaseDurationMinutes: number): number {
   if (!Number.isFinite(leaseDurationMinutes) || leaseDurationMinutes <= 0) {
     throw new Error("leaseDurationMinutes must be positive and finite");

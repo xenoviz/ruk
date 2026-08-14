@@ -273,6 +273,46 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   await assert.rejects(fs.access(path.join(repaired.path, "stale.txt")));
   await run(process.execPath, [cli, "release", staleReplacement!.assignment!.id, "--json"], { cwd: root });
 
+  const syncOwned = JSON.parse((await run(
+    process.execPath,
+    [cli, "acquire", "agent/sync-race", "--json"],
+    { cwd: root },
+  )).stdout);
+  await fs.writeFile(path.join(syncOwned.path, "node_modules", "fixture", "ready"), "sync-race");
+  const installsBeforeSyncRace = Number(await fs.readFile(counter, "utf8"));
+  let staleSync!: ReturnType<typeof run>;
+  let syncReplacement!: Awaited<ReturnType<typeof reserveAvailableWorkspace>>;
+  await withDirectoryLock(treeLockPath(paths, syncOwned.path), async () => {
+    staleSync = run(process.execPath, [cli, "sync", "--json"], {
+      cwd: syncOwned.path,
+      allowFailure: true,
+    });
+    await waitFor(async () => {
+      const current = (await readState(paths)).workspaces[treeKey(syncOwned.path)];
+      return (current?.assignment?.leaseKeepers.length ?? 0) > 0;
+    });
+    await beginWorkspaceReturn(paths, syncOwned.assignmentId);
+    await finishWorkspaceReturn(paths, syncOwned.assignmentId);
+    syncReplacement = await reserveAvailableWorkspace(paths, {
+      owner: "replacement",
+      hostname: "host",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      branch: "agent/sync-replacement",
+    });
+    assert.ok(syncReplacement);
+    syncReplacement = await recordSuccessfulAcquisition(
+      paths,
+      syncReplacement.assignment!.id,
+      syncReplacement.operationId!,
+      true,
+    );
+  });
+  const staleSyncResult = await staleSync;
+  assert.equal(staleSyncResult.code, 1);
+  assert.match(staleSyncResult.stderr, /no longer owns/);
+  assert.equal(Number(await fs.readFile(counter, "utf8")), installsBeforeSyncRace);
+  await run(process.execPath, [cli, "release", syncReplacement!.assignment!.id, "--json"], { cwd: root });
+
   let blockedAcquire!: ReturnType<typeof run>;
   await withDirectoryLock(`${treeLockPath(paths, repaired.path)}.acquire`, async () => {
     blockedAcquire = run(process.execPath, [cli, "acquire", "agent/blocked-handoff", "--json"], { cwd: root });

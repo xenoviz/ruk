@@ -226,6 +226,7 @@ export interface EnsureDependenciesInput {
   manager: PackageManager;
   reporter?: DependencyReporter;
   signal?: AbortSignal;
+  beforePrepare?: () => void | Promise<void>;
 }
 
 export interface EnsureDependenciesResult {
@@ -240,9 +241,11 @@ async function ensureDependenciesUnlocked({
   manager,
   reporter = DEFAULT_REPORTER,
   signal,
+  beforePrepare,
 }: EnsureDependenciesInput): Promise<EnsureDependenciesResult> {
   const { root, commonDir } = repository;
   const paths = storePaths(commonDir);
+  await beforePrepare?.();
   let details = await dependencyFingerprint({ root, manager });
   if (manager.dependencyMode === "shared") assertSharedBackendSupported(details.manager);
   let fingerprint = details.fingerprint;
