@@ -555,6 +555,10 @@ export async function trackedProcessExists(
   return false;
 }
 
+export async function freshTrackedProcessExists(record: TrackedProcessRecord): Promise<boolean> {
+  return trackedProcessExists(record, freshProcessIdentity, freshProcessDescendantsExist);
+}
+
 export async function terminateTrackedProcess(record: TrackedProcessRecord, force = false): Promise<boolean> {
   if (record.terminalId !== undefined) {
     return terminateProcessTerminal(record.terminalId, record.pid, record.startedAt, force);

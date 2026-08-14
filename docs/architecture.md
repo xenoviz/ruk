@@ -133,6 +133,8 @@ Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. Leaderless POSIX process groups fail
 closed because their numeric IDs can be reused.
+Command completion bypasses the short-lived identity cache before removing its
+process record, so a recently exited child cannot remain falsely active.
 Windows registration cleanup terminates the new process tree only with a verified
 leader identity and otherwise retains ownership while descendants remain or the
 leader PID is reused.

@@ -49,6 +49,7 @@ import { withDirectoryLock } from "./lock.js";
 import { portEnvironment } from "./ports.js";
 import {
   commandExists,
+  freshTrackedProcessExists,
   ProcessIdentityUnavailableError,
   processIdentity,
   requireChildProcessSession,
@@ -1102,7 +1103,7 @@ async function execute(
               await Promise.race([registration, execution.then(() => undefined)]);
             });
             const result = await execution;
-            if (tracking.record && !(await trackedProcessExists(tracking.record))) {
+            if (tracking.record && !(await freshTrackedProcessExists(tracking.record))) {
               try {
                 await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
               } catch {
