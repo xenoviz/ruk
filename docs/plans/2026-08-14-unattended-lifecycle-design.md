@@ -133,6 +133,9 @@ fail, Ruk stops the managed command, preserves the current assignment where
 possible, and returns a retryable machine-readable error. Removing a keeper is
 best effort after the operation has already failed; its validity window still
 prevents a stale `autoRenewing` value from persisting.
+Reused acquisition synchronization applies the same rule: an unverifiable
+installer abort retains the assignment and returns its exact ID, path, expiry,
+and recovery command rather than returning the workspace to the warm pool.
 The locked activity mutation never accepts a timestamp older than the current
 renewal. Abort cleanup failures are aggregated with the heartbeat failure, and
 an unverifiable attached process tree or detached process-group leader keeps

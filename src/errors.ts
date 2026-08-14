@@ -8,11 +8,39 @@ export interface ErrorRecord {
   message: string;
   retryable: boolean;
   activeAssignments?: number;
+  assignmentId?: string;
+  path?: string;
+  expiresAt?: string;
   recovery?: string;
 }
 
 export class DependencyPreparationError extends Error {
   override readonly name = "DependencyPreparationError";
+}
+
+export class RetainedAssignmentError extends Error {
+  override readonly name = "RetainedAssignmentError";
+
+  constructor(
+    readonly assignmentId: string,
+    readonly path: string,
+    readonly expiresAt: string,
+    cause: unknown,
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Assignment ${assignmentId} retained at ${path}: ${detail}`, { cause });
+  }
+}
+
+export function retainedAssignmentFailure(
+  assignmentId: string,
+  path: string,
+  expiresAt: string,
+  error: unknown,
+): RetainedAssignmentError | null {
+  return containsProcessIdentityUnavailableError(error)
+    ? new RetainedAssignmentError(assignmentId, path, expiresAt, error)
+    : null;
 }
 
 const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
@@ -29,6 +57,18 @@ const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
 
 export function errorRecord(error: unknown): ErrorRecord {
   const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof RetainedAssignmentError) {
+    return {
+      status: "error",
+      code: "RESOURCE_BUSY",
+      message,
+      retryable: true,
+      assignmentId: error.assignmentId,
+      path: error.path,
+      expiresAt: error.expiresAt,
+      recovery: `ruk release ${error.assignmentId}`,
+    };
+  }
   if (error instanceof SharedCheckoutError) {
     return {
       status: "error",

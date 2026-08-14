@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AssignmentActivityError } from "../src/activity.js";
-import { errorRecord, jsonRequested } from "../src/errors.js";
+import { errorRecord, jsonRequested, retainedAssignmentFailure } from "../src/errors.js";
 import { ProcessIdentityUnavailableError } from "../src/process.js";
 
 test("structured failures expose stable automation categories", () => {
@@ -29,6 +29,24 @@ test("structured failures expose stable automation categories", () => {
     message: "Process 42 could not be identified, so its workspace cannot be released safely",
     retryable: true,
   });
+  const retained = retainedAssignmentFailure(
+    "00000000-0000-4000-8000-000000000000",
+    "/workspace",
+    "2026-08-15T00:00:00.000Z",
+    new AggregateError([new ProcessIdentityUnavailableError(42)], "cleanup failed"),
+  );
+  assert.ok(retained);
+  assert.deepEqual(errorRecord(retained), {
+    status: "error",
+    code: "RESOURCE_BUSY",
+    message: "Assignment 00000000-0000-4000-8000-000000000000 retained at /workspace: cleanup failed",
+    retryable: true,
+    assignmentId: "00000000-0000-4000-8000-000000000000",
+    path: "/workspace",
+    expiresAt: "2026-08-15T00:00:00.000Z",
+    recovery: "ruk release 00000000-0000-4000-8000-000000000000",
+  });
+  assert.equal(retainedAssignmentFailure("id", "/workspace", "expiry", new Error("failed")), null);
   assert.equal(
     errorRecord(new AggregateError([
       new Error("heartbeat failed"),

@@ -41,6 +41,12 @@ remains current after the latest observed activity.
 and release. `reused` reports whether Ruk assigned an available managed
 workspace instead of creating one.
 
+If dependency synchronization in a reused assignment aborts without being able
+to verify that its installer process tree is gone, acquisition fails with a
+retryable `RESOURCE_BUSY` error and retains the workspace. That error includes
+`assignmentId`, `path`, `expiresAt`, and a `recovery` release command so
+automation can preserve and later recover the exact fenced assignment.
+
 `--fetch` explicitly refreshes the remote selected by `--from`; without
 `--from`, Ruk resolves the primary remote's advertised default branch. Fully
 qualified remote-tracking refs fail if their named remote is missing. Named

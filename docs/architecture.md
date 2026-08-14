@@ -155,7 +155,10 @@ shell workspace.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
-transitions and preserve ownership whenever normal release is unsafe. Command
+transitions and preserve ownership whenever normal release is unsafe. A reused
+acquisition also remains assigned when dependency synchronization cannot verify
+that an aborted installer process tree is gone; its structured error returns the
+exact recovery ID instead of recycling the slot. Command
 launch snapshots its original assignment across dependency repair and rejects
 reassignment or an initially unassigned pool slot instead of adopting another
 agent's lease. Explicit `--fetch` is

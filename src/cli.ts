@@ -11,6 +11,7 @@ import {
   dependenciesPresent,
   ensureDependencies,
 } from "./dependencies.js";
+import { retainedAssignmentFailure } from "./errors.js";
 import { dependencyFingerprint } from "./fingerprint.js";
 import {
   addWorktree,
@@ -384,6 +385,15 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
       }
       return result;
     } catch (error) {
+      const retained = workspace.assignment
+        ? retainedAssignmentFailure(
+            workspace.assignment.id,
+            workspace.path,
+            workspace.assignment.expiresAt,
+            error,
+          )
+        : null;
+      if (retained) throw retained;
       const message = error instanceof Error ? error.message : String(error);
       let returning = false;
       try {
