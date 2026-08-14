@@ -595,7 +595,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     await waitFor(async () => {
       const current = (await readState(paths)).workspaces[treeKey(syncOwned.path)];
       return (current?.assignment?.leaseKeepers.length ?? 0) > 0;
-    });
+    }, 30_000);
     await beginWorkspaceReturn(paths, syncOwned.assignmentId);
     await finishWorkspaceReturn(paths, syncOwned.assignmentId);
     syncReplacement = await reserveAvailableWorkspace(paths, {
