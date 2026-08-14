@@ -278,7 +278,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     [cli, "acquire", "agent/sync-race", "--json"],
     { cwd: root },
   )).stdout);
-  await fs.writeFile(path.join(syncOwned.path, "node_modules", "fixture", "ready"), "sync-race");
+  await fs.rm(path.join(syncOwned.path, "node_modules"), { recursive: true, force: true });
   const installsBeforeSyncRace = Number(await fs.readFile(counter, "utf8"));
   let staleSync!: ReturnType<typeof run>;
   let syncReplacement!: Awaited<ReturnType<typeof reserveAvailableWorkspace>>;
