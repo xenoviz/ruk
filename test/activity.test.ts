@@ -219,8 +219,10 @@ test("withAssignmentActivity retries transient heartbeat writes before failing w
 
 test("withAssignmentActivity adopts a shorter duration after explicit renewal", async (t) => {
   const { paths, assignmentId } = await fixture(t, 0.003);
-  const refreshTimes: number[] = [];
+  const scheduledIntervals: number[] = [];
   let finishWork!: () => void;
+  let renewalFinished!: () => void;
+  const renewed = new Promise<void>((resolve) => { renewalFinished = resolve; });
 
   await withAssignmentActivity(
     paths,
@@ -233,18 +235,28 @@ test("withAssignmentActivity adopts a shorter duration after explicit renewal", 
         new Date(Date.parse(renewedAt) + 0.0003 * 60_000).toISOString(),
         renewedAt,
       );
+      renewalFinished();
       await new Promise<void>((resolve) => { finishWork = resolve; });
     },
     {
       refresh: async (activityPaths, currentAssignmentId, input) => {
         const result = await refreshAssignmentActivity(activityPaths, currentAssignmentId, input);
-        refreshTimes.push(Date.now());
-        if (refreshTimes.length === 2) finishWork();
+        if (scheduledIntervals.length === 2) finishWork();
         return result;
+      },
+      wait: async (milliseconds, signal) => {
+        if (signal.aborted) return;
+        scheduledIntervals.push(milliseconds);
+        if (scheduledIntervals.length === 1) await renewed;
+        else if (scheduledIntervals.length > 2) {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
       },
     },
   );
 
-  assert.equal(refreshTimes.length, 2);
-  assert.ok(refreshTimes[1]! - refreshTimes[0]! < 40);
+  assert.equal(Math.round(scheduledIntervals[0]!), 60);
+  assert.equal(Math.round(scheduledIntervals[1]!), 6);
 });

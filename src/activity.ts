@@ -15,6 +15,7 @@ export interface AssignmentActivityOptions {
   refresh?: typeof refreshAssignmentActivity;
   retryAttempts?: number;
   retryDelayMs?: number;
+  wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
 
 export class AssignmentActivityError extends Error {
@@ -106,6 +107,7 @@ export async function withAssignmentActivity<T>(
     throw new Error("retryDelayMs must be non-negative and finite");
   }
   const refresh = options.refresh ?? refreshAssignmentActivity;
+  const waitForInterval = options.wait ?? wait;
   const keeperId = options.keeperId ?? crypto.randomUUID();
   await beginAssignmentActivity(paths, assignmentId, {
     keeperId,
@@ -120,7 +122,7 @@ export async function withAssignmentActivity<T>(
   const heartbeat = (async () => {
     try {
       while (!controller.signal.aborted) {
-        await wait(heartbeatIntervalMs, controller.signal);
+        await waitForInterval(heartbeatIntervalMs, controller.signal);
         if (controller.signal.aborted) return;
         let refreshed = false;
         for (let attempt = 0; attempt <= retryAttempts; attempt += 1) {
@@ -141,7 +143,7 @@ export async function withAssignmentActivity<T>(
             if (ownershipChanged(error) || attempt === retryAttempts) {
               throw new AssignmentActivityError(assignmentId, error);
             }
-            await wait(retryDelayMs, controller.signal);
+            await waitForInterval(retryDelayMs, controller.signal);
             if (controller.signal.aborted) return;
           }
         }
