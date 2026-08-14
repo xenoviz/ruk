@@ -1131,26 +1131,23 @@ async function execute(
                 detached,
                 signal,
                 onSpawn: async (pid) => {
-                  try {
-                    const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
-                    const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
-                    if (!startedAt) return;
-                    const record: TrackedProcessRecord = {
-                      pid: session?.pid ?? pid,
-                      ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
-                      ...(session?.sessionId === undefined
-                        ? {}
-                        : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
-                      ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
-                      command: [...command],
-                      startedAt,
-                    };
-                    await addAssignmentProcess(paths, assignmentId, record);
-                    tracking.record = record;
-                    if (pendingSignal) forwardSignal(pendingSignal);
-                  } finally {
-                    registered();
-                  }
+                  const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
+                  const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
+                  if (!startedAt) return;
+                  const record: TrackedProcessRecord = {
+                    pid: session?.pid ?? pid,
+                    ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
+                    ...(session?.sessionId === undefined
+                      ? {}
+                      : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
+                    ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
+                    command: [...command],
+                    startedAt,
+                  };
+                  await addAssignmentProcess(paths, assignmentId, record);
+                  tracking.record = record;
+                  if (pendingSignal) forwardSignal(pendingSignal);
+                  registered();
                 },
               });
               await Promise.race([registration, execution.then(() => undefined)]);

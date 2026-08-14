@@ -619,6 +619,113 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   await run(process.execPath, [cli, "release", syncReplacement!.assignment!.id, "--json"], { cwd: root });
 });
 
+test("failed process registration holds the workspace lock through cleanup", { timeout: 60_000 }, async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process identity probes are required");
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-registration-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "repo");
+  const installer = path.join(parent, "install.mjs");
+  await fs.mkdir(root);
+  await fs.writeFile(
+    installer,
+    "import fs from 'node:fs/promises';import path from 'node:path';await fs.mkdir(path.join(process.cwd(),'node_modules','fixture'),{recursive:true});await fs.writeFile(path.join(process.cwd(),'node_modules','fixture','ready'),'yes');\n",
+  );
+  await fs.writeFile(path.join(root, "package.json"), '{"name":"registration-fixture","dependencies":{"fixture":"1"}}\n');
+  await fs.writeFile(path.join(root, "package-lock.json"), "{}\n");
+  await fs.writeFile(path.join(root, ".gitignore"), "node_modules/\n");
+  await fs.writeFile(
+    path.join(root, ".rukrc.json"),
+    `${JSON.stringify({ dependencyMode: "managed", installCommand: [process.execPath, installer] }, null, 2)}\n`,
+  );
+  await run("git", ["init", "-q", "-b", "main"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: root });
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "fixture"], { cwd: root });
+
+  const acquired = JSON.parse((await run(
+    process.execPath,
+    [cli, "acquire", "agent/registration-cleanup", "--json"],
+    { cwd: root },
+  )).stdout);
+  const repository = await getRepository(root);
+  const paths = storePaths(repository.commonDir);
+  const probeCount = path.join(parent, "probe-count");
+  const identityReady = path.join(parent, "identity-ready");
+  const identityRelease = path.join(parent, "identity-release");
+  const cleanupStarted = path.join(parent, "cleanup-started");
+  const cleanupRelease = path.join(parent, "cleanup-release");
+  const childFile = path.join(parent, "child.pid");
+  const fakeBin = path.join(parent, "bin");
+  await fs.mkdir(fakeBin);
+  await fs.writeFile(
+    path.join(fakeBin, "ps"),
+    "#!/bin/sh\nprintf 'x\\n' >> \"$RUK_PS_COUNT\"\ncount=$(wc -l < \"$RUK_PS_COUNT\")\nif [ \"$count\" -le 2 ]; then\n  [ \"$count\" -eq 2 ] && : > \"$RUK_IDENTITY_READY\"\n  while [ ! -f \"$RUK_IDENTITY_RELEASE\" ]; do sleep 0.05; done\nelse\n  : > \"$RUK_CLEANUP_STARTED\"\n  while [ ! -f \"$RUK_CLEANUP_RELEASE\" ]; do sleep 0.05; done\nfi\nprintf 'Mon Jan  1 00:00:00 2026\\n'\n",
+  );
+  await fs.chmod(path.join(fakeBin, "ps"), 0o755);
+  t.after(async () => {
+    await Promise.all([
+      fs.writeFile(identityRelease, "release").catch(() => {}),
+      fs.writeFile(cleanupRelease, "release").catch(() => {}),
+    ]);
+  });
+
+  let childPid = 0;
+  const execution = run(
+    process.execPath,
+    [
+      cli,
+      "run",
+      "--",
+      process.execPath,
+      "-e",
+      `require('node:fs').writeFileSync(${JSON.stringify(childFile)},String(process.pid));setInterval(()=>{},1000)`,
+    ],
+    {
+      cwd: acquired.path,
+      allowFailure: true,
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env["PATH"] ?? ""}`,
+        RUK_PS_COUNT: probeCount,
+        RUK_IDENTITY_READY: identityReady,
+        RUK_IDENTITY_RELEASE: identityRelease,
+        RUK_CLEANUP_STARTED: cleanupStarted,
+        RUK_CLEANUP_RELEASE: cleanupRelease,
+      },
+    },
+  );
+  try {
+    await waitFor(() => fs.access(identityReady).then(() => true, () => false));
+    await waitFor(async () => {
+      try { childPid = Number(await fs.readFile(childFile, "utf8")); } catch {}
+      return childPid > 0;
+    });
+    await beginWorkspaceReturn(paths, acquired.assignmentId);
+    await fs.writeFile(identityRelease, "release");
+    await waitFor(() => fs.access(cleanupStarted).then(() => true, () => false));
+
+    const competingLock = withDirectoryLock(treeLockPath(paths, acquired.path), async () => {});
+    const acquiredBeforeCleanup = await Promise.race([
+      competingLock.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 750)),
+    ]);
+    assert.equal(acquiredBeforeCleanup, false);
+    await fs.writeFile(cleanupRelease, "release");
+    const result = await execution;
+    await competingLock;
+    assert.equal(result.code, 1);
+    assert.equal(await processStopped(childPid), true);
+    await finishWorkspaceReturn(paths, acquired.assignmentId);
+  } finally {
+    await fs.writeFile(identityRelease, "release").catch(() => {});
+    await fs.writeFile(cleanupRelease, "release").catch(() => {});
+    if (childPid > 0 && !(await processStopped(childPid))) {
+      try { process.kill(-childPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
 test("failed preparation invalidates a reused workspace projection", { timeout: 60_000 }, async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cli-failed-preparation-"));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));

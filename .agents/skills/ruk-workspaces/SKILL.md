@@ -30,9 +30,11 @@ leaderless POSIX process groups retain the assignment rather than being signaled
 failed registration or heartbeat abort also retains an unverified detached
 group instead of signaling a reusable numeric process-group ID. Any cleanup
 refusal is final for that attempt; Ruk does not follow it with an unfenced PID signal.
-Attached POSIX descendants are identity-fenced individually immediately before
-they are signaled; PID reuse or an unreadable identity for a still-live descendant
-retains the assignment instead of killing or overlooking the process.
+Attached POSIX leaders and descendants are identity-fenced individually
+immediately before they are signaled; PID reuse or an unreadable identity for a
+still-live process retains the assignment instead of killing or overlooking it.
+The workspace tree lock remains held until process registration succeeds or
+failed-registration cleanup settles, so release cannot race that handoff.
 If synchronization during a reused acquisition cannot verify an aborted
 installer tree, parse the retryable `RESOURCE_BUSY` error for its exact
 `assignmentId`, `path`, `expiresAt`, and `recovery`; Ruk keeps that slot assigned.

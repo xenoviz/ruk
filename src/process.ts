@@ -713,6 +713,9 @@ async function terminateSpawnedProcess(pid: number, detached: boolean, expectedI
     if (descendantIdentity !== descendant.startedAt) throw new ProcessIdentityUnavailableError(descendant.pid);
     try { process.kill(descendant.pid, "SIGKILL"); } catch (error) { if (!isMissingProcess(error)) throw error; }
   }
+  const leaderIdentity = await freshProcessIdentityOrConfirmedMissing(pid);
+  if (!leaderIdentity) return descendants.length > 0;
+  if (leaderIdentity !== expectedIdentity) throw new ProcessIdentityUnavailableError(pid);
   try {
     process.kill(pid, "SIGKILL");
     return true;

@@ -148,10 +148,13 @@ detached groups. If the original leader identity or surviving descendants
 cannot be verified, or any termination safety check refuses the signal, the
 process is retained without a fallback PID signal. The cleanup error is
 preserved with the heartbeat failure, and automatic release retains the assignment.
-Attached POSIX descendants are captured with their start identities and each
-identity is rechecked immediately before signaling, so PID reuse after process
-enumeration also fails closed. An empty or failed identity probe is accepted as
-completion only when an OS liveness check confirms that descendant no longer exists.
+Attached POSIX leaders and descendants are captured with their start identities,
+and each identity is rechecked immediately before signaling, so PID reuse during
+process enumeration also fails closed. An empty or failed identity probe is
+accepted as completion only when an OS liveness check confirms that process no
+longer exists. The workspace tree lock remains held until child registration is
+persisted or failed registration cleanup settles, so release cannot recycle the
+worktree during that handoff.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing

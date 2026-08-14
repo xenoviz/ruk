@@ -164,9 +164,11 @@ captures its validity window only after acquiring the state lock. If stopping
 the command cannot verify the original detached leader or prove that its process
 tree is gone, Ruk preserves that cleanup failure and retains the assignment
 instead of returning the workspace to the pool.
-Attached POSIX cleanup verifies every captured descendant's start identity
-immediately before signaling it; a reused descendant PID or an unreadable identity
-for a descendant that is still alive retains the assignment.
+Attached POSIX cleanup verifies the leader and every captured descendant's start
+identity immediately before signaling it; a reused PID or an unreadable identity
+for a process that is still alive retains the assignment. Ruk also keeps the
+workspace tree lock until process registration succeeds or failed-registration
+cleanup settles, preventing concurrent release during that handoff.
 The heartbeat failure is still reported if operation work resolves while its
 failure hook is running; concurrent success cannot hide a lost renewal fence.
 Nested activity-renewal failures are reported as retryable `RESOURCE_BUSY`, and

@@ -183,6 +183,49 @@ test("process runner identity-fences attached descendants before abort signaling
   }
 });
 
+test("process runner rechecks an attached leader before abort signaling", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process identities are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-leader-reuse-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const countFile = path.join(root, "count");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(
+    ps,
+    "#!/bin/sh\nif [ \"$1\" = \"-e\" ]; then printf '%s 1 S Mon Jan  1 00:00:00 2026\\n' \"$RUK_LEADER_PID\"; exit 0; fi\ncount=0\nif [ -f \"$RUK_PROBE_COUNT\" ]; then read count < \"$RUK_PROBE_COUNT\"; fi\ncount=$((count+1))\nprintf '%s' \"$count\" > \"$RUK_PROBE_COUNT\"\nif [ \"$count\" -lt 3 ]; then printf 'Mon Jan  1 00:00:00 2026\\n'; else printf 'Tue Jan  2 00:00:00 2026\\n'; fi\n",
+  );
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalCount = process.env["RUK_PROBE_COUNT"];
+  const originalLeader = process.env["RUK_LEADER_PID"];
+  process.env["PATH"] = `${root}${path.delimiter}${originalPath ?? ""}`;
+  process.env["RUK_PROBE_COUNT"] = countFile;
+  const controller = new AbortController();
+  let childPid = 0;
+  try {
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        signal: controller.signal,
+        onSpawn: (pid) => {
+          childPid = pid;
+          process.env["RUK_LEADER_PID"] = String(pid);
+          controller.abort(new Error("heartbeat lost"));
+        },
+      }),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalCount === undefined) delete process.env["RUK_PROBE_COUNT"];
+    else process.env["RUK_PROBE_COUNT"] = originalCount;
+    if (originalLeader === undefined) delete process.env["RUK_LEADER_PID"];
+    else process.env["RUK_LEADER_PID"] = originalLeader;
+    if (childPid > 0) {
+      try { process.kill(childPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
 test("process runner retains a live attached descendant when its identity is unreadable", async (t) => {
   if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-descendant-unreadable-"));
