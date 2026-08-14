@@ -3,8 +3,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addWorktree, assignWorktree, currentBranch, fetchDefaultRemote, fetchRemote, returnWorktree } from "../src/git.js";
+import { addWorktree, assignWorktree, currentBranch, fetchDefaultRemote, fetchRemote, getRepository, returnWorktree } from "../src/git.js";
 import { run } from "../src/process.js";
+
+test("repository context distinguishes the primary checkout from linked worktrees", async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-git-primary-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "repo");
+  const linked = path.join(parent, "linked");
+  await fs.mkdir(root);
+  await run("git", ["init", "-q"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: root });
+  await fs.writeFile(path.join(root, "tracked.txt"), "fixture\n");
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "fixture"], { cwd: root });
+  await addWorktree({ cwd: root, destination: linked, branch: "agent/linked", detach: true, stdio: "ignore" });
+
+  assert.equal((await getRepository(root)).primaryCheckout, true);
+  assert.equal((await getRepository(linked)).primaryCheckout, false);
+});
 
 test("pooled worktree assignment and return preserve branch safety", async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-git-pool-"));

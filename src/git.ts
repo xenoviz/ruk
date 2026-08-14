@@ -9,14 +9,22 @@ export interface WorktreeRecord {
 }
 
 export async function getRepository(cwd = process.cwd()): Promise<Repository> {
-  const [rootResult, commonResult] = await Promise.all([
+  const [rootResult, commonResult, gitDirResult] = await Promise.all([
     run("git", ["rev-parse", "--show-toplevel"], { cwd }),
     run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd }),
+    run("git", ["rev-parse", "--path-format=absolute", "--git-dir"], { cwd }),
   ]);
+
+  const commonDir = path.resolve(commonResult.stdout.trim());
+  const gitDir = path.resolve(gitDirResult.stdout.trim());
 
   return {
     root: path.resolve(rootResult.stdout.trim()),
-    commonDir: path.resolve(commonResult.stdout.trim()),
+    commonDir,
+    primaryRoot: path.dirname(commonDir),
+    primaryCheckout: process.platform === "win32"
+      ? commonDir.toLowerCase() === gitDir.toLowerCase()
+      : commonDir === gitDir,
   };
 }
 

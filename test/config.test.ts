@@ -17,6 +17,7 @@ test("configuration defers the dependency default to package-manager detection",
   assert.deepEqual(await loadConfig(root), {
     installCommand: null,
     dependencyMode: null,
+    sharedCheckoutPolicy: "deny",
   });
 });
 
@@ -25,18 +26,22 @@ test("custom install commands default to managed mode", async (t) => {
   const bun = await detectPackageManager(root, {
     dependencyMode: null,
     installCommand: ["bun", "run", "bootstrap"],
+    sharedCheckoutPolicy: "deny",
   });
   const pnpm = await detectPackageManager(root, {
     dependencyMode: null,
     installCommand: ["pnpm", "run", "bootstrap"],
+    sharedCheckoutPolicy: "deny",
   });
   const npm = await detectPackageManager(root, {
     dependencyMode: null,
     installCommand: ["npm", "ci"],
+    sharedCheckoutPolicy: "deny",
   });
   const sharedBun = await detectPackageManager(root, {
     dependencyMode: "shared",
     installCommand: ["bun", "install", "--frozen-lockfile"],
+    sharedCheckoutPolicy: "deny",
   });
 
   assert.equal(bun.dependencyMode, "managed");
@@ -61,6 +66,17 @@ test("configuration validates modes, commands, and unknown keys", async (t) => {
 
   await fs.writeFile(path.join(root, ".rukrc.json"), '{broken\n');
   await assert.rejects(loadConfig(root), /Cannot read .*\.rukrc\.json/);
+
+  await fs.writeFile(path.join(root, ".rukrc.json"), '{"sharedCheckoutPolicy":"unsafe"}\n');
+  await assert.rejects(loadConfig(root), /sharedCheckoutPolicy.*deny.*warn.*allow/);
+});
+
+test("shared checkout policy defaults to deny and accepts explicit policies", async (t) => {
+  const root = await directory(t);
+  for (const policy of ["deny", "warn", "allow"] as const) {
+    await fs.writeFile(path.join(root, ".rukrc.json"), `${JSON.stringify({ sharedCheckoutPolicy: policy })}\n`);
+    assert.equal((await loadConfig(root)).sharedCheckoutPolicy, policy);
+  }
 });
 
 test("package manager detection chooses deterministic install commands", async (t) => {
@@ -70,6 +86,7 @@ test("package manager detection chooses deterministic install commands", async (
   const manager = await detectPackageManager(root, {
     dependencyMode: "managed",
     installCommand: [process.execPath, "fixture.mjs"],
+    sharedCheckoutPolicy: "deny",
   });
   assert.equal(manager.name, path.basename(process.execPath).replace(/\.exe$/i, ""));
   assert.equal(manager.dependencyMode, "managed");
@@ -91,6 +108,7 @@ test("environment configuration is parsed and validated", async (t) => {
   assert.deepEqual(await loadConfig(root), {
     installCommand: [process.execPath, "install.mjs"],
     dependencyMode: "shared",
+    sharedCheckoutPolicy: "deny",
   });
 
   process.env["RUK_INSTALL_COMMAND"] = "not-json";
@@ -102,7 +120,7 @@ test("environment configuration is parsed and validated", async (t) => {
 test("npm auto-detection uses ci with a lockfile and install without one", async (t) => {
   const root = await directory(t);
   await fs.writeFile(path.join(root, "package.json"), '{"name":"fixture"}\n');
-  const config: RukConfig = { dependencyMode: "managed", installCommand: null };
+  const config: RukConfig = { dependencyMode: "managed", installCommand: null, sharedCheckoutPolicy: "deny" };
   assert.deepEqual((await detectPackageManager(root, config)).command, ["npm", "install"]);
   await fs.writeFile(path.join(root, "package-lock.json"), '{}\n');
   assert.deepEqual((await detectPackageManager(root, config)).command, ["npm", "ci"]);
@@ -112,7 +130,11 @@ test("Bun auto-detection uses a frozen lockfile install", async (t) => {
   const root = await directory(t);
   await fs.writeFile(path.join(root, "package.json"), '{"name":"fixture","packageManager":"bun@1.3.14"}\n');
   await fs.writeFile(path.join(root, "bun.lock"), "");
-  const manager = await detectPackageManager(root, { dependencyMode: null, installCommand: null });
+  const manager = await detectPackageManager(root, {
+    dependencyMode: null,
+    installCommand: null,
+    sharedCheckoutPolicy: "deny",
+  });
   assert.deepEqual(manager.command, ["bun", "install", "--frozen-lockfile"]);
   assert.equal(manager.dependencyMode, "shared");
 });
@@ -137,6 +159,7 @@ test("Yarn uses the locked-install flag supported by Classic and Modern", async 
   const manager = await detectPackageManager(root, {
     dependencyMode: "managed",
     installCommand: null,
+    sharedCheckoutPolicy: "deny",
   });
   assert.deepEqual(manager.command, ["yarn", "install", "--frozen-lockfile"]);
 });
@@ -148,7 +171,11 @@ test("auto-detection reports a declared package manager missing from PATH", asyn
     '{"name":"fixture","packageManager":"not-a-real-manager@1.0.0"}\n',
   );
   await assert.rejects(
-    detectPackageManager(root, { dependencyMode: "managed", installCommand: null }),
+    detectPackageManager(root, {
+      dependencyMode: "managed",
+      installCommand: null,
+      sharedCheckoutPolicy: "deny",
+    }),
     /not-a-real-manager is required/,
   );
 });

@@ -1,11 +1,13 @@
 import type { StdioOptions } from "node:child_process";
 
 export type DependencyMode = "managed" | "shared";
+export type SharedCheckoutPolicy = "deny" | "warn" | "allow";
 export type PackageManagerName = "bun" | "pnpm" | "npm" | "yarn" | string;
 
 export interface RukConfig {
   installCommand: string[] | null;
   dependencyMode: DependencyMode | null;
+  sharedCheckoutPolicy: SharedCheckoutPolicy;
 }
 
 export interface PackageManager {
@@ -18,6 +20,8 @@ export interface PackageManager {
 export interface Repository {
   root: string;
   commonDir: string;
+  primaryRoot: string;
+  primaryCheckout: boolean;
 }
 
 export interface DependencyReporter {

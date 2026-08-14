@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withAssignmentActivity } from "./activity.js";
+import { activeAssignmentCount, sharedCheckoutDiagnostic } from "./checkout.js";
 import { loadConfig, detectPackageManager } from "./config.js";
 import {
   assertSharedBackendSupported,
@@ -32,6 +33,7 @@ import {
   deleteWorkspaceRecord,
   findAssignments,
   finishWorkspaceReturn,
+  assignmentIsAutoRenewing,
   identifyGcCandidates,
   markWorkspaceAssigned,
   markWorkspaceAvailable,
@@ -70,8 +72,8 @@ Usage:
   ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] [--json]
   ruk renew <assignment-id> [--ttl <minutes>] [--json]
   ruk release <assignment-id> [--force] [--json]
-  ruk sync [--json]
-  ruk run -- <command> [args...]
+  ruk sync [--allow-shared-checkout] [--json]
+  ruk run [--allow-shared-checkout] -- <command> [args...]
   ruk exec <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] -- <command> [args...]
   ruk warm --count <n> [--from <ref>] [--fetch] [--json]
   ruk shell <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...]
@@ -105,6 +107,7 @@ interface ParsedOptions {
   disk?: boolean;
   count?: string;
   ports?: string[];
+  allowSharedCheckout?: boolean;
 }
 
 function parseOptions(
@@ -179,10 +182,27 @@ function dependencyReporter(io: CliIo, json: boolean): DependencyReporter {
       };
 }
 
-async function sync(cwd: string, io: CliIo, json = false, emit = true) {
+async function sync(
+  cwd: string,
+  io: CliIo,
+  json = false,
+  emit = true,
+  allowSharedCheckout = false,
+  guardSharedCheckout = true,
+) {
   const value = await context(cwd);
   const paths = storePaths(value.repository.commonDir);
-  const lifecycle = (await readState(paths)).workspaces[treeKey(value.repository.root)];
+  const state = await readState(paths);
+  if (guardSharedCheckout) {
+    const diagnostic = sharedCheckoutDiagnostic(
+      value.repository,
+      state,
+      value.config.sharedCheckoutPolicy,
+      allowSharedCheckout,
+    );
+    if (diagnostic) io.stderr.write(diagnostic);
+  }
+  const lifecycle = state.workspaces[treeKey(value.repository.root)];
   const prepare = () => ensureDependencies({
       ...value,
       reporter: dependencyReporter(io, json),
@@ -567,6 +587,13 @@ async function list(args: readonly string[], cwd: string, io: CliIo) {
       lifecycle: lifecycle?.lifecycle ?? null,
       assignmentId: lifecycle?.assignment?.id ?? null,
       expiresAt: lifecycle?.assignment?.expiresAt ?? null,
+      lastActivityAt: lifecycle?.assignment?.lastActivityAt ?? null,
+      autoRenewing: lifecycle?.assignment
+        ? assignmentIsAutoRenewing(lifecycle.assignment)
+        : false,
+      primaryCheckout: treeKey(workspace.path) === treeKey(repository.primaryRoot),
+      managed: lifecycle !== undefined,
+      activeAssignments: activeAssignmentCount(state),
     };
   });
   if (options.json) {
@@ -589,6 +616,7 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
   const state = await readState(paths);
   const record = state.trees[treeKey(value.repository.root)];
   const lifecycle = state.workspaces[treeKey(value.repository.root)];
+  const activeAssignments = activeAssignmentCount(state);
   const current = await dependencyFingerprint({ root: value.repository.root, manager: value.manager });
   const modulesPresent = await dependenciesPresent(
     value.repository.root,
@@ -617,6 +645,13 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     lifecycle: lifecycle?.lifecycle ?? null,
     assignmentId: lifecycle?.assignment?.id ?? null,
     expiresAt: lifecycle?.assignment?.expiresAt ?? null,
+    lastActivityAt: lifecycle?.assignment?.lastActivityAt ?? null,
+    autoRenewing: lifecycle?.assignment
+      ? assignmentIsAutoRenewing(lifecycle.assignment)
+      : false,
+    primaryCheckout: value.repository.primaryCheckout,
+    managed: lifecycle !== undefined,
+    activeAssignments,
   };
   if (options.json) {
     io.stdout.write(jsonLine(result));
@@ -630,6 +665,8 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     if (options.explain && reason) io.stdout.write(`Reason:      ${reason}\nRecovery:    ${result.recovery}\n`);
     io.stdout.write(`Lifecycle:   ${result.lifecycle ?? "unmanaged"}\n`);
     if (result.assignmentId) io.stdout.write(`Assignment:  ${result.assignmentId} (expires ${result.expiresAt})\n`);
+    if (result.assignmentId) io.stdout.write(`Activity:    ${result.lastActivityAt} (${result.autoRenewing ? "auto-renewing" : "idle"})\n`);
+    if (result.primaryCheckout) io.stdout.write(`Checkout:    primary (${activeAssignments} active assignment${activeAssignments === 1 ? "" : "s"})\n`);
     if (!ready && !options.explain) io.stdout.write("Next:        ruk sync\n");
   }
   return result;
@@ -889,14 +926,30 @@ async function execute(
   forwardInterrupt = detached,
 ): Promise<number> {
   const separator = args.indexOf("--");
-  const command = separator < 0 ? [...args] : args.slice(separator + 1);
+  let allowSharedCheckout = false;
+  let command: string[];
+  if (separator < 0) {
+    allowSharedCheckout = args[0] === "--allow-shared-checkout";
+    command = allowSharedCheckout ? args.slice(1) : [...args];
+  } else {
+    const parsed = parseOptions(args.slice(0, separator), { flags: ["--allow-shared-checkout"] });
+    requirePositionals(parsed.positional, 0, "run options must appear before --");
+    allowSharedCheckout = parsed.options.allowSharedCheckout ?? false;
+    command = args.slice(separator + 1);
+  }
   if (command.length === 0) throw new Error("run requires a command");
-  if (separator > 0) throw new Error(`Unknown run option ${args[0]}`);
   const value = await context(cwd);
   const { repository } = value;
   const [program, ...programArgs] = command;
   const paths = storePaths(repository.commonDir);
   let state = await readState(paths);
+  const diagnostic = sharedCheckoutDiagnostic(
+    repository,
+    state,
+    value.config.sharedCheckoutPolicy,
+    allowSharedCheckout,
+  );
+  if (diagnostic) io.stderr.write(diagnostic);
   let lifecycle = state.workspaces[treeKey(repository.root)];
   if (lifecycle && (
     lifecycle.lifecycle !== "assigned" ||
@@ -913,7 +966,7 @@ async function execute(
     tree.fingerprint !== (await dependencyFingerprint({ root: repository.root, manager: value.manager })).fingerprint ||
     !(await dependencyProjectionsAreValid(repository.root, tree))
   ) {
-    await sync(repository.root, io);
+    await sync(repository.root, io, false, true, false, false);
     state = await readState(paths);
     lifecycle = state.workspaces[treeKey(repository.root)];
     if (expectedAssignmentId && lifecycle?.assignment?.id !== expectedAssignmentId) {
@@ -1282,9 +1335,18 @@ export async function main(argv: readonly string[], options: MainOptions = {}): 
     return 0;
   }
   if (command === "init" || command === "sync") {
-    const { options: parsed, positional } = parseOptions(args, { flags: ["--json"] });
+    const { options: parsed, positional } = parseOptions(args, {
+      flags: command === "sync" ? ["--json", "--allow-shared-checkout"] : ["--json"],
+    });
     requirePositionals(positional, 0, `${command} does not accept positional arguments`);
-    await sync(cwd, io, parsed.json ?? false);
+    await sync(
+      cwd,
+      io,
+      parsed.json ?? false,
+      true,
+      parsed.allowSharedCheckout ?? false,
+      command === "sync",
+    );
     return 0;
   }
   if (command === "create") {

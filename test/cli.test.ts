@@ -141,6 +141,16 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     { cwd: acquired.path },
   );
   assert.match(portOutput.stdout, new RegExp(String(acquired.ports.app)));
+  const activityStatus = JSON.parse((await run(
+    process.execPath,
+    [cli, "status", "--json"],
+    { cwd: acquired.path },
+  )).stdout);
+  assert.equal(activityStatus.managed, true);
+  assert.equal(activityStatus.primaryCheckout, false);
+  assert.equal(activityStatus.activeAssignments, 1);
+  assert.equal(typeof activityStatus.lastActivityAt, "string");
+  assert.equal(activityStatus.autoRenewing, false);
 
   const managedRemove = await run(process.execPath, [cli, "remove", acquired.path, "--force"], {
     cwd: root,

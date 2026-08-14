@@ -1,3 +1,4 @@
+import { SharedCheckoutError } from "./checkout.js";
 import { ProcessIdentityUnavailableError } from "./process.js";
 
 export interface ErrorRecord {
@@ -5,6 +6,8 @@ export interface ErrorRecord {
   code: string;
   message: string;
   retryable: boolean;
+  activeAssignments?: number;
+  recovery?: string;
 }
 
 export class DependencyPreparationError extends Error {
@@ -25,6 +28,16 @@ const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
 
 export function errorRecord(error: unknown): ErrorRecord {
   const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof SharedCheckoutError) {
+    return {
+      status: "error",
+      code: "RESOURCE_BUSY",
+      message,
+      retryable: true,
+      activeAssignments: error.activeAssignments,
+      recovery: error.recovery,
+    };
+  }
   const match = error instanceof DependencyPreparationError
     ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
     : error instanceof ProcessIdentityUnavailableError
