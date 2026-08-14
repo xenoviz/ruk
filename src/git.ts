@@ -18,15 +18,18 @@ export async function getRepository(cwd = process.cwd()): Promise<Repository> {
 
   const commonDir = path.resolve(commonResult.stdout.trim());
   const gitDir = path.resolve(gitDirResult.stdout.trim());
-  const primaryRoot = path.resolve(/^worktree (.+)$/m.exec(worktreesResult.stdout)?.[1] ?? rootResult.stdout.trim());
+  const primaryCheckout = process.platform === "win32"
+    ? commonDir.toLowerCase() === gitDir.toLowerCase()
+    : commonDir === gitDir;
+  const primaryRoot = primaryCheckout
+    ? path.resolve(rootResult.stdout.trim())
+    : path.resolve(/^worktree (.+)$/m.exec(worktreesResult.stdout)?.[1] ?? rootResult.stdout.trim());
 
   return {
     root: path.resolve(rootResult.stdout.trim()),
     commonDir,
     primaryRoot,
-    primaryCheckout: process.platform === "win32"
-      ? commonDir.toLowerCase() === gitDir.toLowerCase()
-      : commonDir === gitDir,
+    primaryCheckout,
   };
 }
 

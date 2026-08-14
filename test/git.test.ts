@@ -33,7 +33,7 @@ test("repository context finds a primary checkout with a separate Git directory"
   await run("git", ["init", "-q", "--separate-git-dir", metadata], { cwd: root });
   const repository = await getRepository(root);
   assert.equal(repository.primaryCheckout, true);
-  assert.equal(repository.primaryRoot, path.resolve(root));
+  assert.equal(repository.primaryRoot, await fs.realpath(root));
 });
 
 test("pooled worktree assignment and return preserve branch safety", async (t) => {
