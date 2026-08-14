@@ -41,6 +41,7 @@ export interface AssignmentActivityInput {
   keeperId: string;
   validUntil: string;
   now?: string;
+  lockTimeoutMs?: number;
 }
 
 export type GcCandidateReason =
@@ -381,7 +382,7 @@ export async function refreshAssignmentActivity(
     );
     recordActivity(workspace, now);
     return workspace;
-  });
+  }, input.lockTimeoutMs === undefined ? undefined : { timeoutMs: input.lockTimeoutMs });
 }
 
 export async function finishAssignmentActivity(
@@ -588,7 +589,8 @@ export async function identifyGcCandidates(
 ): Promise<GcCandidate[]> {
   const state = await readState(paths);
   const cutoff = Date.parse(timestamp(olderThan, "olderThan"));
-  const currentTime = Date.parse(timestamp(now, "now"));
+  const current = timestamp(now, "now");
+  const currentTime = Date.parse(current);
   const candidates: GcCandidate[] = [];
   for (const workspace of Object.values(state.workspaces)) {
     if (
@@ -626,7 +628,8 @@ export async function identifyGcCandidates(
       candidates.push({ workspace, reason: "failed", requiresForce: false });
     } else if (
       workspace.assignment &&
-      Date.parse(workspace.assignment.expiresAt) <= currentTime
+      Date.parse(workspace.assignment.expiresAt) <= currentTime &&
+      !assignmentIsAutoRenewing(workspace.assignment, current)
     ) {
       candidates.push({ workspace, reason: "expired-assignment", requiresForce: true });
     }

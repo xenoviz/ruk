@@ -66,6 +66,18 @@ test("primary checkout task commands require an explicit sharing policy", { time
     recovery: "ruk acquire <branch>",
   });
 
+  await fs.writeFile(
+    path.join(root, ".rukrc.json"),
+    `${JSON.stringify({
+      dependencyMode: "managed",
+      installCommand: [process.execPath, installer],
+      sharedCheckoutPolicy: "warn",
+    })}\n`,
+  );
+  const warnedSync = await run(process.execPath, [cli, "sync", "--json"], { cwd: root });
+  assert.equal(warnedSync.stderr, "");
+  assert.equal(JSON.parse(warnedSync.stdout).status, "prepared");
+
   const allowed = await run(
     process.execPath,
     [cli, "run", "--allow-shared-checkout", "--", process.execPath, "-e", "process.stdout.write('allowed')"],

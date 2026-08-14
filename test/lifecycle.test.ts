@@ -187,6 +187,22 @@ test("assignment activity renews the lease and fences concurrent keepers", async
   );
 });
 
+test("forced GC does not select an expired assignment with a current keeper", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"), T0, T1);
+  await beginAssignmentActivity(paths, workspace.assignment!.id, {
+    keeperId: "00000000-0000-4000-8000-000000000003",
+    validUntil: T3,
+    now: T0,
+  });
+
+  assert.equal((await identifyGcCandidates(paths, T0, T2, true)).length, 0);
+  assert.deepEqual(
+    (await identifyGcCandidates(paths, T0, T4, true)).map(({ reason }) => reason),
+    ["expired-assignment"],
+  );
+});
+
 test("return transitions retain ownership until tracked processes are removed", async (t) => {
   const { root, paths } = await fixture(t);
   const assigned = await assign(paths, path.join(root, "workspace"));

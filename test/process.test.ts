@@ -27,6 +27,16 @@ test("process runner captures output and preserves non-zero results when request
   );
 });
 
+test("process runner terminates a managed child when its abort signal fires", async () => {
+  const controller = new AbortController();
+  const running = run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: process.platform !== "win32",
+    signal: controller.signal,
+    onSpawn: () => controller.abort(new Error("heartbeat lost")),
+  });
+  await assert.rejects(running, /heartbeat lost|cannot be released safely/);
+});
+
 test("command detection recognizes the active Node executable", async () => {
   assert.equal(await commandExists(process.execPath), true);
   assert.equal(await commandExists(path.join(os.tmpdir(), "ruk-command-that-does-not-exist")), false);

@@ -12,10 +12,11 @@ import {
   markWorkspaceAssigned,
   recordPreparingWorkspace,
   refreshAssignmentActivity,
+  renewAssignment,
 } from "../src/lifecycle.js";
 import { readState, storePaths } from "../src/state.js";
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, leaseDurationMinutes = 480) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-activity-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const paths = storePaths(root);
@@ -24,11 +25,12 @@ async function fixture(t: test.TestContext) {
     branch: "agent/activity",
     now: "2026-01-01T00:00:00.000Z",
   });
+  const assignedAt = "2026-01-01T00:00:00.000Z";
   const workspace = await markWorkspaceAssigned(paths, prepared.path, prepared.operationId!, {
     owner: "agent",
     hostname: "host",
-    expiresAt: "2026-01-01T08:00:00.000Z",
-    now: "2026-01-01T00:00:00.000Z",
+    expiresAt: new Date(Date.parse(assignedAt) + leaseDurationMinutes * 60_000).toISOString(),
+    now: assignedAt,
   });
   return { paths, assignmentId: workspace.assignment!.id };
 }
@@ -79,23 +81,21 @@ test("withAssignmentActivity reports a lost keeper and invokes failure cleanup",
   const { paths, assignmentId } = await fixture(t);
   const keeperId = "583b29a4-a6dc-4856-b4c4-e784b04f45c7";
   let cleaned = false;
-  let finishWork!: () => void;
 
   await assert.rejects(
     withAssignmentActivity(
       paths,
       assignmentId,
-      async () => {
+      async (signal) => {
         await finishAssignmentActivity(paths, assignmentId, keeperId);
-        await new Promise<void>((resolve) => { finishWork = resolve; });
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => {
+          cleaned = true;
+          resolve();
+        }, { once: true }));
       },
       {
         heartbeatIntervalMs: 10,
         keeperId,
-        onFailure: () => {
-          cleaned = true;
-          finishWork();
-        },
       },
     ),
     /is not active/,
@@ -128,4 +128,36 @@ test("withAssignmentActivity retries transient heartbeat writes before failing w
   );
 
   assert.equal(attempts, 3);
+});
+
+test("withAssignmentActivity adopts a shorter duration after explicit renewal", async (t) => {
+  const { paths, assignmentId } = await fixture(t, 0.003);
+  const refreshTimes: number[] = [];
+  let finishWork!: () => void;
+
+  await withAssignmentActivity(
+    paths,
+    assignmentId,
+    async () => {
+      const renewedAt = new Date().toISOString();
+      await renewAssignment(
+        paths,
+        assignmentId,
+        new Date(Date.parse(renewedAt) + 0.0003 * 60_000).toISOString(),
+        renewedAt,
+      );
+      await new Promise<void>((resolve) => { finishWork = resolve; });
+    },
+    {
+      refresh: async (activityPaths, currentAssignmentId, input) => {
+        const result = await refreshAssignmentActivity(activityPaths, currentAssignmentId, input);
+        refreshTimes.push(Date.now());
+        if (refreshTimes.length === 2) finishWork();
+        return result;
+      },
+    },
+  );
+
+  assert.equal(refreshTimes.length, 2);
+  assert.ok(refreshTimes[1]! - refreshTimes[0]! < 40);
 });

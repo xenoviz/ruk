@@ -77,6 +77,8 @@ Use `ruk gc --json` to preview collection. Apply only when requested with
 `ruk gc --apply --json`. Add `--force-expired` only with explicit authority to
 reclaim expired assignments; expiry alone does not make them safe to remove.
 Forced collection revalidates expiry atomically before changing lifecycle state.
+An expired timestamp is not collectible while a current fenced lease keeper
+still reports `autoRenewing: true`; GC skips active managed work.
 GC recovers interrupted preparations, pre-handoff acquisitions, and collections
 after the age cutoff; it revalidates handoff state under the acquisition lock
 and preserves recovery markers after failed cleanup. Workspace and warm locks

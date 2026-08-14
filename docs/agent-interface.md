@@ -134,7 +134,8 @@ output. Expired assigned or returning workspaces are only reported unless both
 `--apply` and `--force-expired` are present; successfully forced removals are
 omitted from `expired`, and apply output is recomputed from final lifecycle state.
 Forced collection rechecks the current expiry in the lifecycle state transaction,
-so a concurrent renewal prevents collection.
+so a concurrent renewal prevents collection. It also skips assignments with a
+current fenced lease keeper even when their stored expiry has just elapsed.
 
 ## Inspecting and running
 

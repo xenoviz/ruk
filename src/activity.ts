@@ -49,11 +49,17 @@ async function currentAssignment(paths: StorePaths, assignmentId: string): Promi
 
 function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, milliseconds);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
+    const complete = () => {
+      signal.removeEventListener("abort", abort);
       resolve();
-    }, { once: true });
+    };
+    const timer = setTimeout(complete, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      complete();
+    };
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
   });
 }
 
@@ -72,11 +78,11 @@ function ownershipChanged(error: unknown): boolean {
 export async function withAssignmentActivity<T>(
   paths: StorePaths,
   assignmentId: string,
-  operation: () => Promise<T>,
+  operation: (signal: AbortSignal) => Promise<T>,
   options: AssignmentActivityOptions = {},
 ): Promise<T> {
   const assignment = await currentAssignment(paths, assignmentId);
-  const heartbeatIntervalMs = options.heartbeatIntervalMs
+  let heartbeatIntervalMs = options.heartbeatIntervalMs
     ?? activityHeartbeatInterval(assignment.leaseDurationMinutes);
   if (!Number.isFinite(heartbeatIntervalMs) || heartbeatIntervalMs <= 0) {
     throw new Error("heartbeatIntervalMs must be positive and finite");
@@ -97,6 +103,7 @@ export async function withAssignmentActivity<T>(
   });
 
   const controller = new AbortController();
+  const workController = new AbortController();
   let heartbeatError: unknown;
   let rejectHeartbeat!: (error: unknown) => void;
   const heartbeatFailure = new Promise<never>((_resolve, reject) => { rejectHeartbeat = reject; });
@@ -108,10 +115,16 @@ export async function withAssignmentActivity<T>(
         let refreshed = false;
         for (let attempt = 0; attempt <= retryAttempts; attempt += 1) {
           try {
-            await refresh(paths, assignmentId, {
+            const refreshedWorkspace = await refresh(paths, assignmentId, {
               keeperId,
               ...activityWindow(Date.now(), heartbeatIntervalMs),
+              lockTimeoutMs: Math.max(1, Math.min(30_000, heartbeatIntervalMs / 2)),
             });
+            if (options.heartbeatIntervalMs === undefined) {
+              heartbeatIntervalMs = activityHeartbeatInterval(
+                refreshedWorkspace.assignment!.leaseDurationMinutes,
+              );
+            }
             refreshed = true;
             break;
           } catch (error) {
@@ -126,6 +139,7 @@ export async function withAssignmentActivity<T>(
       }
     } catch (error) {
       heartbeatError = error;
+      workController.abort(error);
       try {
         await options.onFailure?.(error);
       } catch (cleanupError) {
@@ -137,7 +151,7 @@ export async function withAssignmentActivity<T>(
       rejectHeartbeat(heartbeatError);
     }
   })();
-  const work = Promise.resolve().then(operation);
+  const work = Promise.resolve().then(() => operation(workController.signal));
 
   try {
     const result = await Promise.race([work, heartbeatFailure]);

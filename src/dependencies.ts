@@ -174,6 +174,7 @@ async function installDependencies(
   root: string,
   manager: PackageManager,
   reporter: DependencyReporter,
+  signal?: AbortSignal,
 ): Promise<void> {
   const [command, ...configuredArgs] = manager.command;
   if (!command) throw new Error("Package manager command cannot be empty");
@@ -208,7 +209,12 @@ async function installDependencies(
 
   reporter.write(`Installing dependencies with ${[command, ...args].join(" ")}...\n`);
   try {
-    await run(command, args, { cwd: root, env: environment, stdio: reporter.stdio });
+    await run(command, args, {
+      cwd: root,
+      env: environment,
+      stdio: reporter.stdio,
+      ...(signal ? { signal } : {}),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new DependencyPreparationError(`Dependency installation failed: ${message}`, { cause: error });
@@ -219,6 +225,7 @@ export interface EnsureDependenciesInput {
   repository: Repository;
   manager: PackageManager;
   reporter?: DependencyReporter;
+  signal?: AbortSignal;
 }
 
 export interface EnsureDependenciesResult {
@@ -232,6 +239,7 @@ async function ensureDependenciesUnlocked({
   repository,
   manager,
   reporter = DEFAULT_REPORTER,
+  signal,
 }: EnsureDependenciesInput): Promise<EnsureDependenciesResult> {
   const { root, commonDir } = repository;
   const paths = storePaths(commonDir);
@@ -252,7 +260,7 @@ async function ensureDependenciesUnlocked({
 
   if (currentTree) await removeDependencyProjections(root, currentTree.projections);
 
-  await installDependencies(root, manager, reporter);
+  await installDependencies(root, manager, reporter, signal);
   details = await dependencyFingerprint({ root, manager });
   fingerprint = details.fingerprint;
   const mode = manager.dependencyMode === "shared" ? `${manager.name}-global-store` : "managed-install";

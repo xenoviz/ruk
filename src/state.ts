@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withDirectoryLock } from "./lock.js";
+import type { LockOptions } from "./lock.js";
 import type {
   AssignmentRecord,
   LeaseKeeperRecord,
@@ -301,6 +302,7 @@ export async function recordPreparationMetric(
 export async function updateState<T>(
   paths: StorePaths,
   mutate: (state: RukState) => T | Promise<T>,
+  lockOptions?: LockOptions,
 ): Promise<T> {
   return withDirectoryLock(paths.stateLock, async () => {
     await fs.mkdir(paths.root, { recursive: true });
@@ -311,7 +313,7 @@ export async function updateState<T>(
     await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
     await fs.rename(temporary, paths.state);
     return result;
-  });
+  }, lockOptions);
 }
 
 export async function setTreeState(

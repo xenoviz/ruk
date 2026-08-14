@@ -24,6 +24,18 @@ test("repository context distinguishes the primary checkout from linked worktree
   assert.equal((await getRepository(linked)).primaryCheckout, false);
 });
 
+test("repository context finds a primary checkout with a separate Git directory", async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-git-separated-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "repo");
+  const metadata = path.join(parent, "metadata");
+  await fs.mkdir(root);
+  await run("git", ["init", "-q", "--separate-git-dir", metadata], { cwd: root });
+  const repository = await getRepository(root);
+  assert.equal(repository.primaryCheckout, true);
+  assert.equal(repository.primaryRoot, path.resolve(root));
+});
+
 test("pooled worktree assignment and return preserve branch safety", async (t) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-git-pool-"));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));

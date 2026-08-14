@@ -13,6 +13,7 @@ export interface RunOptions {
   allowFailure?: boolean;
   detached?: boolean;
   onSpawn?: (pid: number) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 export interface RunResult {
@@ -102,20 +103,43 @@ export async function run(
     let stdout = "";
     let stderr = "";
     let spawnHook = Promise.resolve();
+    let abortCleanup = Promise.resolve();
     let spawnError: unknown;
+    let spawnedIdentity: Promise<string | null> | undefined;
+    let aborting = false;
+
+    const abort = () => {
+      if (aborting) return;
+      spawnError = options.signal?.reason ?? new Error(`${command} was aborted`);
+      if (!child.pid) return;
+      aborting = true;
+      spawnedIdentity ??= processIdentity(child.pid).catch(() => null);
+      abortCleanup = spawnedIdentity.then(async (expectedIdentity) => {
+        try {
+          const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
+          if (!killed) child.kill("SIGKILL");
+        } catch (cleanupError) {
+          child.kill("SIGKILL");
+          if (cleanupError instanceof ProcessIdentityUnavailableError) spawnError = cleanupError;
+        }
+      });
+    };
 
     child.once("spawn", () => {
+      if (child.pid && (options.signal || options.onSpawn)) {
+        spawnedIdentity ??= processIdentity(child.pid).catch(() => null);
+      }
+      if (options.signal?.aborted) abort();
       if (!options.onSpawn) return;
       if (!child.pid) {
         spawnError = new Error(`Could not track ${command}: child PID is unavailable`);
         child.kill();
         return;
       }
-      const spawnedIdentity = processIdentity(child.pid).catch(() => null);
       spawnHook = Promise.resolve().then(() => options.onSpawn!(child.pid!)).catch(async (error: unknown) => {
         spawnError = error;
         try {
-          const expectedIdentity = await spawnedIdentity;
+          const expectedIdentity = await spawnedIdentity!;
           const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
           if (!killed) child.kill("SIGKILL");
         } catch (cleanupError) {
@@ -124,6 +148,9 @@ export async function run(
         }
       });
     });
+
+    if (options.signal?.aborted) abort();
+    else options.signal?.addEventListener("abort", abort, { once: true });
 
     if (child.stdout) {
       child.stdout.setEncoding("utf8");
@@ -140,7 +167,8 @@ export async function run(
 
     child.on("error", reject);
     child.on("close", async (code, signal) => {
-      await spawnHook;
+      options.signal?.removeEventListener("abort", abort);
+      await Promise.all([spawnHook, abortCleanup]);
       if (spawnError) {
         reject(spawnError);
         return;

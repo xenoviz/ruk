@@ -20,8 +20,10 @@ up its child.
 The JSON result records the operating system, architecture, runtime versions,
 sample count, binary size, cold-start latency, and idle and peak resident memory
 for 1, 10, and 20 concurrent wrappers. Setup happens before each measured
-wrapper phase. Results are machine-specific and are not committed as release
-requirements.
+wrapper phase. The default 25-second workload exercises one periodic heartbeat
+in both the Ruk and Go targets. Results are machine-specific and are not
+committed as release requirements. Set `RUK_BENCH_NODE` when the desired Node
+executable is not named `node` on `PATH`.
 
 For a quick harness check, reduce the sample and concurrency counts:
 

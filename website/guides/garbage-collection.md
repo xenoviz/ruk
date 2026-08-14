@@ -41,5 +41,8 @@ and collects expired assignments. Expiry alone does not prove an agent has
 stopped. Use this option only after confirming that recovery is safe.
 :::
 
+Even in forced mode, Ruk skips an assignment while a current fenced lease
+keeper reports `autoRenewing: true`.
+
 Ruk still limits cleanup to recorded process identities and managed workspace
 paths. It does not scan for unrelated processes or orphan worktrees.

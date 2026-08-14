@@ -165,7 +165,7 @@ function parseArguments(args: readonly string[]): {
   };
   const binary = path.resolve(value("--binary") ?? path.join("artifacts", process.platform === "win32" ? "ruk.exe" : "ruk"));
   const samples = Number(value("--samples") ?? 3);
-  const durationMs = Number(value("--duration") ?? 1_500);
+  const durationMs = Number(value("--duration") ?? 25_000);
   const concurrencyLevels = (value("--concurrency") ?? "1,10,20").split(",").map(Number);
   if (!Number.isSafeInteger(samples) || samples < 1) throw new Error("--samples must be a positive integer");
   if (!Number.isFinite(durationMs) || durationMs < 250) throw new Error("--duration must be at least 250 milliseconds");
@@ -181,7 +181,10 @@ async function benchmarkTarget(
   durationMs: number,
   concurrencyLevels: readonly number[],
 ): Promise<TargetBenchmark> {
-  const coldStartMs = await Promise.all(Array.from({ length: samples }, () => coldStart(target.cold)));
+  const coldStartMs: number[] = [];
+  for (let sample = 0; sample < samples; sample += 1) {
+    coldStartMs.push(await coldStart(target.cold));
+  }
   const wrappers: ConcurrencyBenchmark[] = [];
   for (const concurrency of concurrencyLevels) {
     const elapsed: number[] = [];
@@ -229,11 +232,13 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
       args: ["build", "-o", goBinary, path.join(root, "experiments", "go-supervisor", "main.go")],
       cwd: root,
     });
+    const nodeExecutable = process.env["RUK_BENCH_NODE"] ?? "node";
+    const nodeVersion = await requireSuccess({ command: nodeExecutable, args: ["--version"], cwd: root });
     const nodeBase = {
       name: "node" as const,
-      version: process.version,
+      version: nodeVersion,
       sizePath: path.join(root, "dist"),
-      cold: { command: process.execPath, args: [nodeCli, "--version"], cwd: root },
+      cold: { command: nodeExecutable, args: [nodeCli, "--version"], cwd: root },
     };
     const repository = await makeRepository(temporary, nodeBase);
     const childArgs = ["-e", `setTimeout(() => {}, ${durationMs})`];
@@ -254,7 +259,7 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
         for (let index = 0; index < concurrency; index += 1) {
           const output = await requireSuccess({
             command,
-            args: [...prefix, "acquire", `benchmark/${name}/${sample}/${index}`, "--ttl", "5", "--json"],
+            args: [...prefix, "acquire", `benchmark/${name}/${sample}/${index}`, "--ttl", "1", "--json"],
             cwd: repository,
           });
           assignments.push(JSON.parse(output) as { path: string; assignmentId: string });
@@ -262,7 +267,7 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
         return {
           commands: assignments.map(({ path: cwd }) => ({
             command,
-            args: [...prefix, "run", "--", process.execPath, ...childArgs],
+            args: [...prefix, "run", "--", nodeExecutable, ...childArgs],
             cwd,
           })),
           cleanup: async () => {
@@ -280,7 +285,7 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
     const bunVersion = await requireSuccess({ command: "bun", args: ["--version"], cwd: root });
     const goVersion = await requireSuccess({ command: "go", args: ["version"], cwd: root });
     const targets: Target[] = [
-      rukTarget("node", process.execPath, [nodeCli], process.version, path.join(root, "dist")),
+      rukTarget("node", nodeExecutable, [nodeCli], nodeVersion, path.join(root, "dist")),
       rukTarget("bun-standalone", binary, [], `Bun ${bunVersion}`, binary),
       {
         name: "go-supervisor",
@@ -294,7 +299,7 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
             await fs.writeFile(state, `${JSON.stringify({ assignmentId: `go-${sample}-${index}`, heartbeatAt: new Date(0).toISOString() })}\n`);
             commands.push({
               command: goBinary,
-              args: ["--state", state, "--heartbeat", "100ms", process.execPath, ...childArgs],
+              args: ["--state", state, "--heartbeat", "20s", nodeExecutable, ...childArgs],
               cwd: temporary,
             });
           }
@@ -302,17 +307,18 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
         },
       },
     ];
+    const targetResults: TargetBenchmark[] = [];
+    for (const target of targets) {
+      targetResults.push(await benchmarkTarget(target, samples, durationMs, concurrencyLevels));
+    }
     const result = runtimeBenchmarkResult({
       generatedAt: new Date().toISOString(),
       platform: process.platform,
       architecture: process.arch,
       sampleCount: samples,
       wrapperDurationMs: durationMs,
-      targets: [],
+      targets: targetResults,
     });
-    for (const target of targets) {
-      result.targets.push(await benchmarkTarget(target, samples, durationMs, concurrencyLevels));
-    }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result;
   } finally {

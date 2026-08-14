@@ -200,14 +200,15 @@ async function sync(
       config.sharedCheckoutPolicy,
       allowSharedCheckout,
     );
-    if (diagnostic) io.stderr.write(diagnostic);
+    if (diagnostic && !json) io.stderr.write(diagnostic);
   }
   const manager = await detectPackageManager(repository.root, config);
   const value = { repository, config, manager };
   const lifecycle = state.workspaces[treeKey(repository.root)];
-  const prepare = () => ensureDependencies({
+  const prepare = (signal?: AbortSignal) => ensureDependencies({
       ...value,
       reporter: dependencyReporter(io, json),
+      ...(signal ? { signal } : {}),
     });
   const result = lifecycle?.lifecycle === "assigned" && lifecycle.assignment
     ? await withAssignmentActivity(paths, lifecycle.assignment.id, prepare)
@@ -1004,8 +1005,6 @@ async function execute(
     try { process.kill(-groupId, signal); } catch { /* The command may already have exited. */ }
   };
   let execution!: ReturnType<typeof run>;
-  let registration: Promise<void> | undefined;
-  let activityFailure: unknown;
   if (forwardInterrupt && process.platform !== "win32") {
     process.on("SIGINT", forwardSignal);
     process.on("SIGTERM", forwardSignal);
@@ -1014,9 +1013,9 @@ async function execute(
     return await withAssignmentActivity(
       paths,
       assignmentId,
-      async () => {
+      async (signal) => {
         await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
-          if (activityFailure !== undefined) throw activityFailure;
+          signal.throwIfAborted();
           const current = (await readState(paths)).workspaces[treeKey(repository.root)];
           if (
             current?.lifecycle !== "assigned" ||
@@ -1026,13 +1025,14 @@ async function execute(
             throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
           }
           let registered!: () => void;
-          registration = new Promise<void>((resolve) => { registered = resolve; });
+          const registration = new Promise<void>((resolve) => { registered = resolve; });
           execution = run(program!, programArgs, {
             cwd: repository.root,
             env: environment,
             stdio: "inherit",
             allowFailure: true,
             detached,
+            signal,
             onSpawn: async (pid) => {
               try {
                 const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
@@ -1067,18 +1067,6 @@ async function execute(
           }
         }
         return result.code;
-      },
-      {
-        onFailure: async (error) => {
-          activityFailure = error;
-          if (!tracking.record && registration) {
-            await Promise.race([
-              registration,
-              execution.then(() => undefined, () => undefined),
-            ]);
-          }
-          if (tracking.record) await terminateTrackedProcess(tracking.record, true);
-        },
       },
     );
   } finally {
