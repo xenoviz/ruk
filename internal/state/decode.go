@@ -20,10 +20,10 @@ var (
 )
 
 type rawState struct {
-	Version    int                     `json:"version"`
-	Trees      map[string]TreeRecord   `json:"trees"`
-	Workspaces map[string]rawWorkspace `json:"workspaces"`
-	Metrics    *UsageMetrics           `json:"metrics"`
+	Version    int                        `json:"version"`
+	Trees      map[string]json.RawMessage `json:"trees"`
+	Workspaces map[string]rawWorkspace    `json:"workspaces"`
+	Metrics    *UsageMetrics              `json:"metrics"`
 }
 
 type rawWorkspace struct {
@@ -59,13 +59,14 @@ func Decode(data []byte, source string) (*State, error) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		return nil, fmt.Errorf("Cannot parse Ruk state in %s: %w", source, err)
 	}
-	if persisted.Trees == nil || !validTrees(persisted.Trees) {
+	trees, validTrees := decodeTrees(persisted.Trees)
+	if !validTrees {
 		return nil, invalidState(source)
 	}
 	if persisted.Version == 1 {
 		return &State{
 			Version:    CurrentVersion,
-			Trees:      persisted.Trees,
+			Trees:      trees,
 			Workspaces: map[string]WorkspaceRecord{},
 			Metrics:    EmptyMetrics(),
 		}, nil
@@ -97,7 +98,7 @@ func Decode(data []byte, source string) (*State, error) {
 
 	decoded := &State{
 		Version:    CurrentVersion,
-		Trees:      persisted.Trees,
+		Trees:      trees,
 		Workspaces: workspaces,
 		Metrics:    metrics,
 	}
@@ -177,16 +178,66 @@ func migrateWorkspace(raw rawWorkspace, version int) (WorkspaceRecord, error) {
 	return workspace, nil
 }
 
-func validTrees(trees map[string]TreeRecord) bool {
-	for _, tree := range trees {
-		if tree.Projections == nil {
-			return false
+func decodeTrees(rawTrees map[string]json.RawMessage) (map[string]TreeRecord, bool) {
+	if rawTrees == nil {
+		return nil, false
+	}
+	trees := make(map[string]TreeRecord, len(rawTrees))
+	for key, rawTree := range rawTrees {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(rawTree, &fields); err != nil || fields == nil {
+			return nil, false
 		}
-		if tree.ProjectionFingerprint != "" && !projectionFingerprintPattern.MatchString(tree.ProjectionFingerprint) {
-			return false
+		path, pathOK := requiredString(fields, "path")
+		fingerprint, fingerprintOK := requiredString(fields, "fingerprint")
+		mode, modeOK := requiredString(fields, "mode")
+		branch, branchOK := requiredString(fields, "branch")
+		updatedAt, updatedOK := requiredString(fields, "updatedAt")
+		projectionsRaw, projectionsOK := fields["projections"]
+		var projections []string
+		if projectionsOK {
+			projectionsOK = json.Unmarshal(projectionsRaw, &projections) == nil && projections != nil
+		}
+		if !pathOK || !fingerprintOK || !modeOK || !branchOK || !updatedOK || !projectionsOK {
+			return nil, false
+		}
+
+		projectionFingerprint := ""
+		if rawFingerprint, exists := fields["projectionFingerprint"]; exists {
+			var fingerprintOK bool
+			projectionFingerprint, fingerprintOK = jsonString(rawFingerprint)
+			if !fingerprintOK || !projectionFingerprintPattern.MatchString(projectionFingerprint) {
+				return nil, false
+			}
+		}
+		trees[key] = TreeRecord{
+			Path:                  path,
+			Fingerprint:           fingerprint,
+			ProjectionFingerprint: projectionFingerprint,
+			Mode:                  mode,
+			Projections:           projections,
+			Branch:                branch,
+			UpdatedAt:             updatedAt,
 		}
 	}
-	return true
+	return trees, true
+}
+
+func requiredString(fields map[string]json.RawMessage, name string) (string, bool) {
+	raw, exists := fields[name]
+	if !exists {
+		return "", false
+	}
+	return jsonString(raw)
+}
+
+func jsonString(raw json.RawMessage) (string, bool) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	text, valid := value.(string)
+	return text, valid
 }
 
 func validMetrics(metrics UsageMetrics) bool {
