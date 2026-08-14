@@ -20,15 +20,21 @@ export class DependencyPreparationError extends Error {
 
 export class RetainedAssignmentError extends Error {
   override readonly name = "RetainedAssignmentError";
+  readonly assignmentId: string;
+  readonly path: string;
+  readonly expiresAt: string;
 
   constructor(
-    readonly assignmentId: string,
-    readonly path: string,
-    readonly expiresAt: string,
+    assignmentId: string,
+    path: string,
+    expiresAt: string,
     cause: unknown,
   ) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     super(`Assignment ${assignmentId} retained at ${path}: ${detail}`, { cause });
+    this.assignmentId = assignmentId;
+    this.path = path;
+    this.expiresAt = expiresAt;
   }
 }
 
