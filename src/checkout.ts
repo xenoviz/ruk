@@ -16,7 +16,8 @@ export class SharedCheckoutError extends Error {
 
 export function activeAssignmentCount(state: RukState): number {
   return Object.values(state.workspaces).filter(
-    ({ lifecycle, assignment }) => lifecycle === "assigned" && assignment !== null,
+    ({ lifecycle, assignment }) =>
+      (lifecycle === "assigned" || lifecycle === "returning") && assignment !== null,
   ).length;
 }
 

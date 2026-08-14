@@ -81,3 +81,9 @@ test("shared checkout policy warns or permits explicit overrides", () => {
   assert.equal(sharedCheckoutDiagnostic({ ...repository, primaryCheckout: false }, state, "deny", false), null);
   assert.equal(sharedCheckoutDiagnostic(repository, { ...state, workspaces: {} }, "deny", false), null);
 });
+
+test("returning assignments remain active until ownership is released", () => {
+  const returning = structuredClone(state);
+  returning.workspaces["/workspace"]!.lifecycle = "returning";
+  assert.equal(activeAssignmentCount(returning), 1);
+});

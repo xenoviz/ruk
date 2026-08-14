@@ -190,19 +190,21 @@ async function sync(
   allowSharedCheckout = false,
   guardSharedCheckout = true,
 ) {
-  const value = await context(cwd);
-  const paths = storePaths(value.repository.commonDir);
+  const { repository, config } = await repositoryContext(cwd);
+  const paths = storePaths(repository.commonDir);
   const state = await readState(paths);
   if (guardSharedCheckout) {
     const diagnostic = sharedCheckoutDiagnostic(
-      value.repository,
+      repository,
       state,
-      value.config.sharedCheckoutPolicy,
+      config.sharedCheckoutPolicy,
       allowSharedCheckout,
     );
     if (diagnostic) io.stderr.write(diagnostic);
   }
-  const lifecycle = state.workspaces[treeKey(value.repository.root)];
+  const manager = await detectPackageManager(repository.root, config);
+  const value = { repository, config, manager };
+  const lifecycle = state.workspaces[treeKey(repository.root)];
   const prepare = () => ensureDependencies({
       ...value,
       reporter: dependencyReporter(io, json),
@@ -938,18 +940,19 @@ async function execute(
     command = args.slice(separator + 1);
   }
   if (command.length === 0) throw new Error("run requires a command");
-  const value = await context(cwd);
-  const { repository } = value;
+  const { repository, config } = await repositoryContext(cwd);
   const [program, ...programArgs] = command;
   const paths = storePaths(repository.commonDir);
   let state = await readState(paths);
   const diagnostic = sharedCheckoutDiagnostic(
     repository,
     state,
-    value.config.sharedCheckoutPolicy,
+    config.sharedCheckoutPolicy,
     allowSharedCheckout,
   );
   if (diagnostic) io.stderr.write(diagnostic);
+  const manager = await detectPackageManager(repository.root, config);
+  const value = { repository, config, manager };
   let lifecycle = state.workspaces[treeKey(repository.root)];
   if (lifecycle && (
     lifecycle.lifecycle !== "assigned" ||
