@@ -147,6 +147,10 @@ operation that resolves during failure-hook cleanup still reports the heartbeat
 failure.
 For attached POSIX cleanup, the process snapshot records each descendant's start
 identity and cleanup revalidates it immediately before signaling that descendant.
+A missing identity counts as process exit only when a separate liveness probe
+confirms the PID is gone; otherwise cleanup fails closed. Retained acquisition
+output reads the current state record so a completed heartbeat is reflected in
+the reported expiry.
 
 ## Expiry and garbage collection
 

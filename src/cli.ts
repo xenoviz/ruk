@@ -386,15 +386,13 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
       }
       return result;
     } catch (error) {
-      const retained = workspace.assignment
-        ? retainedAssignmentFailure(
-            workspace.assignment.id,
-            workspace.path,
-            workspace.assignment.expiresAt,
-            error,
-          )
-        : null;
-      if (retained) {
+      if (workspace.assignment && containsProcessIdentityUnavailableError(error)) {
+        const retained = retainedAssignmentFailure(
+          workspace.assignment.id,
+          workspace.path,
+          workspace.assignment.expiresAt,
+          error,
+        )!;
         if (workspace.operationId !== null) {
           workspace = await retainAssignmentAfterAcquisitionFailure(
             paths,
@@ -403,7 +401,12 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
             retained.message,
           );
         }
-        throw retained;
+        throw retainedAssignmentFailure(
+          workspace.assignment!.id,
+          workspace.path,
+          workspace.assignment!.expiresAt,
+          error,
+        )!;
       }
       const message = error instanceof Error ? error.message : String(error);
       let returning = false;

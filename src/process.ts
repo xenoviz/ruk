@@ -398,6 +398,22 @@ async function freshProcessIdentity(pid: number): Promise<string | null> {
   return readProcessIdentity(pid, true);
 }
 
+async function freshProcessIdentityOrConfirmedMissing(pid: number): Promise<string | null> {
+  let identity: string | null;
+  try {
+    identity = await freshProcessIdentity(pid);
+  } catch {
+    throw new ProcessIdentityUnavailableError(pid);
+  }
+  if (identity) return identity;
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (isMissingProcess(error)) return null;
+  }
+  throw new ProcessIdentityUnavailableError(pid);
+}
+
 export async function requireProcessIdentity(
   pid: number,
   identify: (pid: number) => Promise<string | null> = processIdentity,
@@ -692,7 +708,7 @@ async function terminateSpawnedProcess(pid: number, detached: boolean, expectedI
     }
   }
   for (const descendant of descendants.reverse()) {
-    const descendantIdentity = await freshProcessIdentity(descendant.pid);
+    const descendantIdentity = await freshProcessIdentityOrConfirmedMissing(descendant.pid);
     if (!descendantIdentity) continue;
     if (descendantIdentity !== descendant.startedAt) throw new ProcessIdentityUnavailableError(descendant.pid);
     try { process.kill(descendant.pid, "SIGKILL"); } catch (error) { if (!isMissingProcess(error)) throw error; }

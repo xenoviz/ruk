@@ -183,6 +183,66 @@ test("process runner identity-fences attached descendants before abort signaling
   }
 });
 
+test("process runner retains a live attached descendant when its identity is unreadable", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-descendant-unreadable-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const descendantFile = path.join(root, "descendant.pid");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(
+    ps,
+    "#!/bin/sh\nlast=''\nfor value in \"$@\"; do last=\"$value\"; done\nif [ \"$1\" = \"-e\" ]; then printf '%s 1 S Mon Jan  1 00:00:00 2026\\n%s %s S Tue Jan  2 00:00:00 2026\\n' \"$RUK_LEADER_PID\" \"$RUK_DESCENDANT_PID\" \"$RUK_LEADER_PID\"; elif [ \"$last\" = \"$RUK_DESCENDANT_PID\" ]; then exit 1; else printf 'Mon Jan  1 00:00:00 2026\\n'; fi\n",
+  );
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalLeader = process.env["RUK_LEADER_PID"];
+  const originalDescendant = process.env["RUK_DESCENDANT_PID"];
+  process.env["PATH"] = `${root}${path.delimiter}${originalPath ?? ""}`;
+  const controller = new AbortController();
+  let leaderPid = 0;
+  let descendantPid = 0;
+  try {
+    await assert.rejects(
+      run(
+        process.execPath,
+        [
+          "-e",
+          `const{spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(descendantFile)},String(child.pid));setInterval(()=>{},1000)`,
+        ],
+        {
+          signal: controller.signal,
+          onSpawn: async (pid) => {
+            leaderPid = pid;
+            process.env["RUK_LEADER_PID"] = String(pid);
+            for (let attempt = 0; attempt < 100 && descendantPid === 0; attempt += 1) {
+              try { descendantPid = Number(await fs.readFile(descendantFile, "utf8")); } catch {}
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            assert.ok(descendantPid > 0);
+            process.env["RUK_DESCENDANT_PID"] = String(descendantPid);
+            controller.abort(new Error("heartbeat lost"));
+          },
+        },
+      ),
+      /cannot be released safely/,
+    );
+    process.kill(descendantPid, 0);
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalLeader === undefined) delete process.env["RUK_LEADER_PID"];
+    else process.env["RUK_LEADER_PID"] = originalLeader;
+    if (originalDescendant === undefined) delete process.env["RUK_DESCENDANT_PID"];
+    else process.env["RUK_DESCENDANT_PID"] = originalDescendant;
+    if (descendantPid > 0) {
+      try { process.kill(descendantPid, "SIGKILL"); } catch {}
+    }
+    if (leaderPid > 0) {
+      try { process.kill(leaderPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
 test("process runner retains an unverified detached group after abort", async (t) => {
   if (process.platform === "win32") return t.skip("POSIX process groups are required");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-detached-abort-"));

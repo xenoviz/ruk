@@ -132,6 +132,7 @@ test("retained acquisition failures clear the handoff marker for exact release",
     expiresAt: T2,
     now: T0,
   });
+  await renewAssignment(paths, assigned.assignment!.id, T3, T1);
 
   const retained = await retainAssignmentAfterAcquisitionFailure(
     paths,
@@ -142,6 +143,7 @@ test("retained acquisition failures clear the handoff marker for exact release",
   );
   assert.equal(retained.operationId, null);
   assert.equal(retained.failure, "installer process could not be verified");
+  assert.equal(retained.assignment!.expiresAt, T3);
   assert.equal((await beginWorkspaceReturn(paths, assigned.assignment!.id, T2)).lifecycle, "returning");
 });
 

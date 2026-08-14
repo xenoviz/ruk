@@ -31,10 +31,13 @@ failed registration or heartbeat abort also retains an unverified detached
 group instead of signaling a reusable numeric process-group ID. Any cleanup
 refusal is final for that attempt; Ruk does not follow it with an unfenced PID signal.
 Attached POSIX descendants are identity-fenced individually immediately before
-they are signaled; PID reuse retains the assignment instead of killing the new process.
+they are signaled; PID reuse or an unreadable identity for a still-live descendant
+retains the assignment instead of killing or overlooking the process.
 If synchronization during a reused acquisition cannot verify an aborted
 installer tree, parse the retryable `RESOURCE_BUSY` error for its exact
 `assignmentId`, `path`, `expiresAt`, and `recovery`; Ruk keeps that slot assigned.
+The reported expiry is reloaded from retained state after keeper cleanup, so it
+includes any heartbeat renewal completed during the failed acquisition.
 The retained transition clears the incomplete handoff marker, so the returned
 exact-ID release command can be used once the caller decides recovery is safe.
 On Windows it terminates the new tree only with a verified leader identity and

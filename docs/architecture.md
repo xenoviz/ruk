@@ -148,7 +148,8 @@ process is retained without a fallback PID signal. The cleanup error is
 preserved with the heartbeat failure, and automatic release retains the assignment.
 Attached POSIX descendants are captured with their start identities and each
 identity is rechecked immediately before signaling, so PID reuse after process
-enumeration also fails closed.
+enumeration also fails closed. An empty or failed identity probe is accepted as
+completion only when an OS liveness check confirms that descendant no longer exists.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
@@ -164,7 +165,8 @@ acquisition also remains assigned when dependency synchronization cannot verify
 that an aborted installer process tree is gone; its structured error returns the
 exact recovery ID instead of recycling the slot. That retained transition clears
 the incomplete handoff marker so the exact release command is executable without
-making the workspace available automatically. Command
+making the workspace available automatically, and its structured response reads
+the current post-heartbeat expiry from the retained record. Command
 launch snapshots its original assignment across dependency repair and rejects
 reassignment or an initially unassigned pool slot instead of adopting another
 agent's lease. Explicit `--fetch` is
