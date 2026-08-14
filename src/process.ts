@@ -109,6 +109,7 @@ export function createBoundedIdentityProbe(
   };
 
   return (pid: number, fresh = false): Promise<string | null> => {
+    if (fresh) cache.delete(pid);
     if (!fresh) {
       const cached = cache.get(pid);
       if (cached && Date.now() - cached.observedAt < cacheDurationMs) return Promise.resolve(cached.identity);

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { withDirectoryLock } from "./lock.js";
 import { availablePort, portEnvironmentName, releaseHostPorts, withHostPortRegistry } from "./ports.js";
-import { readState, treeKey, updateState } from "./state.js";
+import { primaryCheckoutLockPath, readState, treeKey, updateState } from "./state.js";
 import type {
   AssignmentRecord,
   StorePaths,
@@ -200,7 +200,7 @@ export async function reserveAvailableWorkspace(
 ): Promise<WorkspaceRecord | null> {
   const requestedKey = workspacePath === undefined ? undefined : treeKey(path.resolve(workspacePath));
   return withDirectoryLock(path.join(paths.root, "warm.lock"), () =>
-    updateState(paths, (state) => {
+    withDirectoryLock(primaryCheckoutLockPath(paths), () => updateState(paths, (state) => {
       const workspace = Object.values(state.workspaces)
         .filter(
           (entry) =>
@@ -215,7 +215,7 @@ export async function reserveAvailableWorkspace(
         )[0];
       if (!workspace) return null;
       return assign(workspace, input, crypto.randomUUID());
-    }));
+    })));
 }
 
 export async function markWorkspaceAssigned(
@@ -224,14 +224,14 @@ export async function markWorkspaceAssigned(
   operationId: string,
   input: AssignmentInput,
 ): Promise<WorkspaceRecord> {
-  return updateState(paths, (state) => {
+  return withDirectoryLock(primaryCheckoutLockPath(paths), () => updateState(paths, (state) => {
     const resolved = path.resolve(workspacePath);
     const workspace = state.workspaces[treeKey(resolved)];
     if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
     requireLifecycle(workspace, "preparing");
     if (workspace.operationId !== operationId) throw new Error("Preparation operation does not match");
     return assign(workspace, input, crypto.randomUUID());
-  });
+  }));
 }
 
 export async function recordSuccessfulAcquisition(

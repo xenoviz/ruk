@@ -29,6 +29,10 @@ export function treeLockPath(paths: StorePaths, treePath: string): string {
   return path.join(paths.locks, `workspace-${treeKey(treePath)}.lock`);
 }
 
+export function primaryCheckoutLockPath(paths: StorePaths): string {
+  return path.join(paths.locks, "primary-checkout.lock");
+}
+
 export function treeKey(treePath: string): string {
   return crypto.createHash("sha256").update(path.resolve(treePath)).digest("hex").slice(0, 20);
 }

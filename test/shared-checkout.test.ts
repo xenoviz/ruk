@@ -97,3 +97,70 @@ test("primary checkout task commands require an explicit sharing policy", { time
   assert.equal(listed[0].managed, false);
   assert.equal(listed[0].activeAssignments, 1);
 });
+
+test("primary checkout task execution fences concurrent assignment publication", { timeout: 60_000 }, async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-shared-checkout-race-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "repo");
+  const installer = path.join(parent, "install.mjs");
+  const started = path.join(parent, "started");
+  const release = path.join(parent, "release");
+  t.after(async () => {
+    try { await fs.writeFile(release, "release\n"); } catch { /* The temporary directory may already be gone. */ }
+  });
+  await fs.mkdir(root);
+  await fs.writeFile(installer, 'import fs from "node:fs/promises"; await fs.mkdir("node_modules", { recursive: true });\n');
+  await fs.writeFile(path.join(root, "package.json"), '{"name":"shared-checkout-race"}\n');
+  await fs.writeFile(
+    path.join(root, ".rukrc.json"),
+    `${JSON.stringify({ dependencyMode: "managed", installCommand: [process.execPath, installer] })}\n`,
+  );
+  await run("git", ["init", "-q"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "ruk test"], { cwd: root });
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "fixture"], { cwd: root });
+  await run(process.execPath, [cli, "init"], { cwd: root });
+  await run(process.execPath, [cli, "sync", "--json"], { cwd: root });
+
+  const task = run(
+    process.execPath,
+    [
+      cli,
+      "run",
+      "--",
+      process.execPath,
+      "-e",
+      `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},'started');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer)}},10)`,
+    ],
+    { cwd: root },
+  );
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      await fs.access(started);
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  await fs.access(started);
+
+  const repository = await getRepository(root);
+  const paths = storePaths(repository.commonDir);
+  const prepared = await recordPreparingWorkspace(paths, {
+    path: path.join(parent, "assigned-workspace"),
+    branch: "agent/race",
+  });
+  let published = false;
+  const publication = markWorkspaceAssigned(paths, prepared.path, prepared.operationId!, {
+    owner: "agent",
+    hostname: "host",
+    expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+  }).finally(() => { published = true; });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(published, false);
+
+  await fs.writeFile(release, "release\n");
+  await task;
+  assert.equal((await publication).lifecycle, "assigned");
+});

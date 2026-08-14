@@ -72,7 +72,9 @@ continue under uncertain ownership.
 
 Run task commands in the acquired path. The primary checkout denies `ruk run`
 and `ruk sync` while assignments are active unless repository policy or
-`--allow-shared-checkout` explicitly permits sharing.
+`--allow-shared-checkout` explicitly permits sharing. In the default deny mode,
+the check and assignment publication share a fence, so acquisition cannot race
+past a successful check.
 
 ## Named ports
 

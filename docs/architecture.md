@@ -91,7 +91,9 @@ module instead of accumulating in the CLI.
 - Only observed Ruk operations renew leases. Ruk does not infer activity from
   filesystem timestamps or keep an always-running daemon.
 - Task commands refuse a shared primary checkout while assignments are active
-  unless repository policy or an explicit command override permits it.
+  unless repository policy or an explicit command override permits it. A
+  repository-wide primary-checkout fence serializes deny-mode task execution
+  with assignment publication, so the guard cannot pass on a stale snapshot.
 
 ## State
 

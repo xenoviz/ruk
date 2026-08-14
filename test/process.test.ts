@@ -43,6 +43,15 @@ test("process identity probes batch requests and serialize subprocess work", asy
   assert.equal(probeCount, 2);
   assert.equal(await probe(1, true), "identity-1");
   assert.equal(probeCount, 3);
+
+  let reusedIdentity: string | null = null;
+  const reused = createBoundedIdentityProbe(async (pids) =>
+    new Map(pids.map((pid) => [pid, reusedIdentity]))
+  );
+  assert.equal(await reused(200), null);
+  reusedIdentity = "reused-200";
+  const fresh = reused(200, true);
+  assert.deepEqual(await Promise.all([fresh, reused(200)]), ["reused-200", "reused-200"]);
 });
 
 test("process identity probe failures reject a batch and allow a later retry", async () => {

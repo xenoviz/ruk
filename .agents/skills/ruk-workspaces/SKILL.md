@@ -57,7 +57,9 @@ assignments exist, `ruk run` and `ruk sync` deny task work there by default.
 Acquire a dedicated workspace. Use `--allow-shared-checkout` only for a single
 intentional command, or follow the repository's `sharedCheckoutPolicy` when it
 is explicitly set to `warn` or `allow`. The guard coordinates Ruk commands but
-cannot block direct Git or filesystem writes.
+cannot block direct Git or filesystem writes. In default `deny` mode, Ruk
+serializes primary-checkout task execution with assignment publication, so an
+acquisition cannot appear after the task's safety check and race its work.
 
 Use `ruk warm --count <n> --json` before a known burst of agents. The count is
 the desired number of available prepared workspaces, not the number to add;

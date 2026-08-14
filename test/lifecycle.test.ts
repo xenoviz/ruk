@@ -28,7 +28,7 @@ import {
   reserveAvailableWorkspace,
 } from "../src/lifecycle.js";
 import { withDirectoryLock } from "../src/lock.js";
-import { readState, storePaths, treeKey } from "../src/state.js";
+import { primaryCheckoutLockPath, readState, storePaths, treeKey } from "../src/state.js";
 import type { StorePaths, WorkspaceRecord } from "../src/types.js";
 
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -291,6 +291,44 @@ test("only one concurrent caller reserves an available workspace", async (t) => 
   );
   assert.equal(results.filter(Boolean).length, 1);
   assert.equal((await findAssignments(paths, { now: T2 })).length, 1);
+});
+
+test("assignment publication waits for the primary-checkout task fence", async (t) => {
+  const { root, paths } = await fixture(t);
+  const available = await makeAvailable(paths, path.join(root, "available"));
+  const preparing = await prepare(paths, path.join(root, "preparing"));
+  let releaseFence!: () => void;
+  let fenceReady!: () => void;
+  const held = new Promise<void>((resolve) => { releaseFence = resolve; });
+  const ready = new Promise<void>((resolve) => { fenceReady = resolve; });
+  const fence = withDirectoryLock(primaryCheckoutLockPath(paths), async () => {
+    fenceReady();
+    await held;
+  });
+  await ready;
+
+  let reservationSettled = false;
+  let assignmentSettled = false;
+  const reservation = reserveAvailableWorkspace(paths, {
+    owner: "reserved",
+    hostname: "host",
+    expiresAt: T3,
+    now: T2,
+  }, available.path).finally(() => { reservationSettled = true; });
+  const assignment = markWorkspaceAssigned(paths, preparing.path, preparing.operationId!, {
+    owner: "prepared",
+    hostname: "host",
+    expiresAt: T3,
+    now: T2,
+  }).finally(() => { assignmentSettled = true; });
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(reservationSettled, false);
+  assert.equal(assignmentSettled, false);
+  releaseFence();
+  await fence;
+  assert.equal((await reservation)?.lifecycle, "assigned");
+  assert.equal((await assignment).lifecycle, "assigned");
 });
 
 test("warm workspaces become available and named ports remain unique", async (t) => {

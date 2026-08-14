@@ -108,7 +108,8 @@ ruk run -- bun run typecheck
 When other Ruk assignments are active, `run` and `sync` refuse task work in the
 primary checkout by default. Acquire a dedicated workspace, configure
 `sharedCheckoutPolicy`, or use `--allow-shared-checkout` for one intentional
-command.
+command. Default deny-mode task execution is serialized with assignment
+publication rather than relying on a point-in-time state snapshot.
 
 Run a short job with automatic safe release, or prewarm before an agent burst:
 
