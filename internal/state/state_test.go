@@ -2,6 +2,7 @@ package state_test
 
 import (
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func TestDecodeMigratesVersionOneState(t *testing.T) {
 func TestDecodeMigratesVersionThreeActivity(t *testing.T) {
 	t.Parallel()
 
-	workspacePath := "/tmp/ruk-workspace"
+	workspacePath := filepath.Join(t.TempDir(), "workspace")
 	key, err := state.TreeKey(workspacePath)
 	if err != nil {
 		t.Fatalf("TreeKey returned an error: %v", err)
