@@ -62,6 +62,8 @@ Ruk has five deliberately separate concerns:
 6. `ports.js` performs short-lived OS port probes, coordinates a host-level
    reservation registry, and maps names into environment variables.
 7. `statistics.js` derives aggregate and optional on-demand disk measurements.
+8. `activity.js` owns assignment heartbeat timing and keeper cleanup.
+9. `checkout.js` owns primary-checkout sharing policy and diagnostics.
 
 `cli.js` composes these modules. Business rules should remain in the closest
 module instead of accumulating in the CLI.
@@ -86,16 +88,21 @@ module instead of accumulating in the CLI.
   held sockets.
 - Metrics are bounded counters; ordinary commands never append an event log or
   scan workspace disk usage.
+- Only observed Ruk operations renew leases. Ruk does not infer activity from
+  filesystem timestamps or keep an always-running daemon.
+- Task commands refuse a shared primary checkout while assignments are active
+  unless repository policy or an explicit command override permits it.
 
 ## State
 
-Version 3 state is stored in `<git-common-dir>/ruk/state.json`, so linked worktrees share
+Version 4 state is stored in `<git-common-dir>/ruk/state.json`, so linked worktrees share
 metadata without committing it. Per-workspace preparation locks and the state
 lock live beside it.
 
-Loading migrates version 1 preparation records and version 2 lifecycle records
-in memory. Existing assignment IDs, ownership, expiry, and process records stay
-intact; new port maps and aggregate metrics receive empty defaults.
+Loading migrates version 1 through version 3 records in memory. Existing
+assignment IDs, ownership, expiry, and process records stay intact. Version 4
+adds the lease duration, last observed activity, and fenced lease keepers needed
+for automatic renewal.
 
 State is an optimization, not source of truth. Git and the dependency
 fingerprint remain authoritative. Invalid state fails visibly rather than being
@@ -115,6 +122,11 @@ absent -> preparing -> assigned -> returning -> available
 Each assignment has an immutable assignment ID so delayed automation cannot
 return a workspace that has since been reassigned. Leases expire for reporting;
 reclaiming expired assignments requires an explicit forced GC operation.
+Managed `run`, `exec`, `shell`, and assigned `sync` operations register a
+short-lived keeper and renew from the assignment's stored lease duration while
+work continues. Multiple keepers can coexist, and each removes only its own
+fenced record. A lost keeper stops its tracked command rather than allowing
+cleanup to race an unowned process.
 Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. Leaderless POSIX process groups fail

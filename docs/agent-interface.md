@@ -17,7 +17,9 @@ ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [
 ```
 
 The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
-`<hostname>:<pid>`.
+`<hostname>:<pid>`. Managed Ruk operations renew the assignment automatically
+while they remain active; the TTL still controls how long an idle assignment
+remains current after the latest observed activity.
 
 ```json
 {
@@ -137,7 +139,9 @@ so a concurrent renewal prevents collection.
 ## Inspecting and running
 
 `ruk list --json` and `ruk status --json` include `lifecycle`, `assignmentId`,
-and `expiresAt`; assignment fields are null when no assignment is active.
+`expiresAt`, `lastActivityAt`, `autoRenewing`, `primaryCheckout`, `managed`, and
+`activeAssignments`. Assignment timestamps are null when no assignment is
+active. `autoRenewing` is true only while a current fenced keeper is visible.
 Status reports `projection-changed` with a `ruk sync` recovery when recorded
 projection contents or linked package targets no longer match their fingerprint.
 `ruk run -- ...` validates dependency inputs and projection integrity, then
@@ -147,6 +151,12 @@ working directory.
 Detached managed `run` and `exec` commands forward wrapper `SIGINT` and
 `SIGTERM` signals to their recorded POSIX process group and return conventional
 130 or 143 exit codes when the child uses the default signal disposition.
+
+The primary checkout is a control location while assignments are active.
+`ruk run` and `ruk sync` refuse task work there by default. Repositories can set
+`sharedCheckoutPolicy` to `warn` or `allow`; `--allow-shared-checkout` permits
+one intentional command. A denied JSON `sync` reports retryable
+`RESOURCE_BUSY`, `activeAssignments`, and a `ruk acquire <branch>` recovery.
 
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
 retains the assignment when the command leaves a dirty tree, cleanup fails, or

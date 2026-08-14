@@ -26,11 +26,24 @@ acquisition:
 ruk acquire agent/long-task --owner agent-17 --ttl 120 --json
 ```
 
+Ruk automatically renews an assignment while a managed `run`, `exec`, `shell`,
+or assigned `sync` operation is active. Each operation uses a fenced lease
+keeper, so concurrent commands can renew safely without removing one another's
+activity record. The TTL becomes the idle window after the latest Ruk-observed
+activity rather than a deadline that interrupts a running command.
+
+Ruk intentionally does not watch file modification times. An editor changing a
+file outside a Ruk-managed command is not proof that the assignment owner is
+still present. For long idle editing sessions, renew explicitly:
+
 Renewal measures a new duration from renewal time:
 
 ```sh
 ruk renew <assignment-id> --ttl 120 --json
 ```
+
+`ruk status --json` reports `lastActivityAt` and `autoRenewing` so agents can
+distinguish an active keeper from an idle lease.
 
 ## Expiry is advisory
 

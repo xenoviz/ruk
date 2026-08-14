@@ -16,8 +16,9 @@ description: Manage Ruk workspaces for coding agents. Use when an agent must acq
    assignment ID as opaque; never derive it from the path.
 3. Set the working directory to the returned path. Use `ruk run -- <command>`
    for agent processes and `ruk sync --json` after dependency inputs change.
-4. Inspect with `ruk status --json`. Renew before expiry with
-   `ruk renew <assignmentId> --json` when work continues.
+4. Inspect with `ruk status --json`. Managed `run`, `exec`, `shell`, and
+   assigned `sync` operations renew automatically while active. Use
+   `ruk renew <assignmentId> --json` for long idle work outside those commands.
 5. Finish with `ruk release <assignmentId> --json`, even when the workspace was
    reused. Report a release failure instead of substituting another ID.
 
@@ -46,6 +47,15 @@ rebuilt from the package store before the next assigned command. Warm capacity
 counts only projections whose dependency inputs and integrity fingerprint still
 validate, including linked package targets. `ruk status --json` reports
 `projection-changed` and recommends `ruk sync` when integrity validation fails.
+Status and list JSON also expose `lastActivityAt`, derived `autoRenewing`,
+`primaryCheckout`, `managed`, and `activeAssignments`.
+
+Treat the repository's primary checkout as a control location. When active
+assignments exist, `ruk run` and `ruk sync` deny task work there by default.
+Acquire a dedicated workspace. Use `--allow-shared-checkout` only for a single
+intentional command, or follow the repository's `sharedCheckoutPolicy` when it
+is explicitly set to `warn` or `allow`. The guard coordinates Ruk commands but
+cannot block direct Git or filesystem writes.
 
 Use `ruk warm --count <n> --json` before a known burst of agents. The count is
 the desired number of available prepared workspaces, not the number to add;
