@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   commandExists,
+  createBoundedIdentityProbe,
   killProcessTree,
   processIdentity,
   requireProcessIdentity,
@@ -12,6 +13,82 @@ import {
   terminateTrackedProcess,
   trackedProcessExists,
 } from "../src/process.js";
+
+test("process identity probes batch requests and serialize subprocess work", async () => {
+  let active = 0;
+  let maxActive = 0;
+  let probeCount = 0;
+  let releaseFirst: (() => void) | undefined;
+  const firstProbeBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const probe = createBoundedIdentityProbe(async (pids) => {
+    probeCount += 1;
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    if (probeCount === 1) await firstProbeBlocked;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    return new Map(pids.map((pid) => [pid, `identity-${pid}`]));
+  }, { cacheDurationMs: 1_000, maxCacheEntries: 128, maxBatchSize: 64 });
+
+  const firstBatch = Array.from({ length: 64 }, (_, pid) => probe(pid + 1));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const secondBatch = Array.from({ length: 64 }, (_, pid) => probe(pid + 65));
+  releaseFirst!();
+  const identities = await Promise.all([...firstBatch, ...secondBatch]);
+
+  assert.equal(identities.length, 128);
+  assert.equal(maxActive, 1);
+  assert.equal(probeCount, 2);
+  assert.equal(await probe(1), "identity-1");
+  assert.equal(probeCount, 2);
+  assert.equal(await probe(1, true), "identity-1");
+  assert.equal(probeCount, 3);
+});
+
+test("process identity probe failures reject a batch and allow a later retry", async () => {
+  let attempts = 0;
+  const probe = createBoundedIdentityProbe(async (pids) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("identity lookup failed");
+    return new Map(pids.map((pid) => [pid, `identity-${pid}`]));
+  });
+
+  await assert.rejects(Promise.all([probe(1), probe(2)]), /identity lookup failed/);
+  assert.equal(await probe(1), "identity-1");
+  assert.equal(attempts, 2);
+
+  let missingAttempts = 0;
+  const missing = createBoundedIdentityProbe(async (pids) => {
+    missingAttempts += 1;
+    return new Map(pids.map((pid) => [pid, null]));
+  }, { cacheNull: false });
+  assert.equal(await missing(3), null);
+  assert.equal(await missing(3), null);
+  assert.equal(missingAttempts, 2);
+});
+
+test("a process identity subprocess does not recursively identify itself", async (t) => {
+  if (process.platform === "win32") return t.skip("the bounded PowerShell path is covered on Windows CI");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-identity-probe-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const countFile = path.join(root, "count");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nprintf '1\\n' >> \"$RUK_PROBE_COUNT\"\nprintf 'Fri Aug 14 12:00:00 2026\\n'\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalCount = process.env["RUK_PROBE_COUNT"];
+  process.env["PATH"] = root;
+  process.env["RUK_PROBE_COUNT"] = countFile;
+  try {
+    assert.equal(await processIdentity(2_000_000_000 - process.pid), "Fri Aug 14 12:00:00 2026");
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalCount === undefined) delete process.env["RUK_PROBE_COUNT"];
+    else process.env["RUK_PROBE_COUNT"] = originalCount;
+  }
+  assert.equal((await fs.readFile(countFile, "utf8")).trim(), "1");
+});
 
 test("process runner captures output and preserves non-zero results when requested", async () => {
   const success = await run(process.execPath, ["-e", "process.stdout.write('ok')"]);

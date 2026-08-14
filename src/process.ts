@@ -33,6 +33,98 @@ export class ProcessIdentityUnavailableError extends Error {
   }
 }
 
+interface IdentityProbeRequest {
+  resolve: (identity: string | null) => void;
+  reject: (error: unknown) => void;
+}
+
+interface IdentityCacheEntry {
+  identity: string | null;
+  observedAt: number;
+}
+
+export interface BoundedIdentityProbeOptions {
+  cacheDurationMs?: number;
+  cacheNull?: boolean;
+  maxCacheEntries?: number;
+  maxBatchSize?: number;
+}
+
+export function createBoundedIdentityProbe(
+  probe: (pids: readonly number[]) => Promise<ReadonlyMap<number, string | null>>,
+  options: BoundedIdentityProbeOptions = {},
+): (pid: number, fresh?: boolean) => Promise<string | null> {
+  const cacheDurationMs = options.cacheDurationMs ?? 250;
+  const cacheNull = options.cacheNull ?? true;
+  const maxCacheEntries = options.maxCacheEntries ?? 256;
+  const maxBatchSize = Math.max(1, Math.floor(options.maxBatchSize ?? 128));
+  const cache = new Map<number, IdentityCacheEntry>();
+  const pending = new Map<number, IdentityProbeRequest[]>();
+  let drainScheduled = false;
+  let draining = false;
+
+  const remember = (pid: number, identity: string | null): void => {
+    cache.delete(pid);
+    if (identity === null && !cacheNull) return;
+    cache.set(pid, { identity, observedAt: Date.now() });
+    while (cache.size > maxCacheEntries) {
+      const oldest = cache.keys().next().value as number | undefined;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+  };
+
+  const drain = async (): Promise<void> => {
+    if (draining) return;
+    draining = true;
+    drainScheduled = false;
+    try {
+      while (pending.size > 0) {
+        const batch = new Map([...pending].slice(0, maxBatchSize));
+        for (const pid of batch.keys()) pending.delete(pid);
+        const pids = [...batch.keys()];
+        try {
+          const identities = await probe(pids);
+          for (const pid of pids) {
+            if (!identities.has(pid)) throw new Error(`Process identity probe omitted PID ${pid}`);
+          }
+          for (const [pid, requests] of batch) {
+            const identity = identities.get(pid) ?? null;
+            remember(pid, identity);
+            for (const request of requests) request.resolve(identity);
+          }
+        } catch (error) {
+          for (const requests of batch.values()) {
+            for (const request of requests) request.reject(error);
+          }
+        }
+      }
+    } finally {
+      draining = false;
+      if (pending.size > 0 && !drainScheduled) {
+        drainScheduled = true;
+        queueMicrotask(() => void drain());
+      }
+    }
+  };
+
+  return (pid: number, fresh = false): Promise<string | null> => {
+    if (!fresh) {
+      const cached = cache.get(pid);
+      if (cached && Date.now() - cached.observedAt < cacheDurationMs) return Promise.resolve(cached.identity);
+    }
+    return new Promise((resolve, reject) => {
+      const requests = pending.get(pid) ?? [];
+      requests.push({ resolve, reject });
+      pending.set(pid, requests);
+      if (!draining && !drainScheduled) {
+        drainScheduled = true;
+        queueMicrotask(() => void drain());
+      }
+    });
+  };
+}
+
 function environmentValue(environment: NodeJS.ProcessEnv, name: string): string | undefined {
   if (environment[name] !== undefined) return environment[name];
   const key = Object.keys(environment).find((candidate) => candidate.toUpperCase() === name);
@@ -113,7 +205,7 @@ export async function run(
       spawnError = options.signal?.reason ?? new Error(`${command} was aborted`);
       if (!child.pid) return;
       aborting = true;
-      spawnedIdentity ??= processIdentity(child.pid).catch(() => null);
+      spawnedIdentity ??= freshProcessIdentity(child.pid).catch(() => null);
       abortCleanup = spawnedIdentity.then(async (expectedIdentity) => {
         try {
           const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
@@ -127,7 +219,9 @@ export async function run(
 
     child.once("spawn", () => {
       if (child.pid && (options.signal || options.onSpawn)) {
-        spawnedIdentity ??= processIdentity(child.pid).catch(() => null);
+        // Identity probes call run() without cancellation or a spawn hook. Keep
+        // this gate so a PowerShell probe never recursively identifies itself.
+        spawnedIdentity ??= freshProcessIdentity(child.pid).catch(() => null);
       }
       if (options.signal?.aborted) abort();
       if (!options.onSpawn) return;
@@ -190,41 +284,101 @@ export async function run(
   });
 }
 
-export async function processIdentity(pid: number): Promise<string | null> {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (process.platform === "win32") {
-    const powershell = path.join(
-      environmentValue(process.env, "SYSTEMROOT") ?? "C:\\Windows",
-      "System32",
-      "WindowsPowerShell",
-      "v1.0",
-      "powershell.exe",
-    );
-    const result = await run(
-      powershell,
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$process=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if(-not $process){'__RUK_MISSING__';exit 0};try{$process.StartTime.ToUniversalTime().Ticks}catch{Write-Error $_;exit 1}`,
-      ],
-      { allowFailure: true },
-    );
-    if (result.code !== 0) throw new ProcessIdentityUnavailableError(pid);
-    const identity = result.stdout.trim();
-    if (identity === "__RUK_MISSING__") return null;
-    if (!identity) throw new ProcessIdentityUnavailableError(pid);
-    return identity;
+async function probeWindowsProcessIdentities(pids: readonly number[]): Promise<ReadonlyMap<number, string | null>> {
+  const powershell = path.join(
+    environmentValue(process.env, "SYSTEMROOT") ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const result = await serializedWindowsProcessProbe(() => run(
+    powershell,
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$processIds=@($env:RUK_PROCESS_IDS|ConvertFrom-Json);foreach($processId in $processIds){$item=Get-Process -Id $processId -ErrorAction SilentlyContinue;if(-not $item){Write-Output \"$processId|\";continue};try{Write-Output \"$processId|$($item.StartTime.ToUniversalTime().Ticks)\"}catch{Write-Error $_;exit 1}}",
+    ],
+    { allowFailure: true, env: { ...process.env, RUK_PROCESS_IDS: JSON.stringify(pids) } },
+  ));
+  if (result.code !== 0) throw new ProcessIdentityUnavailableError(pids[0] ?? 0);
+  const identities = new Map<number, string | null>();
+  for (const line of result.stdout.trim().split(/\r?\n/).filter(Boolean)) {
+    const match = /^(\d+)\|(\d*)$/.exec(line.trim());
+    if (!match) throw new ProcessIdentityUnavailableError(pids[0] ?? 0);
+    identities.set(Number(match[1]), match[2] || null);
   }
+  return identities;
+}
+
+const windowsProcessIdentity = createBoundedIdentityProbe(probeWindowsProcessIdentities);
+
+let windowsProcessProbeTail = Promise.resolve();
+
+async function serializedWindowsProcessProbe<T>(probe: () => Promise<T>): Promise<T> {
+  const previous = windowsProcessProbeTail;
+  let release!: () => void;
+  windowsProcessProbeTail = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await probe();
+  } finally {
+    release();
+  }
+}
+
+async function probeWindowsProcessDescendants(pids: readonly number[]): Promise<ReadonlyMap<number, string | null>> {
+  const powershell = path.join(
+    environmentValue(process.env, "SYSTEMROOT") ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const result = await serializedWindowsProcessProbe(() => run(
+    powershell,
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$ErrorActionPreference='Stop';$roots=@($env:RUK_PROCESS_IDS|ConvertFrom-Json);$all=@(Get-CimInstance Win32_Process);foreach($root in $roots){$pending=@([int]$root);$found=$false;while($pending.Count){$children=@($all|Where-Object{$pending -contains [int]$_.ParentProcessId});if(!$children.Count){break};$found=$true;$pending=@($children|ForEach-Object{[int]$_.ProcessId})};if($found){Write-Output \"$root|1\"}else{Write-Output \"$root|0\"}}",
+    ],
+    { allowFailure: true, env: { ...process.env, RUK_PROCESS_IDS: JSON.stringify(pids) } },
+  ));
+  if (result.code !== 0) throw new Error(`Could not enumerate Windows processes: ${result.stderr.trim()}`);
+  const descendants = new Map<number, string | null>();
+  for (const line of result.stdout.trim().split(/\r?\n/).filter(Boolean)) {
+    const match = /^(\d+)\|([01])$/.exec(line.trim());
+    if (!match) throw new Error("Could not parse Windows process enumeration");
+    descendants.set(Number(match[1]), match[2] === "1" ? "1" : null);
+  }
+  return descendants;
+}
+
+const windowsProcessDescendants = createBoundedIdentityProbe(probeWindowsProcessDescendants, { cacheNull: false });
+
+async function readProcessIdentity(pid: number, fresh: boolean): Promise<string | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === "win32") return windowsProcessIdentity(pid, fresh);
   const result = await run("ps", ["-o", "lstart=", "-p", String(pid)], { allowFailure: true });
   return result.code === 0 && result.stdout.trim() ? result.stdout.trim().replace(/\s+/g, " ") : null;
+}
+
+export async function processIdentity(pid: number): Promise<string | null> {
+  return readProcessIdentity(pid, false);
+}
+
+async function freshProcessIdentity(pid: number): Promise<string | null> {
+  return readProcessIdentity(pid, true);
 }
 
 export async function requireProcessIdentity(
   pid: number,
   identify: (pid: number) => Promise<string | null> = processIdentity,
-  descendantsExist: (pid: number) => Promise<boolean> = processDescendantsExist,
+  descendantsExist: (pid: number) => Promise<boolean> = freshProcessDescendantsExist,
 ): Promise<string | null> {
   const identity = await identify(pid);
   if (!identity) {
@@ -239,28 +393,10 @@ export async function requireProcessIdentity(
   return identity;
 }
 
-export async function processDescendantsExist(pid: number): Promise<boolean> {
+async function readProcessDescendantsExist(pid: number, fresh: boolean): Promise<boolean> {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   if (process.platform === "win32") {
-    const powershell = path.join(
-      environmentValue(process.env, "SYSTEMROOT") ?? "C:\\Windows",
-      "System32",
-      "WindowsPowerShell",
-      "v1.0",
-      "powershell.exe",
-    );
-    const result = await run(
-      powershell,
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$pending=@(${pid});$found=$false;$all=@(Get-CimInstance Win32_Process);while($pending.Count){$children=@($all|Where-Object{$pending -contains [int]$_.ParentProcessId});if(!$children.Count){break};$found=$true;$pending=@($children|ForEach-Object{[int]$_.ProcessId})};if($found){'1'}`,
-      ],
-      { allowFailure: true },
-    );
-    return result.code !== 0 || result.stdout.trim() === "1";
+    return await windowsProcessDescendants(pid, fresh) === "1";
   }
   const result = await run("ps", ["-e", "-o", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "stat="], {
     allowFailure: true,
@@ -277,6 +413,14 @@ export async function processDescendantsExist(pid: number): Promise<boolean> {
     for (const child of children) parents.add(child.pid);
   }
   return parents.size > 1 || processes.some((entry) => entry.group === pid);
+}
+
+export async function processDescendantsExist(pid: number): Promise<boolean> {
+  return readProcessDescendantsExist(pid, false);
+}
+
+async function freshProcessDescendantsExist(pid: number): Promise<boolean> {
+  return readProcessDescendantsExist(pid, true);
 }
 
 interface PosixProcess {
@@ -417,12 +561,14 @@ export async function terminateTrackedProcess(record: TrackedProcessRecord, forc
   if (record.sessionId !== undefined && record.sessionStartedAt !== undefined) {
     return terminateProcessSession(record.sessionId, record.sessionStartedAt, force);
   }
-  const identity = await processIdentity(record.pid);
+  const identity = await freshProcessIdentity(record.pid);
   if (identity === record.startedAt) {
     return killProcessTree(record.groupId ?? record.pid, force, identity);
   }
   if (identity) return false;
-  if (await processDescendantsExist(record.groupId ?? record.pid)) throw new ProcessIdentityUnavailableError(record.pid);
+  if (await freshProcessDescendantsExist(record.groupId ?? record.pid)) {
+    throw new ProcessIdentityUnavailableError(record.pid);
+  }
   return false;
 }
 
@@ -434,7 +580,7 @@ export async function killProcessTree(
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
     throw new Error(`Refusing to terminate invalid process ${pid}`);
   }
-  const identity = await processIdentity(pid);
+  const identity = await freshProcessIdentity(pid);
   if (!identity) return false;
   if (expectedIdentity && identity !== expectedIdentity) {
     throw new Error(`Refusing to terminate reused process ID ${pid}`);
@@ -464,13 +610,13 @@ async function terminateSpawnedProcess(pid: number, detached: boolean, expectedI
     throw new ProcessIdentityUnavailableError(pid);
   }
   if (detached) {
-    const identity = await processIdentity(pid);
+    const identity = await freshProcessIdentity(pid);
     if (identity && expectedIdentity && identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
     try { process.kill(-pid, "SIGKILL"); return true; } catch (error) { if (!isMissingProcess(error)) throw error; }
     return false;
   }
   if (!expectedIdentity) return false;
-  const identity = await processIdentity(pid);
+  const identity = await freshProcessIdentity(pid);
   if (!identity) return false;
   if (identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
   const result = await run("ps", ["-e", "-o", "pid=", "-o", "ppid=", "-o", "stat="], { allowFailure: true });
