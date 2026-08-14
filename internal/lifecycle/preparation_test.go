@@ -61,7 +61,7 @@ func TestPreparationTransitionsAreOperationFenced(t *testing.T) {
 		t.Fatalf("preparing timestamps = %q / %q", preparing.CreatedAt, preparing.UpdatedAt)
 	}
 
-	err = service.MarkAvailable(context.Background(), workspacePath, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	_, err = service.MarkAvailable(context.Background(), workspacePath, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 	if err == nil || !strings.Contains(err.Error(), "Preparation operation does not match") {
 		t.Fatalf("MarkAvailable mismatch error = %v", err)
 	}
