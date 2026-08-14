@@ -299,9 +299,9 @@ async function probeWindowsProcessIdentities(pids: readonly number[]): Promise<R
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "$processIds=@($env:RUK_PROCESS_IDS|ConvertFrom-Json);foreach($processId in $processIds){$item=Get-Process -Id $processId -ErrorAction SilentlyContinue;if(-not $item){Write-Output \"$processId|\";continue};try{Write-Output \"$processId|$($item.StartTime.ToUniversalTime().Ticks)\"}catch{Write-Error $_;exit 1}}",
+      "$processIds=@($env:RUK_PROCESS_IDS -split ','|ForEach-Object{[int]$_});foreach($processId in $processIds){$item=Get-Process -Id $processId -ErrorAction SilentlyContinue;if(-not $item){Write-Output \"$processId|\";continue};try{Write-Output \"$processId|$($item.StartTime.ToUniversalTime().Ticks)\"}catch{Write-Error $_;exit 1}}",
     ],
-    { allowFailure: true, env: { ...process.env, RUK_PROCESS_IDS: JSON.stringify(pids) } },
+    { allowFailure: true, env: { ...process.env, RUK_PROCESS_IDS: pids.join(",") } },
   ));
   if (result.code !== 0) throw new ProcessIdentityUnavailableError(pids[0] ?? 0);
   const identities = new Map<number, string | null>();
@@ -344,9 +344,9 @@ async function probeWindowsProcessDescendants(pids: readonly number[]): Promise<
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "$ErrorActionPreference='Stop';$roots=@($env:RUK_PROCESS_IDS|ConvertFrom-Json);$all=@(Get-CimInstance Win32_Process);foreach($root in $roots){$pending=@([int]$root);$found=$false;while($pending.Count){$children=@($all|Where-Object{$pending -contains [int]$_.ParentProcessId});if(!$children.Count){break};$found=$true;$pending=@($children|ForEach-Object{[int]$_.ProcessId})};if($found){Write-Output \"$root|1\"}else{Write-Output \"$root|0\"}}",
+      "$ErrorActionPreference='Stop';$roots=@($env:RUK_PROCESS_IDS -split ','|ForEach-Object{[int]$_});$all=@(Get-CimInstance Win32_Process);foreach($root in $roots){$pending=@([int]$root);$found=$false;while($pending.Count){$children=@($all|Where-Object{$pending -contains [int]$_.ParentProcessId});if(!$children.Count){break};$found=$true;$pending=@($children|ForEach-Object{[int]$_.ProcessId})};if($found){Write-Output \"$root|1\"}else{Write-Output \"$root|0\"}}",
     ],
-    { allowFailure: true, env: { ...process.env, RUK_PROCESS_IDS: JSON.stringify(pids) } },
+    { allowFailure: true, env: { ...process.env, RUK_PROCESS_IDS: pids.join(",") } },
   ));
   if (result.code !== 0) throw new Error(`Could not enumerate Windows processes: ${result.stderr.trim()}`);
   const descendants = new Map<number, string | null>();
