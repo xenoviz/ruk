@@ -45,7 +45,9 @@ If dependency synchronization in a reused assignment aborts without being able
 to verify that its installer process tree is gone, acquisition fails with a
 retryable `RESOURCE_BUSY` error and retains the workspace. That error includes
 `assignmentId`, `path`, `expiresAt`, and a `recovery` release command so
-automation can preserve and later recover the exact fenced assignment.
+automation can preserve and later recover the exact fenced assignment. Ruk
+clears the incomplete acquisition marker before returning this error, so the
+exact recovery command is accepted when the caller decides cleanup is safe.
 
 `--fetch` explicitly refreshes the remote selected by `--from`; without
 `--from`, Ruk resolves the primary remote's advertised default branch. Fully
@@ -157,6 +159,8 @@ captures its validity window only after acquiring the state lock. If stopping
 the command cannot verify the original detached leader or prove that its process
 tree is gone, Ruk preserves that cleanup failure and retains the assignment
 instead of returning the workspace to the pool.
+The heartbeat failure is still reported if operation work resolves while its
+failure hook is running; concurrent success cannot hide a lost renewal fence.
 Status reports `projection-changed` with a `ruk sync` recovery when recorded
 projection contents or linked package targets no longer match their fingerprint.
 `ruk run -- ...` validates dependency inputs and projection integrity, then

@@ -153,23 +153,26 @@ export async function withAssignmentActivity<T>(
   })();
   const work = Promise.resolve().then(() => operation(workController.signal));
 
+  let result!: T;
+  let completed = false;
+  let failure: unknown;
   try {
-    const result = await Promise.race([work, heartbeatFailure]);
-    return result;
+    result = await Promise.race([work, heartbeatFailure]);
+    completed = true;
   } catch (error) {
+    failure = error;
     if (heartbeatError !== undefined) {
       try {
         await work;
       } catch (operationError) {
         if (operationError !== error) {
-          throw new AggregateError(
+          failure = new AggregateError(
             [error, operationError],
             `Assignment ${assignmentId} activity renewal and operation cleanup failed`,
           );
         }
       }
     }
-    throw error;
   } finally {
     controller.abort();
     await heartbeat;
@@ -179,4 +182,8 @@ export async function withAssignmentActivity<T>(
       // The assignment may have been released, or the expiring keeper can be pruned later.
     }
   }
+  if (failure !== undefined) throw failure;
+  if (heartbeatError !== undefined) throw heartbeatError;
+  if (!completed) throw new Error(`Assignment ${assignmentId} activity operation did not complete`);
+  return result;
 }

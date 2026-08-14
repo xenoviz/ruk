@@ -177,6 +177,52 @@ test("process runner retains an unverified detached group after abort", async (t
   }
 });
 
+test("process runner does not signal a detached PID after its identity changes", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process groups are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-reused-abort-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const countFile = path.join(root, "count");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(
+    ps,
+    "#!/bin/sh\ncount=0\nif [ -f \"$RUK_PROBE_COUNT\" ]; then read count < \"$RUK_PROBE_COUNT\"; fi\ncount=$((count+1))\nprintf '%s' \"$count\" > \"$RUK_PROBE_COUNT\"\nif [ \"$count\" -eq 1 ]; then printf 'Mon Jan  1 00:00:00 2026\\n'; else printf 'Tue Jan  2 00:00:00 2026\\n'; fi\n",
+  );
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalCount = process.env["RUK_PROBE_COUNT"];
+  process.env["PATH"] = `${root}${path.delimiter}${originalPath ?? ""}`;
+  process.env["RUK_PROBE_COUNT"] = countFile;
+  const controller = new AbortController();
+  let childPid = 0;
+  try {
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        signal: controller.signal,
+        onSpawn: async (pid) => {
+          childPid = pid;
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            try {
+              if (Number(await fs.readFile(countFile, "utf8")) >= 1) break;
+            } catch {}
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+          controller.abort(new Error("heartbeat lost"));
+        },
+      }),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalCount === undefined) delete process.env["RUK_PROBE_COUNT"];
+    else process.env["RUK_PROBE_COUNT"] = originalCount;
+    if (childPid > 0) {
+      try { process.kill(-childPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
 test("command detection recognizes the active Node executable", async () => {
   assert.equal(await commandExists(process.execPath), true);
   assert.equal(await commandExists(path.join(os.tmpdir(), "ruk-command-that-does-not-exist")), false);

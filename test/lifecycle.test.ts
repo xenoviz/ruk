@@ -26,6 +26,7 @@ import {
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
+  retainAssignmentAfterAcquisitionFailure,
 } from "../src/lifecycle.js";
 import { withDirectoryLock } from "../src/lock.js";
 import { primaryCheckoutLockPath, readState, storePaths, treeKey } from "../src/state.js";
@@ -119,6 +120,29 @@ test("preparation and assignment finalizers are fenced by immutable IDs", async 
   assert.notEqual(second!.assignment!.id, first.assignment!.id);
   assert.equal(second!.branch, "agent/reused");
   await assert.rejects(beginWorkspaceReturn(paths, first.assignment!.id, T3), /does not exist/);
+});
+
+test("retained acquisition failures clear the handoff marker for exact release", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspacePath = path.join(root, "workspace");
+  const preparing = await prepare(paths, workspacePath);
+  const assigned = await markWorkspaceAssigned(paths, workspacePath, preparing.operationId!, {
+    owner: "agent",
+    hostname: "host",
+    expiresAt: T2,
+    now: T0,
+  });
+
+  const retained = await retainAssignmentAfterAcquisitionFailure(
+    paths,
+    assigned.assignment!.id,
+    assigned.operationId!,
+    "installer process could not be verified",
+    T1,
+  );
+  assert.equal(retained.operationId, null);
+  assert.equal(retained.failure, "installer process could not be verified");
+  assert.equal((await beginWorkspaceReturn(paths, assigned.assignment!.id, T2)).lifecycle, "returning");
 });
 
 test("renewal requires the exact active assignment", async (t) => {

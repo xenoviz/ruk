@@ -135,11 +135,16 @@ best effort after the operation has already failed; its validity window still
 prevents a stale `autoRenewing` value from persisting.
 Reused acquisition synchronization applies the same rule: an unverifiable
 installer abort retains the assignment and returns its exact ID, path, expiry,
-and recovery command rather than returning the workspace to the warm pool.
+and recovery command rather than returning the workspace to the warm pool. The
+retained transition clears the acquisition handoff marker so exact-ID release
+is available as an explicit recovery action.
 The locked activity mutation never accepts a timestamp older than the current
 renewal. Abort cleanup failures are aggregated with the heartbeat failure, and
 an unverifiable attached process tree or detached process-group leader keeps
 the assignment fenced for recovery instead of authorizing a numeric-ID signal.
+Any termination refusal follows that path without a fallback PID signal, and an
+operation that resolves during failure-hook cleanup still reports the heartbeat
+failure.
 
 ## Expiry and garbage collection
 

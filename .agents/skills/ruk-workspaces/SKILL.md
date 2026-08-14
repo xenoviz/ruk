@@ -28,10 +28,13 @@ retains the assignment and prints the exact recovery ID. It also retains the
 assignment when child identity cannot be established while descendants remain;
 leaderless POSIX process groups retain the assignment rather than being signaled;
 failed registration or heartbeat abort also retains an unverified detached
-group instead of signaling a reusable numeric process-group ID.
+group instead of signaling a reusable numeric process-group ID. Any cleanup
+refusal is final for that attempt; Ruk does not follow it with an unfenced PID signal.
 If synchronization during a reused acquisition cannot verify an aborted
 installer tree, parse the retryable `RESOURCE_BUSY` error for its exact
 `assignmentId`, `path`, `expiresAt`, and `recovery`; Ruk keeps that slot assigned.
+The retained transition clears the incomplete handoff marker, so the returned
+exact-ID release command can be used once the caller decides recovery is safe.
 On Windows it terminates the new tree only with a verified leader identity and
 otherwise retains the assignment while descendants remain or the leader PID is reused.
 Ruk fences the assignment again immediately before launching a command.

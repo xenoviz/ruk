@@ -41,6 +41,7 @@ import {
   markWorkspaceFailed,
   recordPreparingWorkspace,
   recordSuccessfulAcquisition,
+  retainAssignmentAfterAcquisitionFailure,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
@@ -393,7 +394,17 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
             error,
           )
         : null;
-      if (retained) throw retained;
+      if (retained) {
+        if (workspace.operationId !== null) {
+          workspace = await retainAssignmentAfterAcquisitionFailure(
+            paths,
+            workspace.assignment!.id,
+            workspace.operationId,
+            retained.message,
+          );
+        }
+        throw retained;
+      }
       const message = error instanceof Error ? error.message : String(error);
       let returning = false;
       try {

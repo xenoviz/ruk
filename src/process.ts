@@ -213,12 +213,18 @@ export async function run(
     let spawnedIdentity: Promise<string | null> | undefined;
     let aborting = false;
 
-    const retainUnverifiedProcess = (error: ProcessIdentityUnavailableError) => {
-      spawnError = error;
+    const retainProcessAfterCleanupFailure = (error: unknown) => {
+      const safetyError = error instanceof ProcessIdentityUnavailableError
+        ? error
+        : new AggregateError(
+            [error, new ProcessIdentityUnavailableError(child.pid!)],
+            `Could not safely terminate process ${child.pid}`,
+          );
+      spawnError = safetyError;
       child.stdout?.destroy();
       child.stderr?.destroy();
       child.unref();
-      reject(error);
+      reject(safetyError);
     };
 
     const abort = () => {
@@ -229,14 +235,9 @@ export async function run(
       spawnedIdentity ??= freshProcessIdentity(child.pid).catch(() => null);
       abortCleanup = spawnedIdentity.then(async (expectedIdentity) => {
         try {
-          const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
-          if (!killed) child.kill("SIGKILL");
+          await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
         } catch (cleanupError) {
-          if (cleanupError instanceof ProcessIdentityUnavailableError) {
-            retainUnverifiedProcess(cleanupError);
-            return;
-          }
-          child.kill("SIGKILL");
+          retainProcessAfterCleanupFailure(cleanupError);
         }
       });
     };
@@ -258,14 +259,9 @@ export async function run(
         spawnError = error;
         try {
           const expectedIdentity = await spawnedIdentity!;
-          const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
-          if (!killed) child.kill("SIGKILL");
+          await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
         } catch (cleanupError) {
-          if (cleanupError instanceof ProcessIdentityUnavailableError) {
-            retainUnverifiedProcess(cleanupError);
-            return;
-          }
-          child.kill("SIGKILL");
+          retainProcessAfterCleanupFailure(cleanupError);
         }
       });
     });
@@ -653,8 +649,7 @@ async function terminateSpawnedProcess(pid: number, detached: boolean, expectedI
       return false;
     }
     if (identity !== expectedIdentity) {
-      if (await freshProcessDescendantsExist(pid)) throw new ProcessIdentityUnavailableError(pid);
-      return false;
+      throw new ProcessIdentityUnavailableError(pid);
     }
     try { process.kill(-pid, "SIGKILL"); return true; } catch (error) { if (!isMissingProcess(error)) throw error; }
     return false;
@@ -670,7 +665,7 @@ async function terminateSpawnedProcess(pid: number, detached: boolean, expectedI
     return false;
   }
   if (!expectedIdentity) throw new ProcessIdentityUnavailableError(pid);
-  if (identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
+  if (identity !== expectedIdentity) throw new ProcessIdentityUnavailableError(pid);
   const result = await run("ps", ["-e", "-o", "pid=", "-o", "ppid=", "-o", "stat="], { allowFailure: true });
   if (result.code !== 0) throw new Error(`Could not enumerate POSIX processes: ${result.stderr.trim()}`);
   const processes = result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))

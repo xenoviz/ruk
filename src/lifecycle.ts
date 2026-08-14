@@ -260,6 +260,24 @@ export async function recordSuccessfulAcquisition(
   });
 }
 
+export async function retainAssignmentAfterAcquisitionFailure(
+  paths: StorePaths,
+  assignmentId: string,
+  operationId: string,
+  failure: string,
+  now?: string,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    if (workspace.operationId !== operationId) throw new Error("Acquisition operation does not match");
+    workspace.operationId = null;
+    workspace.failure = nonempty(failure, "failure");
+    workspace.updatedAt = timestamp(now, "now");
+    return workspace;
+  });
+}
+
 export async function allocateAssignmentPorts(
   paths: StorePaths,
   assignmentId: string,

@@ -143,8 +143,9 @@ leader identity and otherwise retains ownership while descendants remain or the
 leader PID is reused.
 Abort cleanup follows the same fail-closed rule for attached children and
 detached groups. If the original leader identity or surviving descendants
-cannot be verified, the process is retained, the cleanup error is preserved
-with the heartbeat failure, and automatic release retains the assignment.
+cannot be verified, or any termination safety check refuses the signal, the
+process is retained without a fallback PID signal. The cleanup error is
+preserved with the heartbeat failure, and automatic release retains the assignment.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
@@ -158,7 +159,9 @@ dependency preparation. Assigned `exec` and `shell` operations reuse the same
 transitions and preserve ownership whenever normal release is unsafe. A reused
 acquisition also remains assigned when dependency synchronization cannot verify
 that an aborted installer process tree is gone; its structured error returns the
-exact recovery ID instead of recycling the slot. Command
+exact recovery ID instead of recycling the slot. That retained transition clears
+the incomplete handoff marker so the exact release command is executable without
+making the workspace available automatically. Command
 launch snapshots its original assignment across dependency repair and rejects
 reassignment or an initially unassigned pool slot instead of adopting another
 agent's lease. Explicit `--fetch` is

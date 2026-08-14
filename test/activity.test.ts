@@ -163,6 +163,34 @@ test("withAssignmentActivity preserves a failed abort cleanup", async (t) => {
   );
 });
 
+test("withAssignmentActivity reports heartbeat failure when work resolves during failure cleanup", async (t) => {
+  const { paths, assignmentId } = await fixture(t);
+  let cleanupStarted!: () => void;
+  let releaseCleanup!: () => void;
+  const started = new Promise<void>((resolve) => { cleanupStarted = resolve; });
+  const cleanup = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+
+  const active = withAssignmentActivity(
+    paths,
+    assignmentId,
+    async (signal) => new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    }),
+    {
+      heartbeatIntervalMs: 10,
+      retryAttempts: 0,
+      refresh: async () => { throw new Error("heartbeat write failed"); },
+      onFailure: async () => {
+        cleanupStarted();
+        await cleanup;
+      },
+    },
+  );
+  await started;
+  releaseCleanup();
+  await assert.rejects(active, /activity renewal failed/);
+});
+
 test("withAssignmentActivity retries transient heartbeat writes before failing work", async (t) => {
   const { paths, assignmentId } = await fixture(t);
   let attempts = 0;
