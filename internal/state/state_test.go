@@ -136,3 +136,44 @@ func TestDecodeRejectsMalformedAndUnsupportedState(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeRequiresLegacyTreeFieldsWithoutTighteningValues(t *testing.T) {
+	t.Parallel()
+
+	accepted := `{
+		"version": 1,
+		"trees": {
+			"legacy": {
+				"path": "",
+				"fingerprint": "",
+				"mode": "",
+				"projections": [],
+				"branch": "",
+				"updatedAt": ""
+			}
+		}
+	}`
+	if _, err := state.Decode([]byte(accepted), "state.json"); err != nil {
+		t.Fatalf("Decode rejected historically tolerated string values: %v", err)
+	}
+
+	missingPath := `{
+		"version": 1,
+		"trees": {
+			"legacy": {
+				"fingerprint": "",
+				"mode": "",
+				"projections": [],
+				"branch": "",
+				"updatedAt": ""
+			}
+		}
+	}`
+	_, err := state.Decode([]byte(missingPath), "state.json")
+	if err == nil {
+		t.Fatal("Decode accepted a tree with a missing path field")
+	}
+	if !strings.Contains(err.Error(), "Unsupported or invalid Ruk state in state.json") {
+		t.Fatalf("error = %q, want invalid-state classification", err)
+	}
+}
