@@ -340,6 +340,8 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
   await assert.rejects(fs.access(path.join(raced.path, "race.txt")));
   await run(process.execPath, [cli, "release", replacement!.assignment!.id, "--json"], { cwd: root });
 
+  await fs.access(reused.path);
+  await fs.mkdir(path.join(reused.path, "node_modules", "fixture"), { recursive: true });
   await fs.writeFile(path.join(reused.path, "node_modules", "fixture", "ready"), "tampered");
   const rewarmed = JSON.parse((await run(
     process.execPath,

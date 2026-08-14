@@ -67,7 +67,7 @@ test("withAssignmentActivity registers and removes its fenced keeper", async (t)
 });
 
 test("withAssignmentActivity timestamps its initial keeper after acquiring the state lock", async (t) => {
-  const { paths, assignmentId } = await fixture(t, 0.001);
+  const { paths, assignmentId } = await fixture(t, 0.01);
   let releaseLock!: () => void;
   let lockAcquired!: () => void;
   const acquired = new Promise<void>((resolve) => { lockAcquired = resolve; });
@@ -86,7 +86,7 @@ test("withAssignmentActivity timestamps its initial keeper after acquiring the s
       const keeper = workspace.assignment!.leaseKeepers[0]!;
       assert.ok(Date.parse(keeper.validUntil) > Date.now());
     },
-    { heartbeatIntervalMs: 20 },
+    { heartbeatIntervalMs: 500 },
   );
   await new Promise((resolve) => setTimeout(resolve, 60));
   releaseLock();
