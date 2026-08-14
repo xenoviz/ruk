@@ -660,7 +660,7 @@ test("failed process registration holds the workspace lock through cleanup", { t
   await fs.mkdir(fakeBin);
   await fs.writeFile(
     path.join(fakeBin, "ps"),
-    "#!/bin/sh\nprintf 'x\\n' >> \"$RUK_PS_COUNT\"\ncount=$(wc -l < \"$RUK_PS_COUNT\")\nif [ \"$count\" -le 2 ]; then\n  [ \"$count\" -eq 2 ] && : > \"$RUK_IDENTITY_READY\"\n  while [ ! -f \"$RUK_IDENTITY_RELEASE\" ]; do sleep 0.05; done\nelse\n  : > \"$RUK_CLEANUP_STARTED\"\n  while [ ! -f \"$RUK_CLEANUP_RELEASE\" ]; do sleep 0.05; done\nfi\nprintf 'Mon Jan  1 00:00:00 2026\\n'\n",
+    "#!/bin/sh\nlast=''\nfor value in \"$@\"; do last=\"$value\"; done\nif [ \"$last\" = \"$PPID\" ]; then exec /bin/ps \"$@\"; fi\nprintf 'x\\n' >> \"$RUK_PS_COUNT\"\ncount=$(wc -l < \"$RUK_PS_COUNT\")\nif [ \"$count\" -le 2 ]; then\n  [ \"$count\" -eq 2 ] && : > \"$RUK_IDENTITY_READY\"\n  while [ ! -f \"$RUK_IDENTITY_RELEASE\" ]; do sleep 0.05; done\nelse\n  : > \"$RUK_CLEANUP_STARTED\"\n  while [ ! -f \"$RUK_CLEANUP_RELEASE\" ]; do sleep 0.05; done\nfi\nprintf 'Mon Jan  1 00:00:00 2026\\n'\n",
   );
   await fs.chmod(path.join(fakeBin, "ps"), 0o755);
   t.after(async () => {
@@ -723,6 +723,7 @@ test("failed process registration holds the workspace lock through cleanup", { t
     if (childPid > 0 && !(await processStopped(childPid))) {
       try { process.kill(-childPid, "SIGKILL"); } catch {}
     }
+    await execution.catch(() => undefined);
   }
 });
 
