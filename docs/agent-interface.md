@@ -146,9 +146,11 @@ active. `autoRenewing` is true only while a current fenced keeper is visible.
 Transient heartbeat writes receive bounded retries. A persistent write failure
 or lost assignment fence stops the managed command and is reported as retryable
 `RESOURCE_BUSY`. A refresh that waited behind a newer explicit renewal cannot
-regress its timestamps or shorten its expiry. If stopping the command cannot
-verify that its process tree is gone, Ruk preserves that cleanup failure and
-retains the assignment instead of returning the workspace to the pool.
+regress its timestamps or shorten its expiry, and initial keeper registration
+captures its validity window only after acquiring the state lock. If stopping
+the command cannot verify the original detached leader or prove that its process
+tree is gone, Ruk preserves that cleanup failure and retains the assignment
+instead of returning the workspace to the pool.
 Status reports `projection-changed` with a `ruk sync` recovery when recorded
 projection contents or linked package targets no longer match their fingerprint.
 `ruk run -- ...` validates dependency inputs and projection integrity, then

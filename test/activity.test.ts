@@ -14,6 +14,7 @@ import {
   refreshAssignmentActivity,
   renewAssignment,
 } from "../src/lifecycle.js";
+import { withDirectoryLock } from "../src/lock.js";
 import {
   containsProcessIdentityUnavailableError,
   ProcessIdentityUnavailableError,
@@ -63,6 +64,34 @@ test("withAssignmentActivity registers and removes its fenced keeper", async (t)
   assert.equal(value, 42);
   const workspace = Object.values((await readState(paths)).workspaces)[0]!;
   assert.deepEqual(workspace.assignment!.leaseKeepers, []);
+});
+
+test("withAssignmentActivity timestamps its initial keeper after acquiring the state lock", async (t) => {
+  const { paths, assignmentId } = await fixture(t, 0.001);
+  let releaseLock!: () => void;
+  let lockAcquired!: () => void;
+  const acquired = new Promise<void>((resolve) => { lockAcquired = resolve; });
+  const hold = new Promise<void>((resolve) => { releaseLock = resolve; });
+  const lock = withDirectoryLock(paths.stateLock, async () => {
+    lockAcquired();
+    await hold;
+  });
+  await acquired;
+
+  const active = withAssignmentActivity(
+    paths,
+    assignmentId,
+    async () => {
+      const workspace = Object.values((await readState(paths)).workspaces)[0]!;
+      const keeper = workspace.assignment!.leaseKeepers[0]!;
+      assert.ok(Date.parse(keeper.validUntil) > Date.now());
+    },
+    { heartbeatIntervalMs: 20 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  releaseLock();
+  await lock;
+  await active;
 });
 
 test("withAssignmentActivity refreshes the lease while work continues", async (t) => {

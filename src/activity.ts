@@ -99,7 +99,7 @@ export async function withAssignmentActivity<T>(
   const keeperId = options.keeperId ?? crypto.randomUUID();
   await beginAssignmentActivity(paths, assignmentId, {
     keeperId,
-    ...activityWindow(Date.now(), heartbeatIntervalMs),
+    durationMs: heartbeatIntervalMs * 2,
   });
 
   const controller = new AbortController();

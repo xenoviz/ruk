@@ -106,8 +106,9 @@ withAssignmentActivity(paths, assignmentId, operation)
 The module performs five steps:
 
 1. Verify that the exact assignment ID is still assigned.
-2. Record activity, extend expiry by the stored lease duration, and register a
-   new keeper.
+2. After acquiring the state lock, record activity, extend expiry by the stored
+   lease duration, and register a new keeper whose validity window starts at
+   that locked mutation.
 3. Run the supplied operation.
 4. Refresh the keeper and expiry every five minutes or one-third of the lease
    duration, whichever is shorter.
@@ -134,7 +135,8 @@ best effort after the operation has already failed; its validity window still
 prevents a stale `autoRenewing` value from persisting.
 The locked activity mutation never accepts a timestamp older than the current
 renewal. Abort cleanup failures are aggregated with the heartbeat failure, and
-an unverifiable attached process tree keeps the assignment fenced for recovery.
+an unverifiable attached process tree or detached process-group leader keeps
+the assignment fenced for recovery instead of authorizing a numeric-ID signal.
 
 ## Expiry and garbage collection
 

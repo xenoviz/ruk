@@ -145,6 +145,38 @@ test("process runner fails closed when attached abort cleanup cannot inspect des
   }
 });
 
+test("process runner retains an unverified detached group after abort", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process groups are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-detached-abort-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  const controller = new AbortController();
+  let childPid = 0;
+  try {
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        signal: controller.signal,
+        onSpawn: (pid) => {
+          childPid = pid;
+          controller.abort(new Error("heartbeat lost"));
+        },
+      }),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (childPid > 0) {
+      try { process.kill(-childPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
 test("command detection recognizes the active Node executable", async () => {
   assert.equal(await commandExists(process.execPath), true);
   assert.equal(await commandExists(path.join(os.tmpdir(), "ruk-command-that-does-not-exist")), false);
@@ -213,7 +245,7 @@ test("process runner terminates a child when tracking registration fails", async
   );
 });
 
-test("process runner terminates a detached group after its leader exits before registration fails", async (t) => {
+test("process runner retains a detached group when its leader cannot be identity-fenced", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-detached-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const workerFile = path.join(root, "worker.pid");
@@ -226,10 +258,10 @@ test("process runner terminates a detached group after its leader exits before r
   const workerScript = process.platform === "win32"
     ? "setInterval(()=>{},1000)"
     : `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(survivedFile)},'1'),500);setInterval(()=>{},1000)`;
+  let launcherPid = 0;
   let workerPid = 0;
   const originalPath = process.env["PATH"];
   if (process.platform !== "win32") process.env["PATH"] = root;
-  const expectedFailure = process.platform === "win32" ? /cannot be released safely/ : /tracking failed/;
   try {
     await assert.rejects(
       run(
@@ -241,6 +273,7 @@ test("process runner terminates a detached group after its leader exits before r
         {
           detached: true,
           onSpawn: async (pid) => {
+            launcherPid = pid;
             for (let attempt = 0; attempt < 100 && workerPid === 0; attempt += 1) {
               try { workerPid = Number(await fs.readFile(workerFile, "utf8")); } catch {}
               await new Promise((resolve) => setTimeout(resolve, 10));
@@ -254,7 +287,7 @@ test("process runner terminates a detached group after its leader exits before r
           },
         },
       ),
-      expectedFailure,
+      /cannot be released safely/,
     );
   } finally {
     if (process.platform !== "win32") {
@@ -269,7 +302,8 @@ test("process runner terminates a detached group after its leader exits before r
     await killProcessTree(workerPid, true, identity);
   } else {
     await new Promise((resolve) => setTimeout(resolve, 750));
-    await assert.rejects(fs.access(survivedFile), { code: "ENOENT" });
+    await fs.access(survivedFile);
+    try { process.kill(-launcherPid, "SIGKILL"); } catch {}
   }
 });
 

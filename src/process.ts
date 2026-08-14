@@ -213,6 +213,14 @@ export async function run(
     let spawnedIdentity: Promise<string | null> | undefined;
     let aborting = false;
 
+    const retainUnverifiedProcess = (error: ProcessIdentityUnavailableError) => {
+      spawnError = error;
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref();
+      reject(error);
+    };
+
     const abort = () => {
       if (aborting) return;
       spawnError = options.signal?.reason ?? new Error(`${command} was aborted`);
@@ -224,8 +232,11 @@ export async function run(
           const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
           if (!killed) child.kill("SIGKILL");
         } catch (cleanupError) {
+          if (cleanupError instanceof ProcessIdentityUnavailableError) {
+            retainUnverifiedProcess(cleanupError);
+            return;
+          }
           child.kill("SIGKILL");
-          if (cleanupError instanceof ProcessIdentityUnavailableError) spawnError = cleanupError;
         }
       });
     };
@@ -250,8 +261,11 @@ export async function run(
           const killed = await terminateSpawnedProcess(child.pid!, options.detached ?? false, expectedIdentity);
           if (!killed) child.kill("SIGKILL");
         } catch (cleanupError) {
+          if (cleanupError instanceof ProcessIdentityUnavailableError) {
+            retainUnverifiedProcess(cleanupError);
+            return;
+          }
           child.kill("SIGKILL");
-          if (cleanupError instanceof ProcessIdentityUnavailableError) spawnError = cleanupError;
         }
       });
     });
@@ -627,8 +641,21 @@ async function terminateSpawnedProcess(pid: number, detached: boolean, expectedI
     throw new ProcessIdentityUnavailableError(pid);
   }
   if (detached) {
+    if (!expectedIdentity) throw new ProcessIdentityUnavailableError(pid);
     const identity = await freshProcessIdentity(pid);
-    if (identity && expectedIdentity && identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
+    if (!identity) {
+      try {
+        if (await freshProcessDescendantsExist(pid)) throw new ProcessIdentityUnavailableError(pid);
+      } catch (error) {
+        if (error instanceof ProcessIdentityUnavailableError) throw error;
+        throw new ProcessIdentityUnavailableError(pid);
+      }
+      return false;
+    }
+    if (identity !== expectedIdentity) {
+      if (await freshProcessDescendantsExist(pid)) throw new ProcessIdentityUnavailableError(pid);
+      return false;
+    }
     try { process.kill(-pid, "SIGKILL"); return true; } catch (error) { if (!isMissingProcess(error)) throw error; }
     return false;
   }

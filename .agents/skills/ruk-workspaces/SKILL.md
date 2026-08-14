@@ -27,7 +27,8 @@ and release automatically. If the command leaves changes or cleanup fails, Ruk
 retains the assignment and prints the exact recovery ID. It also retains the
 assignment when child identity cannot be established while descendants remain;
 leaderless POSIX process groups retain the assignment rather than being signaled;
-failed registration also terminates the detached group after a short-lived leader exits.
+failed registration or heartbeat abort also retains an unverified detached
+group instead of signaling a reusable numeric process-group ID.
 On Windows it terminates the new tree only with a verified leader identity and
 otherwise retains the assignment while descendants remain or the leader PID is reused.
 Ruk fences the assignment again immediately before launching a command.
@@ -90,9 +91,11 @@ removed by an already-running collection.
 GC revalidates each candidate under its acquisition lock and carries that fence
 through the lifecycle transition. A renewal made during acquisition handoff is preserved.
 An unreadable identity for a live lock owner is treated as busy, never stale.
-Heartbeat updates are monotonic with explicit renewal. If heartbeat-triggered
-process cleanup cannot rule out surviving descendants, Ruk reports retryable
-resource contention and retains the exact assignment for recovery.
+Initial keeper validity starts after the state lock is acquired, and heartbeat
+updates are monotonic with explicit renewal. If heartbeat-triggered process
+cleanup cannot verify the original detached leader or rule out surviving
+descendants, Ruk reports retryable resource contention and retains the exact
+assignment for recovery.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read

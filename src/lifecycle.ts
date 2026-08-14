@@ -44,6 +44,13 @@ export interface AssignmentActivityInput {
   lockTimeoutMs?: number;
 }
 
+export interface BeginAssignmentActivityInput {
+  keeperId: string;
+  durationMs?: number;
+  validUntil?: string;
+  now?: string;
+}
+
 export type GcCandidateReason =
   | "available"
   | "failed"
@@ -336,24 +343,42 @@ export async function renewAssignment(
 export async function beginAssignmentActivity(
   paths: StorePaths,
   assignmentId: string,
-  input: AssignmentActivityInput,
+  input: BeginAssignmentActivityInput,
 ): Promise<WorkspaceRecord> {
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "assigned");
-    const now = timestamp(input.now, "now");
-    const validUntil = timestamp(input.validUntil, "validUntil");
-    if (Date.parse(validUntil) <= Date.parse(now)) {
+    const observedAt = timestamp(input.now, "now");
+    if (input.durationMs !== undefined && (!Number.isFinite(input.durationMs) || input.durationMs <= 0)) {
+      throw new Error("durationMs must be positive and finite");
+    }
+    if (input.durationMs === undefined && input.validUntil === undefined) {
+      throw new Error("validUntil or durationMs is required");
+    }
+    const requestedValidUntil = input.durationMs === undefined
+      ? timestamp(input.validUntil, "validUntil")
+      : new Date(Date.parse(observedAt) + input.durationMs).toISOString();
+    if (Date.parse(requestedValidUntil) <= Date.parse(observedAt)) {
       throw new Error("validUntil must be after now");
     }
+    const current = workspace.assignment!;
+    const lockedAt = input.durationMs === undefined ? observedAt : timestamp(undefined, "now");
+    const now = new Date(Math.max(
+      Date.parse(observedAt),
+      Date.parse(lockedAt),
+      Date.parse(current.renewedAt),
+    )).toISOString();
+    const validUntil = new Date(
+      Date.parse(now) + Date.parse(requestedValidUntil) - Date.parse(observedAt),
+    ).toISOString();
     const keeperId = uuid(input.keeperId, "keeperId");
-    if (workspace.assignment!.leaseKeepers.some(({ id }) => id === keeperId)) {
+    if (current.leaseKeepers.some(({ id }) => id === keeperId)) {
       throw new Error(`Lease keeper ${keeperId} is already active`);
     }
-    workspace.assignment!.leaseKeepers = workspace.assignment!.leaseKeepers.filter(
+    current.leaseKeepers = current.leaseKeepers.filter(
       (keeper) => Date.parse(keeper.validUntil) > Date.parse(now),
     );
-    workspace.assignment!.leaseKeepers.push({ id: keeperId, heartbeatAt: now, validUntil });
+    current.leaseKeepers.push({ id: keeperId, heartbeatAt: now, validUntil });
     recordActivity(workspace, now);
     return workspace;
   });
