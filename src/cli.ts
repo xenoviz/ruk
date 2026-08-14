@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withAssignmentActivity } from "./activity.js";
 import { loadConfig, detectPackageManager } from "./config.js";
 import {
   assertSharedBackendSupported,
@@ -180,10 +181,15 @@ function dependencyReporter(io: CliIo, json: boolean): DependencyReporter {
 
 async function sync(cwd: string, io: CliIo, json = false, emit = true) {
   const value = await context(cwd);
-  const result = await ensureDependencies({
-    ...value,
-    reporter: dependencyReporter(io, json),
-  });
+  const paths = storePaths(value.repository.commonDir);
+  const lifecycle = (await readState(paths)).workspaces[treeKey(value.repository.root)];
+  const prepare = () => ensureDependencies({
+      ...value,
+      reporter: dependencyReporter(io, json),
+    });
+  const result = lifecycle?.lifecycle === "assigned" && lifecycle.assignment
+    ? await withAssignmentActivity(paths, lifecycle.assignment.id, prepare)
+    : await prepare();
   const output = {
     status: result.alreadyAttached ? "ready" : "prepared",
     fingerprint: result.fingerprint,
@@ -942,62 +948,83 @@ async function execute(
     try { process.kill(-groupId, signal); } catch { /* The command may already have exited. */ }
   };
   let execution!: ReturnType<typeof run>;
+  let registration: Promise<void> | undefined;
+  let activityFailure: unknown;
   if (forwardInterrupt && process.platform !== "win32") {
     process.on("SIGINT", forwardSignal);
     process.on("SIGTERM", forwardSignal);
   }
   try {
-    await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
-      const current = (await readState(paths)).workspaces[treeKey(repository.root)];
-      if (
-        current?.lifecycle !== "assigned" ||
-        current.operationId !== null ||
-        current.assignment?.id !== assignmentId
-      ) {
-        throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
-      }
-      let registered!: () => void;
-      const registration = new Promise<void>((resolve) => { registered = resolve; });
-      execution = run(program!, programArgs, {
-        cwd: repository.root,
-        env: environment,
-        stdio: "inherit",
-        allowFailure: true,
-        detached,
-        onSpawn: async (pid) => {
-          const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
-          const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
-          if (!startedAt) {
-            registered();
-            return;
+    return await withAssignmentActivity(
+      paths,
+      assignmentId,
+      async () => {
+        await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
+          if (activityFailure !== undefined) throw activityFailure;
+          const current = (await readState(paths)).workspaces[treeKey(repository.root)];
+          if (
+            current?.lifecycle !== "assigned" ||
+            current.operationId !== null ||
+            current.assignment?.id !== assignmentId
+          ) {
+            throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
           }
-          const record: TrackedProcessRecord = {
-            pid: session?.pid ?? pid,
-            ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
-            ...(session?.sessionId === undefined
-              ? {}
-              : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
-            ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
-            command: [...command],
-            startedAt,
-          };
-          await addAssignmentProcess(paths, assignmentId, record);
-          tracking.record = record;
-          if (pendingSignal) forwardSignal(pendingSignal);
-          registered();
+          let registered!: () => void;
+          registration = new Promise<void>((resolve) => { registered = resolve; });
+          execution = run(program!, programArgs, {
+            cwd: repository.root,
+            env: environment,
+            stdio: "inherit",
+            allowFailure: true,
+            detached,
+            onSpawn: async (pid) => {
+              try {
+                const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
+                const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
+                if (!startedAt) return;
+                const record: TrackedProcessRecord = {
+                  pid: session?.pid ?? pid,
+                  ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
+                  ...(session?.sessionId === undefined
+                    ? {}
+                    : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
+                  ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
+                  command: [...command],
+                  startedAt,
+                };
+                await addAssignmentProcess(paths, assignmentId, record);
+                tracking.record = record;
+                if (pendingSignal) forwardSignal(pendingSignal);
+              } finally {
+                registered();
+              }
+            },
+          });
+          await Promise.race([registration, execution.then(() => undefined)]);
+        });
+        const result = await execution;
+        if (tracking.record && !(await trackedProcessExists(tracking.record))) {
+          try {
+            await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
+          } catch {
+            // Release may already have consumed the tracked record.
+          }
+        }
+        return result.code;
+      },
+      {
+        onFailure: async (error) => {
+          activityFailure = error;
+          if (!tracking.record && registration) {
+            await Promise.race([
+              registration,
+              execution.then(() => undefined, () => undefined),
+            ]);
+          }
+          if (tracking.record) await terminateTrackedProcess(tracking.record, true);
         },
-      });
-      await Promise.race([registration, execution.then(() => undefined)]);
-    });
-    const result = await execution;
-    if (tracking.record && !(await trackedProcessExists(tracking.record))) {
-      try {
-        await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
-      } catch {
-        // Release may already have consumed the tracked record.
-      }
-    }
-    return result.code;
+      },
+    );
   } finally {
     if (forwardInterrupt && process.platform !== "win32") {
       process.off("SIGINT", forwardSignal);
