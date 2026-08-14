@@ -89,6 +89,12 @@ test("disk statistics tolerate unreadable linked targets", async (t) => {
   await fs.writeFile(path.join(target, "index.js"), "content");
   await fs.symlink(target, path.join(workspace, "node_modules", "unreadable"), "dir");
   await fs.chmod(target, 0);
+  try {
+    await fs.access(target);
+    return t.skip("the current user can bypass POSIX permissions");
+  } catch {
+    // The target is genuinely unreadable for this process.
+  }
   const now = new Date(0).toISOString();
   const state: RukState = {
     version: 4,
