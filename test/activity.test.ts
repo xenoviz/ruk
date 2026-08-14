@@ -11,6 +11,7 @@ import {
   finishAssignmentActivity,
   markWorkspaceAssigned,
   recordPreparingWorkspace,
+  refreshAssignmentActivity,
 } from "../src/lifecycle.js";
 import { readState, storePaths } from "../src/state.js";
 
@@ -101,4 +102,30 @@ test("withAssignmentActivity reports a lost keeper and invokes failure cleanup",
   );
 
   assert.equal(cleaned, true);
+});
+
+test("withAssignmentActivity retries transient heartbeat writes before failing work", async (t) => {
+  const { paths, assignmentId } = await fixture(t);
+  let attempts = 0;
+  let finishWork!: () => void;
+
+  await withAssignmentActivity(
+    paths,
+    assignmentId,
+    async () => new Promise<void>((resolve) => { finishWork = resolve; }),
+    {
+      heartbeatIntervalMs: 10,
+      retryAttempts: 2,
+      retryDelayMs: 1,
+      refresh: async (activityPaths, currentAssignmentId, input) => {
+        attempts += 1;
+        if (attempts < 3) throw new Error("EPERM: transient state replacement failure");
+        const result = await refreshAssignmentActivity(activityPaths, currentAssignmentId, input);
+        finishWork();
+        return result;
+      },
+    },
+  );
+
+  assert.equal(attempts, 3);
 });

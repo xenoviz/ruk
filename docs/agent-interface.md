@@ -142,6 +142,9 @@ so a concurrent renewal prevents collection.
 `expiresAt`, `lastActivityAt`, `autoRenewing`, `primaryCheckout`, `managed`, and
 `activeAssignments`. Assignment timestamps are null when no assignment is
 active. `autoRenewing` is true only while a current fenced keeper is visible.
+Transient heartbeat writes receive bounded retries. A persistent write failure
+or lost assignment fence stops the managed command and is reported as retryable
+`RESOURCE_BUSY`.
 Status reports `projection-changed` with a `ruk sync` recovery when recorded
 projection contents or linked package targets no longer match their fingerprint.
 `ruk run -- ...` validates dependency inputs and projection integrity, then

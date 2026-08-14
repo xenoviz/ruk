@@ -1,3 +1,4 @@
+import { AssignmentActivityError } from "./activity.js";
 import { SharedCheckoutError } from "./checkout.js";
 import { ProcessIdentityUnavailableError } from "./process.js";
 
@@ -42,6 +43,8 @@ export function errorRecord(error: unknown): ErrorRecord {
     ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
     : error instanceof ProcessIdentityUnavailableError
       ? [/.*/, "RESOURCE_BUSY", true] as const
+      : error instanceof AssignmentActivityError
+        ? [/.*/, "RESOURCE_BUSY", true] as const
       : CATEGORIES.find(([pattern]) => pattern.test(message));
   return {
     status: "error",

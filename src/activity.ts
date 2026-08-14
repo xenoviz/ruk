@@ -12,6 +12,18 @@ export interface AssignmentActivityOptions {
   heartbeatIntervalMs?: number;
   keeperId?: string;
   onFailure?: (error: unknown) => void | Promise<void>;
+  refresh?: typeof refreshAssignmentActivity;
+  retryAttempts?: number;
+  retryDelayMs?: number;
+}
+
+export class AssignmentActivityError extends Error {
+  override readonly name = "AssignmentActivityError";
+
+  constructor(assignmentId: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Assignment ${assignmentId} activity renewal failed: ${detail}`, { cause });
+  }
 }
 
 export function activityHeartbeatInterval(leaseDurationMinutes: number): number {
@@ -52,6 +64,11 @@ function activityWindow(now: number, heartbeatIntervalMs: number): { now: string
   };
 }
 
+function ownershipChanged(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /assignment .* does not exist|expected assigned|lease keeper .* is not active/i.test(message);
+}
+
 export async function withAssignmentActivity<T>(
   paths: StorePaths,
   assignmentId: string,
@@ -64,6 +81,15 @@ export async function withAssignmentActivity<T>(
   if (!Number.isFinite(heartbeatIntervalMs) || heartbeatIntervalMs <= 0) {
     throw new Error("heartbeatIntervalMs must be positive and finite");
   }
+  const retryAttempts = options.retryAttempts ?? 2;
+  const retryDelayMs = options.retryDelayMs ?? Math.min(1_000, heartbeatIntervalMs / 4);
+  if (!Number.isSafeInteger(retryAttempts) || retryAttempts < 0) {
+    throw new Error("retryAttempts must be a non-negative integer");
+  }
+  if (!Number.isFinite(retryDelayMs) || retryDelayMs < 0) {
+    throw new Error("retryDelayMs must be non-negative and finite");
+  }
+  const refresh = options.refresh ?? refreshAssignmentActivity;
   const keeperId = options.keeperId ?? crypto.randomUUID();
   await beginAssignmentActivity(paths, assignmentId, {
     keeperId,
@@ -79,10 +105,24 @@ export async function withAssignmentActivity<T>(
       while (!controller.signal.aborted) {
         await wait(heartbeatIntervalMs, controller.signal);
         if (controller.signal.aborted) return;
-        await refreshAssignmentActivity(paths, assignmentId, {
-          keeperId,
-          ...activityWindow(Date.now(), heartbeatIntervalMs),
-        });
+        let refreshed = false;
+        for (let attempt = 0; attempt <= retryAttempts; attempt += 1) {
+          try {
+            await refresh(paths, assignmentId, {
+              keeperId,
+              ...activityWindow(Date.now(), heartbeatIntervalMs),
+            });
+            refreshed = true;
+            break;
+          } catch (error) {
+            if (ownershipChanged(error) || attempt === retryAttempts) {
+              throw new AssignmentActivityError(assignmentId, error);
+            }
+            await wait(retryDelayMs, controller.signal);
+            if (controller.signal.aborted) return;
+          }
+        }
+        if (!refreshed) return;
       }
     } catch (error) {
       heartbeatError = error;

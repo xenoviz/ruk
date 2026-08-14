@@ -49,6 +49,8 @@ validate, including linked package targets. `ruk status --json` reports
 `projection-changed` and recommends `ruk sync` when integrity validation fails.
 Status and list JSON also expose `lastActivityAt`, derived `autoRenewing`,
 `primaryCheckout`, `managed`, and `activeAssignments`.
+Heartbeat state writes receive bounded retries; a persistent renewal failure is
+a retryable `RESOURCE_BUSY` error and stops the tracked command.
 
 Treat the repository's primary checkout as a control location. When active
 assignments exist, `ruk run` and `ruk sync` deny task work there by default.

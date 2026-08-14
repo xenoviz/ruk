@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { AssignmentActivityError } from "../src/activity.js";
 import { errorRecord, jsonRequested } from "../src/errors.js";
 import { ProcessIdentityUnavailableError } from "../src/process.js";
 
@@ -32,6 +33,12 @@ test("structured failures expose stable automation categories", () => {
     status: "error",
     code: "RESOURCE_BUSY",
     message: "Could not enumerate POSIX processes: unavailable",
+    retryable: true,
+  });
+  assert.deepEqual(errorRecord(new AssignmentActivityError("assignment-id", new Error("EPERM"))), {
+    status: "error",
+    code: "RESOURCE_BUSY",
+    message: "Assignment assignment-id activity renewal failed: EPERM",
     retryable: true,
   });
   assert.equal(errorRecord(new Error("unexpected")).code, "OPERATION_FAILED");
