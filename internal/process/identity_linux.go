@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/xenoviz/ruk/internal/lock"
@@ -18,9 +19,21 @@ import (
 const linuxClockTicks = uint64(100)
 
 func inspectPlatform(_ context.Context, pid int) (lock.ProcessState, error) {
-	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	processPath := strconv.Itoa(pid)
+	if pid == os.Getpid() {
+		processPath = "self"
+	}
+	stat, err := os.ReadFile(filepath.Join("/proc", processPath, "stat"))
 	if errors.Is(err, os.ErrNotExist) {
-		return lock.ProcessState{}, nil
+		probeErr := syscall.Kill(pid, 0)
+		switch {
+		case probeErr == nil, errors.Is(probeErr, syscall.EPERM):
+			return unavailableIdentity(pid, errors.New("live process is absent from /proc"))
+		case errors.Is(probeErr, syscall.ESRCH):
+			return lock.ProcessState{}, nil
+		default:
+			return unavailableIdentity(pid, probeErr)
+		}
 	}
 	if err != nil {
 		return unavailableIdentity(pid, err)

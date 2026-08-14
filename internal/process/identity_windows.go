@@ -12,7 +12,10 @@ import (
 	"github.com/xenoviz/ruk/internal/lock"
 )
 
-const processQueryLimitedInformation = uintptr(0x1000)
+const (
+	processQueryLimitedInformation = uintptr(0x1000)
+	errorInvalidParameter          = syscall.Errno(87)
+)
 
 var (
 	kernel32        = syscall.NewLazyDLL("kernel32.dll")
@@ -34,7 +37,7 @@ func inspectPlatform(ctx context.Context, pid int) (lock.ProcessState, error) {
 	if handle == 0 {
 		errno, _ := callErr.(syscall.Errno)
 		switch errno {
-		case syscall.ERROR_INVALID_PARAMETER:
+		case errorInvalidParameter:
 			return lock.ProcessState{}, nil
 		case syscall.ERROR_ACCESS_DENIED:
 			return lock.ProcessState{Alive: true, IdentityKnown: false}, nil

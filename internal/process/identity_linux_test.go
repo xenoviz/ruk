@@ -7,7 +7,7 @@ import "testing"
 func TestParseLinuxStartTicksHandlesSpacesAndParentheses(t *testing.T) {
 	t.Parallel()
 
-	stat := "42 (ruk worker (test)) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 1800 19 20"
+	stat := "42 (ruk worker (test)) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 1800 20"
 	ticks, err := parseLinuxStartTicks(stat)
 	if err != nil {
 		t.Fatalf("parseLinuxStartTicks returned an error: %v", err)
