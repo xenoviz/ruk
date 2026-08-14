@@ -6,6 +6,8 @@ import test from "node:test";
 import {
   addAssignmentProcess,
   allocateAssignmentPorts,
+  assignmentIsAutoRenewing,
+  beginAssignmentActivity,
   beginWorkspaceCollection,
   beginWorkspaceReturn,
   cancelWorkspaceCollection,
@@ -13,12 +15,14 @@ import {
   deleteWorkspaceRecord,
   findAssignments,
   finishWorkspaceReturn,
+  finishAssignmentActivity,
   identifyGcCandidates,
   markWorkspaceAssigned,
   markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
   recordSuccessfulAcquisition,
+  refreshAssignmentActivity,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
@@ -31,6 +35,8 @@ const T0 = "2026-01-01T00:00:00.000Z";
 const T1 = "2026-01-01T01:00:00.000Z";
 const T2 = "2026-01-01T02:00:00.000Z";
 const T3 = "2026-01-01T03:00:00.000Z";
+const T4 = "2026-01-01T04:00:00.000Z";
+const T5 = "2026-01-01T05:00:00.000Z";
 
 async function fixture(t: test.TestContext): Promise<{ root: string; paths: StorePaths }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-lifecycle-"));
@@ -132,6 +138,53 @@ test("renewal requires the exact active assignment", async (t) => {
   );
   await assert.rejects(beginWorkspaceReturn(paths, workspace.assignment!.id, T2, T2), /renewed before collection/);
   assert.equal((await readState(paths)).workspaces[treeKey(workspace.path)]!.lifecycle, "assigned");
+});
+
+test("assignment activity renews the lease and fences concurrent keepers", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"));
+  const assignmentId = workspace.assignment!.id;
+  const firstKeeper = "00000000-0000-4000-8000-000000000001";
+  const secondKeeper = "00000000-0000-4000-8000-000000000002";
+
+  const first = await beginAssignmentActivity(paths, assignmentId, {
+    keeperId: firstKeeper,
+    validUntil: T3,
+    now: T1,
+  });
+  assert.equal(first.assignment!.lastActivityAt, T1);
+  assert.equal(first.assignment!.expiresAt, T3);
+  assert.equal(first.assignment!.leaseKeepers.length, 1);
+  assert.equal(assignmentIsAutoRenewing(first.assignment!, T1), true);
+
+  const second = await beginAssignmentActivity(paths, assignmentId, {
+    keeperId: secondKeeper,
+    validUntil: T4,
+    now: T2,
+  });
+  assert.equal(second.assignment!.expiresAt, T4);
+  assert.equal(second.assignment!.leaseKeepers.length, 2);
+
+  const refreshed = await refreshAssignmentActivity(paths, assignmentId, {
+    keeperId: firstKeeper,
+    validUntil: T5,
+    now: T3,
+  });
+  assert.equal(refreshed.assignment!.expiresAt, T5);
+  assert.equal(refreshed.assignment!.leaseKeepers.find(({ id }) => id === firstKeeper)?.heartbeatAt, T3);
+
+  const oneRemaining = await finishAssignmentActivity(paths, assignmentId, firstKeeper, T3);
+  assert.deepEqual(oneRemaining.assignment!.leaseKeepers.map(({ id }) => id), [secondKeeper]);
+  assert.equal(assignmentIsAutoRenewing(oneRemaining.assignment!, T3), true);
+  assert.equal(assignmentIsAutoRenewing(oneRemaining.assignment!, T4), false);
+
+  const finished = await finishAssignmentActivity(paths, assignmentId, secondKeeper, T3);
+  assert.deepEqual(finished.assignment!.leaseKeepers, []);
+  assert.equal(finished.assignment!.expiresAt, T5);
+  await assert.rejects(
+    finishAssignmentActivity(paths, crypto.randomUUID(), secondKeeper, T3),
+    /does not exist/,
+  );
 });
 
 test("return transitions retain ownership until tracked processes are removed", async (t) => {

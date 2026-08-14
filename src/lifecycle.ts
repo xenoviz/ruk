@@ -37,6 +37,12 @@ export interface AssignmentQuery {
   now?: string;
 }
 
+export interface AssignmentActivityInput {
+  keeperId: string;
+  validUntil: string;
+  now?: string;
+}
+
 export type GcCandidateReason =
   | "available"
   | "failed"
@@ -62,6 +68,34 @@ function nonempty(value: string, name: string): string {
   return value;
 }
 
+function uuid(value: string, name: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error(`${name} must be a UUID`);
+  }
+  return value;
+}
+
+function recordActivity(workspace: WorkspaceRecord, now: string): void {
+  const current = workspace.assignment!;
+  const expiresAt = new Date(
+    Date.parse(now) + current.leaseDurationMinutes * 60_000,
+  ).toISOString();
+  current.renewedAt = now;
+  current.expiresAt = expiresAt;
+  current.lastActivityAt = now;
+  workspace.updatedAt = now;
+}
+
+export function assignmentIsAutoRenewing(
+  assignmentRecord: AssignmentRecord,
+  now?: string,
+): boolean {
+  const observedAt = Date.parse(timestamp(now, "now"));
+  return assignmentRecord.leaseKeepers.some(
+    ({ validUntil }) => Date.parse(validUntil) > observedAt,
+  );
+}
+
 function assignment(input: AssignmentInput): AssignmentRecord {
   const now = timestamp(input.now, "now");
   const expiresAt = timestamp(input.expiresAt, "expiresAt");
@@ -73,6 +107,9 @@ function assignment(input: AssignmentInput): AssignmentRecord {
     assignedAt: now,
     renewedAt: now,
     expiresAt,
+    leaseDurationMinutes: (Date.parse(expiresAt) - Date.parse(now)) / 60_000,
+    lastActivityAt: now,
+    leaseKeepers: [],
     ports: {},
   };
 }
@@ -287,7 +324,84 @@ export async function renewAssignment(
     }
     workspace.assignment!.renewedAt = renewedAt;
     workspace.assignment!.expiresAt = nextExpiry;
+    workspace.assignment!.leaseDurationMinutes =
+      (Date.parse(nextExpiry) - Date.parse(renewedAt)) / 60_000;
+    workspace.assignment!.lastActivityAt = renewedAt;
     workspace.updatedAt = renewedAt;
+    return workspace;
+  });
+}
+
+export async function beginAssignmentActivity(
+  paths: StorePaths,
+  assignmentId: string,
+  input: AssignmentActivityInput,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    const now = timestamp(input.now, "now");
+    const validUntil = timestamp(input.validUntil, "validUntil");
+    if (Date.parse(validUntil) <= Date.parse(now)) {
+      throw new Error("validUntil must be after now");
+    }
+    const keeperId = uuid(input.keeperId, "keeperId");
+    if (workspace.assignment!.leaseKeepers.some(({ id }) => id === keeperId)) {
+      throw new Error(`Lease keeper ${keeperId} is already active`);
+    }
+    workspace.assignment!.leaseKeepers = workspace.assignment!.leaseKeepers.filter(
+      (keeper) => Date.parse(keeper.validUntil) > Date.parse(now),
+    );
+    workspace.assignment!.leaseKeepers.push({ id: keeperId, heartbeatAt: now, validUntil });
+    recordActivity(workspace, now);
+    return workspace;
+  });
+}
+
+export async function refreshAssignmentActivity(
+  paths: StorePaths,
+  assignmentId: string,
+  input: AssignmentActivityInput,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    const now = timestamp(input.now, "now");
+    const validUntil = timestamp(input.validUntil, "validUntil");
+    if (Date.parse(validUntil) <= Date.parse(now)) {
+      throw new Error("validUntil must be after now");
+    }
+    const keeperId = uuid(input.keeperId, "keeperId");
+    const keeper = workspace.assignment!.leaseKeepers.find(({ id }) => id === keeperId);
+    if (!keeper) throw new Error(`Lease keeper ${keeperId} is not active`);
+    keeper.heartbeatAt = now;
+    keeper.validUntil = validUntil;
+    workspace.assignment!.leaseKeepers = workspace.assignment!.leaseKeepers.filter(
+      (candidate) => candidate.id === keeperId || Date.parse(candidate.validUntil) > Date.parse(now),
+    );
+    recordActivity(workspace, now);
+    return workspace;
+  });
+}
+
+export async function finishAssignmentActivity(
+  paths: StorePaths,
+  assignmentId: string,
+  keeperId: string,
+  now?: string,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    const completedAt = timestamp(now, "now");
+    const expectedId = uuid(keeperId, "keeperId");
+    const index = workspace.assignment!.leaseKeepers.findIndex(({ id }) => id === expectedId);
+    if (index < 0) throw new Error(`Lease keeper ${expectedId} is not active`);
+    workspace.assignment!.leaseKeepers.splice(index, 1);
+    workspace.assignment!.leaseKeepers = workspace.assignment!.leaseKeepers.filter(
+      (keeper) => Date.parse(keeper.validUntil) > Date.parse(completedAt),
+    );
+    recordActivity(workspace, completedAt);
     return workspace;
   });
 }

@@ -43,6 +43,12 @@ export interface TreeRecord {
 
 export type WorkspaceLifecycle = "available" | "preparing" | "assigned" | "returning" | "failed";
 
+export interface LeaseKeeperRecord {
+  id: string;
+  heartbeatAt: string;
+  validUntil: string;
+}
+
 export interface AssignmentRecord {
   id: string;
   owner: string;
@@ -50,6 +56,9 @@ export interface AssignmentRecord {
   assignedAt: string;
   renewedAt: string;
   expiresAt: string;
+  leaseDurationMinutes: number;
+  lastActivityAt: string;
+  leaseKeepers: LeaseKeeperRecord[];
   ports: Record<string, number>;
 }
 
@@ -88,7 +97,7 @@ export interface WorkspaceRecord {
 }
 
 export interface RukState {
-  version: 3;
+  version: 4;
   trees: Record<string, TreeRecord>;
   workspaces: Record<string, WorkspaceRecord>;
   metrics: UsageMetrics;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { withDirectoryLock } from "./lock.js";
 import type {
   AssignmentRecord,
+  LeaseKeeperRecord,
   RukState,
   StorePaths,
   TrackedProcessRecord,
@@ -84,10 +85,29 @@ function isAssignmentRecord(value: unknown): value is AssignmentRecord {
     isTimestamp(value["expiresAt"]) &&
     Date.parse(value["assignedAt"]) <= Date.parse(value["renewedAt"]) &&
     Date.parse(value["renewedAt"]) < Date.parse(value["expiresAt"]) &&
+    typeof value["leaseDurationMinutes"] === "number" &&
+    Number.isFinite(value["leaseDurationMinutes"]) &&
+    value["leaseDurationMinutes"] > 0 &&
+    isTimestamp(value["lastActivityAt"]) &&
+    Date.parse(value["assignedAt"]) <= Date.parse(value["lastActivityAt"]) &&
+    Date.parse(value["lastActivityAt"]) < Date.parse(value["expiresAt"]) &&
+    Array.isArray(value["leaseKeepers"]) &&
+    value["leaseKeepers"].every(isLeaseKeeperRecord) &&
+    new Set(value["leaseKeepers"].map((entry) => entry.id)).size === value["leaseKeepers"].length &&
     isRecord(value["ports"]) &&
     Object.entries(value["ports"]).every(
       ([name, port]) => name.length > 0 && Number.isSafeInteger(port) && (port as number) >= 1 && (port as number) <= 65_535,
     )
+  );
+}
+
+function isLeaseKeeperRecord(value: unknown): value is LeaseKeeperRecord {
+  return (
+    isRecord(value) &&
+    isUuid(value["id"]) &&
+    isTimestamp(value["heartbeatAt"]) &&
+    isTimestamp(value["validUntil"]) &&
+    Date.parse(value["heartbeatAt"]) < Date.parse(value["validUntil"])
   );
 }
 
@@ -184,17 +204,30 @@ function parseState(value: unknown, file: string): RukState {
     throw new Error(`Unsupported or invalid Ruk state in ${file}`);
   }
   if (value["version"] === 1) {
-    return { version: 3, trees: trees as Record<string, TreeRecord>, workspaces: {}, metrics: emptyMetrics() };
+    return { version: 4, trees: trees as Record<string, TreeRecord>, workspaces: {}, metrics: emptyMetrics() };
   }
-  if ((value["version"] !== 2 && value["version"] !== 3) || !isRecord(value["workspaces"])) {
+  if (![2, 3, 4].includes(value["version"] as number) || !isRecord(value["workspaces"])) {
     throw new Error(`Unsupported or invalid Ruk state in ${file}`);
   }
   const workspaces = Object.fromEntries(
     Object.entries(value["workspaces"]).map(([key, workspace]) => {
-      if (value["version"] !== 2 || !isRecord(workspace) || !isRecord(workspace["assignment"])) {
+      if (!isRecord(workspace) || !isRecord(workspace["assignment"])) {
         return [key, workspace];
       }
-      return [key, { ...workspace, assignment: { ...workspace["assignment"], ports: {} } }];
+      const assignment = workspace["assignment"];
+      const withPorts = value["version"] === 2 ? { ...assignment, ports: {} } : assignment;
+      if (value["version"] === 4) return [key, workspace];
+      const renewedAt = Date.parse(withPorts["renewedAt"] as string);
+      const expiresAt = Date.parse(withPorts["expiresAt"] as string);
+      return [key, {
+        ...workspace,
+        assignment: {
+          ...withPorts,
+          leaseDurationMinutes: (expiresAt - renewedAt) / 60_000,
+          lastActivityAt: withPorts["renewedAt"],
+          leaseKeepers: [],
+        },
+      }];
     }),
   );
   const metrics = value["version"] === 2 ? emptyMetrics() : value["metrics"];
@@ -225,7 +258,7 @@ function parseState(value: unknown, file: string): RukState {
     throw new Error(`Unsupported or invalid Ruk state in ${file}`);
   }
   return {
-    version: 3,
+    version: 4,
     trees: trees as Record<string, TreeRecord>,
     workspaces: workspaces as Record<string, WorkspaceRecord>,
     metrics,
@@ -237,7 +270,7 @@ export async function readState(paths: StorePaths): Promise<RukState> {
     return parseState(JSON.parse(await fs.readFile(paths.state, "utf8")) as unknown, paths.state);
   } catch (error) {
     if (isErrnoException(error) && error.code === "ENOENT") {
-      return { version: 3, trees: {}, workspaces: {}, metrics: emptyMetrics() };
+      return { version: 4, trees: {}, workspaces: {}, metrics: emptyMetrics() };
     }
     if (error instanceof SyntaxError) {
       throw new Error(`Cannot parse Ruk state in ${paths.state}: ${error.message}`);
