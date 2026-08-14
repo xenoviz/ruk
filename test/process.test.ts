@@ -145,6 +145,44 @@ test("process runner fails closed when attached abort cleanup cannot inspect des
   }
 });
 
+test("process runner identity-fences attached descendants before abort signaling", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-descendant-reuse-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(
+    ps,
+    "#!/bin/sh\nlast=''\nfor value in \"$@\"; do last=\"$value\"; done\nif [ \"$1\" = \"-e\" ]; then printf '%s 1 S Mon Jan  1 00:00:00 2026\\n424243 %s S Tue Jan  2 00:00:00 2026\\n' \"$RUK_LEADER_PID\" \"$RUK_LEADER_PID\"; elif [ \"$last\" = \"424243\" ]; then printf 'Wed Jan  3 00:00:00 2026\\n'; else printf 'Mon Jan  1 00:00:00 2026\\n'; fi\n",
+  );
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalLeader = process.env["RUK_LEADER_PID"];
+  process.env["PATH"] = `${root}${path.delimiter}${originalPath ?? ""}`;
+  const controller = new AbortController();
+  let childPid = 0;
+  try {
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        signal: controller.signal,
+        onSpawn: (pid) => {
+          childPid = pid;
+          process.env["RUK_LEADER_PID"] = String(pid);
+          controller.abort(new Error("heartbeat lost"));
+        },
+      }),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalLeader === undefined) delete process.env["RUK_LEADER_PID"];
+    else process.env["RUK_LEADER_PID"] = originalLeader;
+    if (childPid > 0) {
+      try { process.kill(childPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
 test("process runner retains an unverified detached group after abort", async (t) => {
   if (process.platform === "win32") return t.skip("POSIX process groups are required");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-detached-abort-"));

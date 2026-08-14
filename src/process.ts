@@ -666,24 +666,36 @@ async function terminateSpawnedProcess(pid: number, detached: boolean, expectedI
   }
   if (!expectedIdentity) throw new ProcessIdentityUnavailableError(pid);
   if (identity !== expectedIdentity) throw new ProcessIdentityUnavailableError(pid);
-  const result = await run("ps", ["-e", "-o", "pid=", "-o", "ppid=", "-o", "stat="], { allowFailure: true });
+  const result = await run(
+    "ps",
+    ["-e", "-o", "pid=", "-o", "ppid=", "-o", "stat=", "-o", "lstart="],
+    { allowFailure: true },
+  );
   if (result.code !== 0) throw new Error(`Could not enumerate POSIX processes: ${result.stderr.trim()}`);
-  const processes = result.stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
-    .filter((entry) => entry.length === 3 && !entry[2]!.startsWith("Z"))
-    .map(([rawPid, rawParent]) => ({ pid: Number(rawPid), parent: Number(rawParent) }))
-    .filter((entry) => Number.isSafeInteger(entry.pid) && Number.isSafeInteger(entry.parent));
-  const descendants: number[] = [];
+  const processes = result.stdout.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (!match || match[3]!.startsWith("Z")) return [];
+    const pid = Number(match[1]);
+    const parent = Number(match[2]);
+    return Number.isSafeInteger(pid) && Number.isSafeInteger(parent)
+      ? [{ pid, parent, startedAt: match[4]!.replace(/\s+/g, " ") }]
+      : [];
+  });
+  const descendants: typeof processes = [];
   const parents = new Set([pid]);
   while (true) {
     const children = processes.filter((entry) => parents.has(entry.parent) && !parents.has(entry.pid));
     if (children.length === 0) break;
     for (const child of children) {
       parents.add(child.pid);
-      descendants.push(child.pid);
+      descendants.push(child);
     }
   }
-  for (const childPid of descendants.reverse()) {
-    try { process.kill(childPid, "SIGKILL"); } catch (error) { if (!isMissingProcess(error)) throw error; }
+  for (const descendant of descendants.reverse()) {
+    const descendantIdentity = await freshProcessIdentity(descendant.pid);
+    if (!descendantIdentity) continue;
+    if (descendantIdentity !== descendant.startedAt) throw new ProcessIdentityUnavailableError(descendant.pid);
+    try { process.kill(descendant.pid, "SIGKILL"); } catch (error) { if (!isMissingProcess(error)) throw error; }
   }
   try {
     process.kill(pid, "SIGKILL");

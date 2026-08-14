@@ -159,6 +159,8 @@ captures its validity window only after acquiring the state lock. If stopping
 the command cannot verify the original detached leader or prove that its process
 tree is gone, Ruk preserves that cleanup failure and retains the assignment
 instead of returning the workspace to the pool.
+Attached POSIX cleanup verifies every captured descendant's start identity
+immediately before signaling it; a reused descendant PID retains the assignment.
 The heartbeat failure is still reported if operation work resolves while its
 failure hook is running; concurrent success cannot hide a lost renewal fence.
 Status reports `projection-changed` with a `ruk sync` recovery when recorded

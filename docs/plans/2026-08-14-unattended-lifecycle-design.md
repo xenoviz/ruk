@@ -145,6 +145,8 @@ the assignment fenced for recovery instead of authorizing a numeric-ID signal.
 Any termination refusal follows that path without a fallback PID signal, and an
 operation that resolves during failure-hook cleanup still reports the heartbeat
 failure.
+For attached POSIX cleanup, the process snapshot records each descendant's start
+identity and cleanup revalidates it immediately before signaling that descendant.
 
 ## Expiry and garbage collection
 
