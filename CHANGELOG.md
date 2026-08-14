@@ -5,6 +5,14 @@ versioning.
 
 ## Unreleased
 
+- Automatically renew assignments during managed commands and dependency sync,
+  using concurrent fenced keepers and observable activity timestamps.
+- Guard task commands in a shared primary checkout by default, with repository
+  `deny`, `warn`, and `allow` policies plus a one-command override.
+- Expose activity, automatic-renewal, checkout, management, and active-assignment
+  fields through status and list JSON.
+- Add a repeatable Node/Bun/Go runtime benchmark and a non-shipping Go
+  heartbeat supervisor experiment to inform, not pre-commit, a future rewrite.
 - Allow repository administrators to bypass branch rules only through pull
   requests, preventing sole-maintainer deadlock without allowing direct pushes;
   keep required CI in a separate non-bypassable ruleset.

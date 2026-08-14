@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { withDirectoryLock } from "./lock.js";
 import { availablePort, portEnvironmentName, releaseHostPorts, withHostPortRegistry } from "./ports.js";
-import { readState, treeKey, updateState } from "./state.js";
+import { primaryCheckoutLockPath, readState, treeKey, updateState } from "./state.js";
 import type {
   AssignmentRecord,
   StorePaths,
@@ -37,6 +37,20 @@ export interface AssignmentQuery {
   now?: string;
 }
 
+export interface AssignmentActivityInput {
+  keeperId: string;
+  validUntil: string;
+  now?: string;
+  lockTimeoutMs?: number;
+}
+
+export interface BeginAssignmentActivityInput {
+  keeperId: string;
+  durationMs?: number;
+  validUntil?: string;
+  now?: string;
+}
+
 export type GcCandidateReason =
   | "available"
   | "failed"
@@ -62,6 +76,34 @@ function nonempty(value: string, name: string): string {
   return value;
 }
 
+function uuid(value: string, name: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error(`${name} must be a UUID`);
+  }
+  return value;
+}
+
+function recordActivity(workspace: WorkspaceRecord, now: string): void {
+  const current = workspace.assignment!;
+  const expiresAt = new Date(
+    Date.parse(now) + current.leaseDurationMinutes * 60_000,
+  ).toISOString();
+  current.renewedAt = now;
+  current.expiresAt = expiresAt;
+  current.lastActivityAt = now;
+  workspace.updatedAt = now;
+}
+
+export function assignmentIsAutoRenewing(
+  assignmentRecord: AssignmentRecord,
+  now?: string,
+): boolean {
+  const observedAt = Date.parse(timestamp(now, "now"));
+  return assignmentRecord.leaseKeepers.some(
+    ({ validUntil }) => Date.parse(validUntil) > observedAt,
+  );
+}
+
 function assignment(input: AssignmentInput): AssignmentRecord {
   const now = timestamp(input.now, "now");
   const expiresAt = timestamp(input.expiresAt, "expiresAt");
@@ -73,6 +115,9 @@ function assignment(input: AssignmentInput): AssignmentRecord {
     assignedAt: now,
     renewedAt: now,
     expiresAt,
+    leaseDurationMinutes: (Date.parse(expiresAt) - Date.parse(now)) / 60_000,
+    lastActivityAt: now,
+    leaseKeepers: [],
     ports: {},
   };
 }
@@ -162,7 +207,7 @@ export async function reserveAvailableWorkspace(
 ): Promise<WorkspaceRecord | null> {
   const requestedKey = workspacePath === undefined ? undefined : treeKey(path.resolve(workspacePath));
   return withDirectoryLock(path.join(paths.root, "warm.lock"), () =>
-    updateState(paths, (state) => {
+    withDirectoryLock(primaryCheckoutLockPath(paths), () => updateState(paths, (state) => {
       const workspace = Object.values(state.workspaces)
         .filter(
           (entry) =>
@@ -177,7 +222,7 @@ export async function reserveAvailableWorkspace(
         )[0];
       if (!workspace) return null;
       return assign(workspace, input, crypto.randomUUID());
-    }));
+    })));
 }
 
 export async function markWorkspaceAssigned(
@@ -186,14 +231,14 @@ export async function markWorkspaceAssigned(
   operationId: string,
   input: AssignmentInput,
 ): Promise<WorkspaceRecord> {
-  return updateState(paths, (state) => {
+  return withDirectoryLock(primaryCheckoutLockPath(paths), () => updateState(paths, (state) => {
     const resolved = path.resolve(workspacePath);
     const workspace = state.workspaces[treeKey(resolved)];
     if (!workspace) throw new Error(`Workspace ${resolved} is not managed`);
     requireLifecycle(workspace, "preparing");
     if (workspace.operationId !== operationId) throw new Error("Preparation operation does not match");
     return assign(workspace, input, crypto.randomUUID());
-  });
+  }));
 }
 
 export async function recordSuccessfulAcquisition(
@@ -211,6 +256,24 @@ export async function recordSuccessfulAcquisition(
     workspace.updatedAt = timestamp(now, "now");
     state.metrics.acquisitions += 1;
     if (reused) state.metrics.workspaceReuses += 1;
+    return workspace;
+  });
+}
+
+export async function retainAssignmentAfterAcquisitionFailure(
+  paths: StorePaths,
+  assignmentId: string,
+  operationId: string,
+  failure: string,
+  now?: string,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    if (workspace.operationId !== operationId) throw new Error("Acquisition operation does not match");
+    workspace.operationId = null;
+    workspace.failure = nonempty(failure, "failure");
+    workspace.updatedAt = timestamp(now, "now");
     return workspace;
   });
 }
@@ -287,7 +350,114 @@ export async function renewAssignment(
     }
     workspace.assignment!.renewedAt = renewedAt;
     workspace.assignment!.expiresAt = nextExpiry;
+    workspace.assignment!.leaseDurationMinutes =
+      (Date.parse(nextExpiry) - Date.parse(renewedAt)) / 60_000;
+    workspace.assignment!.lastActivityAt = renewedAt;
     workspace.updatedAt = renewedAt;
+    return workspace;
+  });
+}
+
+export async function beginAssignmentActivity(
+  paths: StorePaths,
+  assignmentId: string,
+  input: BeginAssignmentActivityInput,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    const observedAt = timestamp(input.now, "now");
+    if (input.durationMs !== undefined && (!Number.isFinite(input.durationMs) || input.durationMs <= 0)) {
+      throw new Error("durationMs must be positive and finite");
+    }
+    if (input.durationMs === undefined && input.validUntil === undefined) {
+      throw new Error("validUntil or durationMs is required");
+    }
+    const requestedValidUntil = input.durationMs === undefined
+      ? timestamp(input.validUntil, "validUntil")
+      : new Date(Date.parse(observedAt) + input.durationMs).toISOString();
+    if (Date.parse(requestedValidUntil) <= Date.parse(observedAt)) {
+      throw new Error("validUntil must be after now");
+    }
+    const current = workspace.assignment!;
+    const lockedAt = input.durationMs === undefined ? observedAt : timestamp(undefined, "now");
+    const now = new Date(Math.max(
+      Date.parse(observedAt),
+      Date.parse(lockedAt),
+      Date.parse(current.renewedAt),
+    )).toISOString();
+    const validUntil = new Date(
+      Date.parse(now) + Date.parse(requestedValidUntil) - Date.parse(observedAt),
+    ).toISOString();
+    const keeperId = uuid(input.keeperId, "keeperId");
+    if (current.leaseKeepers.some(({ id }) => id === keeperId)) {
+      throw new Error(`Lease keeper ${keeperId} is already active`);
+    }
+    current.leaseKeepers = current.leaseKeepers.filter(
+      (keeper) => Date.parse(keeper.validUntil) > Date.parse(now),
+    );
+    current.leaseKeepers.push({ id: keeperId, heartbeatAt: now, validUntil });
+    recordActivity(workspace, now);
+    return workspace;
+  });
+}
+
+export async function refreshAssignmentActivity(
+  paths: StorePaths,
+  assignmentId: string,
+  input: AssignmentActivityInput,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    const observedAt = timestamp(input.now, "now");
+    const requestedValidUntil = timestamp(input.validUntil, "validUntil");
+    if (Date.parse(requestedValidUntil) <= Date.parse(observedAt)) {
+      throw new Error("validUntil must be after now");
+    }
+    const current = workspace.assignment!;
+    const now = Date.parse(observedAt) < Date.parse(current.renewedAt)
+      ? current.renewedAt
+      : observedAt;
+    const effectiveValidUntil = new Date(
+      Date.parse(now) + Date.parse(requestedValidUntil) - Date.parse(observedAt),
+    ).toISOString();
+    const keeperId = uuid(input.keeperId, "keeperId");
+    const keeper = current.leaseKeepers.find(({ id }) => id === keeperId);
+    if (!keeper) throw new Error(`Lease keeper ${keeperId} is not active`);
+    keeper.heartbeatAt = now;
+    keeper.validUntil = Date.parse(effectiveValidUntil) < Date.parse(keeper.validUntil)
+      ? keeper.validUntil
+      : effectiveValidUntil;
+    current.leaseKeepers = current.leaseKeepers.filter(
+      (candidate) => candidate.id === keeperId || Date.parse(candidate.validUntil) > Date.parse(now),
+    );
+    recordActivity(workspace, now);
+    return workspace;
+  }, input.lockTimeoutMs === undefined ? undefined : { timeoutMs: input.lockTimeoutMs });
+}
+
+export async function finishAssignmentActivity(
+  paths: StorePaths,
+  assignmentId: string,
+  keeperId: string,
+  now?: string,
+): Promise<WorkspaceRecord> {
+  return updateState(paths, (state) => {
+    const workspace = findByAssignment(state.workspaces, assignmentId);
+    requireLifecycle(workspace, "assigned");
+    const observedAt = timestamp(now, "now");
+    const completedAt = Date.parse(observedAt) < Date.parse(workspace.assignment!.renewedAt)
+      ? workspace.assignment!.renewedAt
+      : observedAt;
+    const expectedId = uuid(keeperId, "keeperId");
+    const index = workspace.assignment!.leaseKeepers.findIndex(({ id }) => id === expectedId);
+    if (index < 0) throw new Error(`Lease keeper ${expectedId} is not active`);
+    workspace.assignment!.leaseKeepers.splice(index, 1);
+    workspace.assignment!.leaseKeepers = workspace.assignment!.leaseKeepers.filter(
+      (keeper) => Date.parse(keeper.validUntil) > Date.parse(completedAt),
+    );
+    recordActivity(workspace, completedAt);
     return workspace;
   });
 }
@@ -474,7 +644,8 @@ export async function identifyGcCandidates(
 ): Promise<GcCandidate[]> {
   const state = await readState(paths);
   const cutoff = Date.parse(timestamp(olderThan, "olderThan"));
-  const currentTime = Date.parse(timestamp(now, "now"));
+  const current = timestamp(now, "now");
+  const currentTime = Date.parse(current);
   const candidates: GcCandidate[] = [];
   for (const workspace of Object.values(state.workspaces)) {
     if (
@@ -512,7 +683,8 @@ export async function identifyGcCandidates(
       candidates.push({ workspace, reason: "failed", requiresForce: false });
     } else if (
       workspace.assignment &&
-      Date.parse(workspace.assignment.expiresAt) <= currentTime
+      Date.parse(workspace.assignment.expiresAt) <= currentTime &&
+      !assignmentIsAutoRenewing(workspace.assignment, current)
     ) {
       candidates.push({ workspace, reason: "expired-assignment", requiresForce: true });
     }

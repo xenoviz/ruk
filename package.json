@@ -24,6 +24,7 @@
     "docs:build": "bun run docs:typecheck && vitepress build website",
     "docs:preview": "vitepress preview website",
     "pack:check": "bun run build && bun scripts/verify-pack.ts",
+    "benchmark:runtime": "bun run build && bun run binary:build && bun scripts/benchmark-runtime.ts",
     "repo:protect": "bun scripts/configure-repository.ts --apply",
     "prepack": "bun run build"
   },

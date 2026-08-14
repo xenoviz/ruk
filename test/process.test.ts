@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   commandExists,
+  createBoundedIdentityProbe,
   killProcessTree,
   processIdentity,
   requireProcessIdentity,
@@ -12,6 +13,91 @@ import {
   terminateTrackedProcess,
   trackedProcessExists,
 } from "../src/process.js";
+
+test("process identity probes batch requests and serialize subprocess work", async () => {
+  let active = 0;
+  let maxActive = 0;
+  let probeCount = 0;
+  let releaseFirst: (() => void) | undefined;
+  const firstProbeBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const probe = createBoundedIdentityProbe(async (pids) => {
+    probeCount += 1;
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    if (probeCount === 1) await firstProbeBlocked;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    return new Map(pids.map((pid) => [pid, `identity-${pid}`]));
+  }, { cacheDurationMs: 1_000, maxCacheEntries: 128, maxBatchSize: 64 });
+
+  const firstBatch = Array.from({ length: 64 }, (_, pid) => probe(pid + 1));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const secondBatch = Array.from({ length: 64 }, (_, pid) => probe(pid + 65));
+  releaseFirst!();
+  const identities = await Promise.all([...firstBatch, ...secondBatch]);
+
+  assert.equal(identities.length, 128);
+  assert.equal(maxActive, 1);
+  assert.equal(probeCount, 2);
+  assert.equal(await probe(1), "identity-1");
+  assert.equal(probeCount, 2);
+  assert.equal(await probe(1, true), "identity-1");
+  assert.equal(probeCount, 3);
+
+  let reusedIdentity: string | null = null;
+  const reused = createBoundedIdentityProbe(async (pids) =>
+    new Map(pids.map((pid) => [pid, reusedIdentity]))
+  );
+  assert.equal(await reused(200), null);
+  reusedIdentity = "reused-200";
+  const fresh = reused(200, true);
+  assert.deepEqual(await Promise.all([fresh, reused(200)]), ["reused-200", "reused-200"]);
+});
+
+test("process identity probe failures reject a batch and allow a later retry", async () => {
+  let attempts = 0;
+  const probe = createBoundedIdentityProbe(async (pids) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("identity lookup failed");
+    return new Map(pids.map((pid) => [pid, `identity-${pid}`]));
+  });
+
+  await assert.rejects(Promise.all([probe(1), probe(2)]), /identity lookup failed/);
+  assert.equal(await probe(1), "identity-1");
+  assert.equal(attempts, 2);
+
+  let missingAttempts = 0;
+  const missing = createBoundedIdentityProbe(async (pids) => {
+    missingAttempts += 1;
+    return new Map(pids.map((pid) => [pid, null]));
+  }, { cacheNull: false });
+  assert.equal(await missing(3), null);
+  assert.equal(await missing(3), null);
+  assert.equal(missingAttempts, 2);
+});
+
+test("a process identity subprocess does not recursively identify itself", async (t) => {
+  if (process.platform === "win32") return t.skip("the bounded PowerShell path is covered on Windows CI");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-identity-probe-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const countFile = path.join(root, "count");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nprintf '1\\n' >> \"$RUK_PROBE_COUNT\"\nprintf 'Fri Aug 14 12:00:00 2026\\n'\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalCount = process.env["RUK_PROBE_COUNT"];
+  process.env["PATH"] = root;
+  process.env["RUK_PROBE_COUNT"] = countFile;
+  try {
+    assert.equal(await processIdentity(2_000_000_000 - process.pid), "Fri Aug 14 12:00:00 2026");
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalCount === undefined) delete process.env["RUK_PROBE_COUNT"];
+    else process.env["RUK_PROBE_COUNT"] = originalCount;
+  }
+  assert.equal((await fs.readFile(countFile, "utf8")).trim(), "1");
+});
 
 test("process runner captures output and preserves non-zero results when requested", async () => {
   const success = await run(process.execPath, ["-e", "process.stdout.write('ok')"]);
@@ -25,6 +111,257 @@ test("process runner captures output and preserves non-zero results when request
     run(process.execPath, ["-e", "process.stderr.write('bad');process.exit(7)"]),
     /exit code 7: bad/,
   );
+});
+
+test("process runner terminates a managed child when its abort signal fires", async () => {
+  const controller = new AbortController();
+  const running = run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: process.platform !== "win32",
+    signal: controller.signal,
+    onSpawn: () => controller.abort(new Error("heartbeat lost")),
+  });
+  await assert.rejects(running, /heartbeat lost|cannot be released safely/);
+});
+
+test("process runner fails closed when attached abort cleanup cannot inspect descendants", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-abort-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  const controller = new AbortController();
+  try {
+    const running = run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      signal: controller.signal,
+      onSpawn: () => controller.abort(new Error("heartbeat lost")),
+    });
+    await assert.rejects(running, /cannot be released safely/);
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+  }
+});
+
+test("process runner identity-fences attached descendants before abort signaling", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-descendant-reuse-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(
+    ps,
+    "#!/bin/sh\nlast=''\nfor value in \"$@\"; do last=\"$value\"; done\nif [ \"$1\" = \"-e\" ]; then printf '%s 1 S Mon Jan  1 00:00:00 2026\\n424243 %s S Tue Jan  2 00:00:00 2026\\n' \"$RUK_LEADER_PID\" \"$RUK_LEADER_PID\"; elif [ \"$last\" = \"424243\" ]; then printf 'Wed Jan  3 00:00:00 2026\\n'; else printf 'Mon Jan  1 00:00:00 2026\\n'; fi\n",
+  );
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalLeader = process.env["RUK_LEADER_PID"];
+  process.env["PATH"] = `${root}${path.delimiter}${originalPath ?? ""}`;
+  const controller = new AbortController();
+  let childPid = 0;
+  try {
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        signal: controller.signal,
+        onSpawn: (pid) => {
+          childPid = pid;
+          process.env["RUK_LEADER_PID"] = String(pid);
+          controller.abort(new Error("heartbeat lost"));
+        },
+      }),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalLeader === undefined) delete process.env["RUK_LEADER_PID"];
+    else process.env["RUK_LEADER_PID"] = originalLeader;
+    if (childPid > 0) {
+      try { process.kill(childPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
+test("process runner rechecks an attached leader before abort signaling", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process identities are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-leader-reuse-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const countFile = path.join(root, "count");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(
+    ps,
+    "#!/bin/sh\nif [ \"$1\" = \"-e\" ]; then printf '%s 1 S Mon Jan  1 00:00:00 2026\\n' \"$RUK_LEADER_PID\"; exit 0; fi\ncount=0\nif [ -f \"$RUK_PROBE_COUNT\" ]; then read count < \"$RUK_PROBE_COUNT\"; fi\ncount=$((count+1))\nprintf '%s' \"$count\" > \"$RUK_PROBE_COUNT\"\nif [ \"$count\" -lt 3 ]; then printf 'Mon Jan  1 00:00:00 2026\\n'; else printf 'Tue Jan  2 00:00:00 2026\\n'; fi\n",
+  );
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalCount = process.env["RUK_PROBE_COUNT"];
+  const originalLeader = process.env["RUK_LEADER_PID"];
+  process.env["PATH"] = `${root}${path.delimiter}${originalPath ?? ""}`;
+  process.env["RUK_PROBE_COUNT"] = countFile;
+  const controller = new AbortController();
+  let childPid = 0;
+  try {
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        signal: controller.signal,
+        onSpawn: (pid) => {
+          childPid = pid;
+          process.env["RUK_LEADER_PID"] = String(pid);
+          controller.abort(new Error("heartbeat lost"));
+        },
+      }),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalCount === undefined) delete process.env["RUK_PROBE_COUNT"];
+    else process.env["RUK_PROBE_COUNT"] = originalCount;
+    if (originalLeader === undefined) delete process.env["RUK_LEADER_PID"];
+    else process.env["RUK_LEADER_PID"] = originalLeader;
+    if (childPid > 0) {
+      try { process.kill(childPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
+test("process runner retains a live attached descendant when its identity is unreadable", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-descendant-unreadable-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const descendantFile = path.join(root, "descendant.pid");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(
+    ps,
+    "#!/bin/sh\nlast=''\nfor value in \"$@\"; do last=\"$value\"; done\nif [ \"$1\" = \"-e\" ]; then printf '%s 1 S Mon Jan  1 00:00:00 2026\\n%s %s S Tue Jan  2 00:00:00 2026\\n' \"$RUK_LEADER_PID\" \"$RUK_DESCENDANT_PID\" \"$RUK_LEADER_PID\"; elif [ \"$last\" = \"$RUK_DESCENDANT_PID\" ]; then exit 1; else printf 'Mon Jan  1 00:00:00 2026\\n'; fi\n",
+  );
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalLeader = process.env["RUK_LEADER_PID"];
+  const originalDescendant = process.env["RUK_DESCENDANT_PID"];
+  process.env["PATH"] = `${root}${path.delimiter}${originalPath ?? ""}`;
+  const controller = new AbortController();
+  let leaderPid = 0;
+  let descendantPid = 0;
+  try {
+    await assert.rejects(
+      run(
+        process.execPath,
+        [
+          "-e",
+          `const{spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(descendantFile)},String(child.pid));setInterval(()=>{},1000)`,
+        ],
+        {
+          signal: controller.signal,
+          onSpawn: async (pid) => {
+            leaderPid = pid;
+            process.env["RUK_LEADER_PID"] = String(pid);
+            for (let attempt = 0; attempt < 100 && descendantPid === 0; attempt += 1) {
+              try { descendantPid = Number(await fs.readFile(descendantFile, "utf8")); } catch {}
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            assert.ok(descendantPid > 0);
+            process.env["RUK_DESCENDANT_PID"] = String(descendantPid);
+            controller.abort(new Error("heartbeat lost"));
+          },
+        },
+      ),
+      /cannot be released safely/,
+    );
+    process.kill(descendantPid, 0);
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalLeader === undefined) delete process.env["RUK_LEADER_PID"];
+    else process.env["RUK_LEADER_PID"] = originalLeader;
+    if (originalDescendant === undefined) delete process.env["RUK_DESCENDANT_PID"];
+    else process.env["RUK_DESCENDANT_PID"] = originalDescendant;
+    if (descendantPid > 0) {
+      try { process.kill(descendantPid, "SIGKILL"); } catch {}
+    }
+    if (leaderPid > 0) {
+      try { process.kill(leaderPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
+test("process runner retains an unverified detached group after abort", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process groups are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-detached-abort-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  const controller = new AbortController();
+  let childPid = 0;
+  try {
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        signal: controller.signal,
+        onSpawn: (pid) => {
+          childPid = pid;
+          controller.abort(new Error("heartbeat lost"));
+        },
+      }),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (childPid > 0) {
+      try { process.kill(-childPid, "SIGKILL"); } catch {}
+    }
+  }
+});
+
+test("process runner does not signal a detached PID after its identity changes", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process groups are required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-reused-abort-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const countFile = path.join(root, "count");
+  const ps = path.join(root, "ps");
+  await fs.writeFile(
+    ps,
+    "#!/bin/sh\ncount=0\nif [ -f \"$RUK_PROBE_COUNT\" ]; then read count < \"$RUK_PROBE_COUNT\"; fi\ncount=$((count+1))\nprintf '%s' \"$count\" > \"$RUK_PROBE_COUNT\"\nif [ \"$count\" -eq 1 ]; then printf 'Mon Jan  1 00:00:00 2026\\n'; else printf 'Tue Jan  2 00:00:00 2026\\n'; fi\n",
+  );
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  const originalCount = process.env["RUK_PROBE_COUNT"];
+  process.env["PATH"] = `${root}${path.delimiter}${originalPath ?? ""}`;
+  process.env["RUK_PROBE_COUNT"] = countFile;
+  const controller = new AbortController();
+  let childPid = 0;
+  try {
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        signal: controller.signal,
+        onSpawn: async (pid) => {
+          childPid = pid;
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            try {
+              if (Number(await fs.readFile(countFile, "utf8")) >= 1) break;
+            } catch {}
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+          controller.abort(new Error("heartbeat lost"));
+        },
+      }),
+      /cannot be released safely/,
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    if (originalCount === undefined) delete process.env["RUK_PROBE_COUNT"];
+    else process.env["RUK_PROBE_COUNT"] = originalCount;
+    if (childPid > 0) {
+      try { process.kill(-childPid, "SIGKILL"); } catch {}
+    }
+  }
 });
 
 test("command detection recognizes the active Node executable", async () => {
@@ -95,7 +432,7 @@ test("process runner terminates a child when tracking registration fails", async
   );
 });
 
-test("process runner terminates a detached group after its leader exits before registration fails", async (t) => {
+test("process runner retains a detached group when its leader cannot be identity-fenced", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-detached-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const workerFile = path.join(root, "worker.pid");
@@ -108,10 +445,10 @@ test("process runner terminates a detached group after its leader exits before r
   const workerScript = process.platform === "win32"
     ? "setInterval(()=>{},1000)"
     : `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(survivedFile)},'1'),500);setInterval(()=>{},1000)`;
+  let launcherPid = 0;
   let workerPid = 0;
   const originalPath = process.env["PATH"];
   if (process.platform !== "win32") process.env["PATH"] = root;
-  const expectedFailure = process.platform === "win32" ? /cannot be released safely/ : /tracking failed/;
   try {
     await assert.rejects(
       run(
@@ -123,6 +460,7 @@ test("process runner terminates a detached group after its leader exits before r
         {
           detached: true,
           onSpawn: async (pid) => {
+            launcherPid = pid;
             for (let attempt = 0; attempt < 100 && workerPid === 0; attempt += 1) {
               try { workerPid = Number(await fs.readFile(workerFile, "utf8")); } catch {}
               await new Promise((resolve) => setTimeout(resolve, 10));
@@ -136,7 +474,7 @@ test("process runner terminates a detached group after its leader exits before r
           },
         },
       ),
-      expectedFailure,
+      /cannot be released safely/,
     );
   } finally {
     if (process.platform !== "win32") {
@@ -151,7 +489,8 @@ test("process runner terminates a detached group after its leader exits before r
     await killProcessTree(workerPid, true, identity);
   } else {
     await new Promise((resolve) => setTimeout(resolve, 750));
-    await assert.rejects(fs.access(survivedFile), { code: "ENOENT" });
+    await fs.access(survivedFile);
+    try { process.kill(-launcherPid, "SIGKILL"); } catch {}
   }
 });
 

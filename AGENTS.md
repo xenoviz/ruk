@@ -11,12 +11,12 @@ cd <returned-path>
 ruk run -- <command> [args...]
 ruk sync --json
 ruk status --json
-ruk renew <returned-assignmentId> --json
 ruk release <returned-assignmentId> --json
 ```
 
-Renew before `expiresAt` when work continues. Release the exact assignment ID
-when finished; never infer an assignment from a path. See
+Managed Ruk operations renew automatically while active. Explicitly renew long
+idle work outside those operations. Release the exact assignment ID when
+finished; never infer an assignment from a path. See
 [docs/agent-interface.md](docs/agent-interface.md) for the JSON contract and
 [the lifecycle design](docs/plans/2026-08-03-workspace-lifecycle-design.md) for
 safety boundaries.

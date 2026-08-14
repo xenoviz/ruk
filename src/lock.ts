@@ -124,7 +124,8 @@ export async function withDirectoryLock<T>(
       if (Date.now() - started > timeoutMs) {
         throw new Error(`Timed out waiting for lock ${lockPath}`);
       }
-      await delay(150 + Math.floor(Math.random() * 150));
+      const remaining = timeoutMs - (Date.now() - started);
+      await delay(Math.max(1, Math.min(150 + Math.floor(Math.random() * 150), remaining)));
     }
   }
 

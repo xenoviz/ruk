@@ -1,14 +1,52 @@
-import { ProcessIdentityUnavailableError } from "./process.js";
+import { containsAssignmentActivityError } from "./activity.js";
+import { SharedCheckoutError } from "./checkout.js";
+import { containsProcessIdentityUnavailableError } from "./process.js";
 
 export interface ErrorRecord {
   status: "error";
   code: string;
   message: string;
   retryable: boolean;
+  activeAssignments?: number;
+  assignmentId?: string;
+  path?: string;
+  expiresAt?: string;
+  recovery?: string;
 }
 
 export class DependencyPreparationError extends Error {
   override readonly name = "DependencyPreparationError";
+}
+
+export class RetainedAssignmentError extends Error {
+  override readonly name = "RetainedAssignmentError";
+  readonly assignmentId: string;
+  readonly path: string;
+  readonly expiresAt: string;
+
+  constructor(
+    assignmentId: string,
+    path: string,
+    expiresAt: string,
+    cause: unknown,
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Assignment ${assignmentId} retained at ${path}: ${detail}`, { cause });
+    this.assignmentId = assignmentId;
+    this.path = path;
+    this.expiresAt = expiresAt;
+  }
+}
+
+export function retainedAssignmentFailure(
+  assignmentId: string,
+  path: string,
+  expiresAt: string,
+  error: unknown,
+): RetainedAssignmentError | null {
+  return containsProcessIdentityUnavailableError(error)
+    ? new RetainedAssignmentError(assignmentId, path, expiresAt, error)
+    : null;
 }
 
 const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
@@ -25,11 +63,35 @@ const CATEGORIES: ReadonlyArray<readonly [RegExp, string, boolean]> = [
 
 export function errorRecord(error: unknown): ErrorRecord {
   const message = error instanceof Error ? error.message : String(error);
-  const match = error instanceof DependencyPreparationError
-    ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
-    : error instanceof ProcessIdentityUnavailableError
-      ? [/.*/, "RESOURCE_BUSY", true] as const
-      : CATEGORIES.find(([pattern]) => pattern.test(message));
+  if (error instanceof RetainedAssignmentError) {
+    return {
+      status: "error",
+      code: "RESOURCE_BUSY",
+      message,
+      retryable: true,
+      assignmentId: error.assignmentId,
+      path: error.path,
+      expiresAt: error.expiresAt,
+      recovery: `ruk release ${error.assignmentId}`,
+    };
+  }
+  if (error instanceof SharedCheckoutError) {
+    return {
+      status: "error",
+      code: "RESOURCE_BUSY",
+      message,
+      retryable: true,
+      activeAssignments: error.activeAssignments,
+      recovery: error.recovery,
+    };
+  }
+  const match = containsAssignmentActivityError(error)
+    ? [/.*/, "RESOURCE_BUSY", true] as const
+    : error instanceof DependencyPreparationError
+      ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
+      : containsProcessIdentityUnavailableError(error)
+        ? [/.*/, "RESOURCE_BUSY", true] as const
+        : CATEGORIES.find(([pattern]) => pattern.test(message));
   return {
     status: "error",
     code: match?.[1] ?? "OPERATION_FAILED",

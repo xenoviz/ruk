@@ -34,7 +34,7 @@ test("statistics aggregate counters and estimate repeated linked content", async
   };
   const metrics = { ...emptyMetrics(), acquisitions: 4, workspaceReuses: 3, preparations: 2, preparationSkips: 2, totalPreparationMs: 30 };
   const state: RukState = {
-    version: 3,
+    version: 4,
     metrics,
     workspaces: { [treeKey(workspace)]: record },
     trees: {
@@ -64,6 +64,9 @@ test("statistics aggregate counters and estimate repeated linked content", async
     assignedAt: now,
     renewedAt: now,
     expiresAt: new Date(1).toISOString(),
+    leaseDurationMinutes: 1 / 60_000,
+    lastActivityAt: now,
+    leaseKeepers: [],
     ports: {},
   };
   assert.equal(usageStatistics(state).activeAssignments, 1);
@@ -86,9 +89,15 @@ test("disk statistics tolerate unreadable linked targets", async (t) => {
   await fs.writeFile(path.join(target, "index.js"), "content");
   await fs.symlink(target, path.join(workspace, "node_modules", "unreadable"), "dir");
   await fs.chmod(target, 0);
+  try {
+    await fs.access(target);
+    return t.skip("the current user can bypass POSIX permissions");
+  } catch {
+    // The target is genuinely unreadable for this process.
+  }
   const now = new Date(0).toISOString();
   const state: RukState = {
-    version: 3,
+    version: 4,
     metrics: emptyMetrics(),
     workspaces: {
       [treeKey(workspace)]: {
@@ -140,7 +149,7 @@ test("disk statistics count nested linked targets once", async (t) => {
   await fs.symlink(child, path.join(workspace, "node_modules", "child"), type);
   const now = new Date(0).toISOString();
   const state: RukState = {
-    version: 3,
+    version: 4,
     metrics: emptyMetrics(),
     workspaces: {
       [treeKey(workspace)]: {

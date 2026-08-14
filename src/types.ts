@@ -1,11 +1,13 @@
 import type { StdioOptions } from "node:child_process";
 
 export type DependencyMode = "managed" | "shared";
+export type SharedCheckoutPolicy = "deny" | "warn" | "allow";
 export type PackageManagerName = "bun" | "pnpm" | "npm" | "yarn" | string;
 
 export interface RukConfig {
   installCommand: string[] | null;
   dependencyMode: DependencyMode | null;
+  sharedCheckoutPolicy: SharedCheckoutPolicy;
 }
 
 export interface PackageManager {
@@ -18,6 +20,8 @@ export interface PackageManager {
 export interface Repository {
   root: string;
   commonDir: string;
+  primaryRoot: string;
+  primaryCheckout: boolean;
 }
 
 export interface DependencyReporter {
@@ -43,6 +47,12 @@ export interface TreeRecord {
 
 export type WorkspaceLifecycle = "available" | "preparing" | "assigned" | "returning" | "failed";
 
+export interface LeaseKeeperRecord {
+  id: string;
+  heartbeatAt: string;
+  validUntil: string;
+}
+
 export interface AssignmentRecord {
   id: string;
   owner: string;
@@ -50,6 +60,9 @@ export interface AssignmentRecord {
   assignedAt: string;
   renewedAt: string;
   expiresAt: string;
+  leaseDurationMinutes: number;
+  lastActivityAt: string;
+  leaseKeepers: LeaseKeeperRecord[];
   ports: Record<string, number>;
 }
 
@@ -88,7 +101,7 @@ export interface WorkspaceRecord {
 }
 
 export interface RukState {
-  version: 3;
+  version: 4;
   trees: Record<string, TreeRecord>;
   workspaces: Record<string, WorkspaceRecord>;
   metrics: UsageMetrics;

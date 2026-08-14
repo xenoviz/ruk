@@ -78,8 +78,10 @@ the operating system to terminate.
 ## Status and list
 
 `ruk status --json` and each item from `ruk list --json` include `lifecycle`,
-`assignmentId`, and `expiresAt`. Assignment fields are `null` when no assignment
-is active.
+`assignmentId`, `expiresAt`, `lastActivityAt`, `autoRenewing`,
+`primaryCheckout`, `managed`, and `activeAssignments`. Assignment timestamps
+are `null` when no assignment is active. `autoRenewing` is derived from current
+fenced keepers rather than stored as a durable status.
 
 ## Failure behavior
 
@@ -97,3 +99,6 @@ writes one error record to stderr:
 
 Use `code` for decisions and `message` for operators. Unknown codes must be
 treated as `OPERATION_FAILED`.
+
+A denied shared-checkout command reports `RESOURCE_BUSY`, sets `retryable` to
+`true`, and also includes `activeAssignments` and `recovery`.

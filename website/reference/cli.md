@@ -5,12 +5,15 @@
 ### `ruk init [--json]`
 
 Prepare dependencies in the current worktree. `init` and `sync` have the same
-behavior.
+dependency behavior, but `init` remains available when the primary checkout is
+acting as a control location.
 
-### `ruk sync [--json]`
+### `ruk sync [--allow-shared-checkout] [--json]`
 
 Recompute the dependency fingerprint and prepare the current worktree when its
 record or local dependency projection is stale.
+Inside an assignment, sync renews the lease while preparation remains active.
+In a shared primary checkout it follows `sharedCheckoutPolicy`.
 
 ### `ruk create <branch>`
 
@@ -33,6 +36,7 @@ Assign an available managed workspace or create one. The default TTL is 480
 minutes. `--fetch` refreshes the remote used by `--from` before assignment.
 Without `--from`, it resolves the primary remote's advertised default branch.
 Repeated `--port` options reserve named cooperative host-local ports.
+The TTL is the idle window; managed operations renew it while active.
 
 ### `ruk renew <assignment-id>`
 
@@ -53,10 +57,12 @@ recorded processes and discard worktree changes.
 
 ## Run and inspect
 
-### `ruk run -- <command>`
+### `ruk run [--allow-shared-checkout] -- <command>`
 
 Ensure dependencies are ready, launch the command, and return its exit code.
 Inside an assigned workspace, Ruk records the child process for release.
+It also renews the assignment while the command is active. In a shared primary
+checkout it follows `sharedCheckoutPolicy`.
 The separator remains recommended. Ruk also accepts the command without it for
 PowerShell npm shims that consume a standalone `--`.
 
@@ -88,11 +94,14 @@ Capacity checks are serialized with acquisition.
 
 Report dependency readiness and lifecycle state for the current worktree.
 Readiness reasons distinguish an unprepared workspace, missing dependency
-projection, and changed fingerprint.
+projection, and changed fingerprint. JSON output also reports observed activity,
+automatic renewal, primary-checkout identity, management state, and the active
+assignment count.
 
 ### `ruk list [--json]`
 
-List Git worktrees with Ruk preparation and assignment information.
+List Git worktrees with Ruk preparation, assignment, activity, and
+primary-checkout information.
 
 ### `ruk stats [--disk] [--json]`
 

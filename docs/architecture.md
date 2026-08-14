@@ -62,6 +62,8 @@ Ruk has five deliberately separate concerns:
 6. `ports.js` performs short-lived OS port probes, coordinates a host-level
    reservation registry, and maps names into environment variables.
 7. `statistics.js` derives aggregate and optional on-demand disk measurements.
+8. `activity.js` owns assignment heartbeat timing and keeper cleanup.
+9. `checkout.js` owns primary-checkout sharing policy and diagnostics.
 
 `cli.js` composes these modules. Business rules should remain in the closest
 module instead of accumulating in the CLI.
@@ -86,16 +88,23 @@ module instead of accumulating in the CLI.
   held sockets.
 - Metrics are bounded counters; ordinary commands never append an event log or
   scan workspace disk usage.
+- Only observed Ruk operations renew leases. Ruk does not infer activity from
+  filesystem timestamps or keep an always-running daemon.
+- Task commands refuse a shared primary checkout while assignments are active
+  unless repository policy or an explicit command override permits it. A
+  repository-wide primary-checkout fence serializes deny-mode task execution
+  with assignment publication, so the guard cannot pass on a stale snapshot.
 
 ## State
 
-Version 3 state is stored in `<git-common-dir>/ruk/state.json`, so linked worktrees share
+Version 4 state is stored in `<git-common-dir>/ruk/state.json`, so linked worktrees share
 metadata without committing it. Per-workspace preparation locks and the state
 lock live beside it.
 
-Loading migrates version 1 preparation records and version 2 lifecycle records
-in memory. Existing assignment IDs, ownership, expiry, and process records stay
-intact; new port maps and aggregate metrics receive empty defaults.
+Loading migrates version 1 through version 3 records in memory. Existing
+assignment IDs, ownership, expiry, and process records stay intact. Version 4
+adds the lease duration, last observed activity, and fenced lease keepers needed
+for automatic renewal.
 
 State is an optimization, not source of truth. Git and the dependency
 fingerprint remain authoritative. Invalid state fails visibly rather than being
@@ -115,13 +124,37 @@ absent -> preparing -> assigned -> returning -> available
 Each assignment has an immutable assignment ID so delayed automation cannot
 return a workspace that has since been reassigned. Leases expire for reporting;
 reclaiming expired assignments requires an explicit forced GC operation.
+Managed `run`, `exec`, `shell`, and assigned `sync` operations register a
+short-lived keeper and renew from the assignment's stored lease duration while
+work continues. Multiple keepers can coexist, and each removes only its own
+fenced record. A lost keeper stops its tracked command rather than allowing
+cleanup to race an unowned process. Initial keeper time is captured only after
+the state lock is acquired, and heartbeat timestamps are monotonic inside the
+transaction, so lock contention or a delayed refresh cannot publish an expired
+keeper, shorten expiry, or overwrite a newer explicit renewal.
+Keeper completion uses the same monotonic fence, so wall-clock rollback cannot
+move activity or expiry behind the latest heartbeat or explicit renewal.
 Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. Leaderless POSIX process groups fail
 closed because their numeric IDs can be reused.
+Command completion bypasses the short-lived identity cache before removing its
+process record, so a recently exited child cannot remain falsely active.
 Windows registration cleanup terminates the new process tree only with a verified
 leader identity and otherwise retains ownership while descendants remain or the
 leader PID is reused.
+Abort cleanup follows the same fail-closed rule for attached children and
+detached groups. If the original leader identity or surviving descendants
+cannot be verified, or any termination safety check refuses the signal, the
+process is retained without a fallback PID signal. The cleanup error is
+preserved with the heartbeat failure, and automatic release retains the assignment.
+Attached POSIX leaders and descendants are captured with their start identities,
+and each identity is rechecked immediately before signaling, so PID reuse during
+process enumeration also fails closed. An empty or failed identity probe is
+accepted as completion only when an OS liveness check confirms that process no
+longer exists. The workspace tree lock remains held until child registration is
+persisted or failed registration cleanup settles, so release cannot recycle the
+worktree during that handoff.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
@@ -132,10 +165,18 @@ shell workspace.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
-transitions and preserve ownership whenever normal release is unsafe. Command
+transitions and preserve ownership whenever normal release is unsafe. A reused
+acquisition also remains assigned when dependency synchronization cannot verify
+that an aborted installer process tree is gone; its structured error returns the
+exact recovery ID instead of recycling the slot. That retained transition clears
+the incomplete handoff marker so the exact release command is executable without
+making the workspace available automatically, and its structured response reads
+the current post-heartbeat expiry from the retained record. Command
 launch snapshots its original assignment across dependency repair and rejects
 reassignment or an initially unassigned pool slot instead of adopting another
-agent's lease. Explicit `--fetch` is
+agent's lease. Assigned dependency synchronization revalidates that same immutable
+assignment inside the tree lock before inspecting or modifying dependency projections.
+Explicit `--fetch` is
 the only workspace operation in this layer that contacts a Git remote, and an
 explicit remote name must exist.
 This includes shorthand `remote/branch` start points unless the name resolves to

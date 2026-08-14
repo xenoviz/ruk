@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DependencyPreparationError } from "./errors.js";
 import { commandExists, run } from "./process.js";
-import type { DependencyMode, PackageManager, RukConfig } from "./types.js";
+import type { DependencyMode, PackageManager, RukConfig, SharedCheckoutPolicy } from "./types.js";
 import { isErrnoException, isRecord } from "./types.js";
 
 const DEPENDENCY_MODES = new Set<DependencyMode>(["managed", "shared"]);
+const SHARED_CHECKOUT_POLICIES = new Set<SharedCheckoutPolicy>(["deny", "warn", "allow"]);
 
 async function readJson(file: string): Promise<unknown | null> {
   try {
@@ -50,13 +51,21 @@ function resolvedDependencyMode(name: string, configured: DependencyMode | null)
   return configured ?? (name === "bun" || name === "pnpm" ? "shared" : "managed");
 }
 
+function sharedCheckoutPolicy(value: unknown): SharedCheckoutPolicy {
+  if (value == null) return "deny";
+  if (typeof value !== "string" || !SHARED_CHECKOUT_POLICIES.has(value as SharedCheckoutPolicy)) {
+    throw new Error('.rukrc.json sharedCheckoutPolicy must be "deny", "warn", or "allow"');
+  }
+  return value as SharedCheckoutPolicy;
+}
+
 export async function loadConfig(root: string): Promise<RukConfig> {
   const fileConfig = (await readJson(path.join(root, ".rukrc.json"))) ?? {};
   if (!isRecord(fileConfig)) {
     throw new Error(".rukrc.json must contain a JSON object");
   }
   const unknown = Object.keys(fileConfig).filter(
-    (key) => key !== "installCommand" && key !== "dependencyMode",
+    (key) => key !== "installCommand" && key !== "dependencyMode" && key !== "sharedCheckoutPolicy",
   );
   if (unknown.length > 0) {
     throw new Error(`Unknown .rukrc.json option${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
@@ -69,6 +78,7 @@ export async function loadConfig(root: string): Promise<RukConfig> {
       process.env["RUK_DEPENDENCY_MODE"] ?? fileConfig["dependencyMode"],
       process.env["RUK_DEPENDENCY_MODE"] ? "RUK_DEPENDENCY_MODE" : ".rukrc.json dependencyMode",
     ),
+    sharedCheckoutPolicy: sharedCheckoutPolicy(fileConfig["sharedCheckoutPolicy"]),
   };
 }
 

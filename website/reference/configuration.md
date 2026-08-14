@@ -47,6 +47,23 @@ RUK_INSTALL_COMMAND='["npm","ci"]' ruk sync --json
 Environment values override `.rukrc.json`. Use them for temporary automation;
 commit stable repository policy to `.rukrc.json`.
 
+## `sharedCheckoutPolicy`
+
+```json
+{
+  "sharedCheckoutPolicy": "deny"
+}
+```
+
+Accepted values are `deny`, `warn`, and `allow`; the default is `deny`. When
+the primary checkout has active Ruk assignments, the policy controls `ruk run`
+and `ruk sync` there. Pool and inspection commands remain available. Use
+`--allow-shared-checkout` for a single intentional task command without
+changing repository policy.
+
+The guard coordinates Ruk commands. It cannot prevent direct filesystem writes
+or Git commands, so treat the primary checkout as a control location.
+
 ## Package-manager detection
 
 Without `installCommand`, Ruk reads the `packageManager` field, then checks known

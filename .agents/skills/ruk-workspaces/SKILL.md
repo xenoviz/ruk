@@ -16,8 +16,9 @@ description: Manage Ruk workspaces for coding agents. Use when an agent must acq
    assignment ID as opaque; never derive it from the path.
 3. Set the working directory to the returned path. Use `ruk run -- <command>`
    for agent processes and `ruk sync --json` after dependency inputs change.
-4. Inspect with `ruk status --json`. Renew before expiry with
-   `ruk renew <assignmentId> --json` when work continues.
+4. Inspect with `ruk status --json`. Managed `run`, `exec`, `shell`, and
+   assigned `sync` operations renew automatically while active. Use
+   `ruk renew <assignmentId> --json` for long idle work outside those commands.
 5. Finish with `ruk release <assignmentId> --json`, even when the workspace was
    reused. Report a release failure instead of substituting another ID.
 
@@ -26,10 +27,26 @@ and release automatically. If the command leaves changes or cleanup fails, Ruk
 retains the assignment and prints the exact recovery ID. It also retains the
 assignment when child identity cannot be established while descendants remain;
 leaderless POSIX process groups retain the assignment rather than being signaled;
-failed registration also terminates the detached group after a short-lived leader exits.
+failed registration or heartbeat abort also retains an unverified detached
+group instead of signaling a reusable numeric process-group ID. Any cleanup
+refusal is final for that attempt; Ruk does not follow it with an unfenced PID signal.
+Attached POSIX leaders and descendants are identity-fenced individually
+immediately before they are signaled; PID reuse or an unreadable identity for a
+still-live process retains the assignment instead of killing or overlooking it.
+The workspace tree lock remains held until process registration succeeds or
+failed-registration cleanup settles, so release cannot race that handoff.
+If synchronization during a reused acquisition cannot verify an aborted
+installer tree, parse the retryable `RESOURCE_BUSY` error for its exact
+`assignmentId`, `path`, `expiresAt`, and `recovery`; Ruk keeps that slot assigned.
+The reported expiry is reloaded from retained state after keeper cleanup, so it
+includes any heartbeat renewal completed during the failed acquisition.
+The retained transition clears the incomplete handoff marker, so the returned
+exact-ID release command can be used once the caller decides recovery is safe.
 On Windows it terminates the new tree only with a verified leader identity and
 otherwise retains the assignment while descendants remain or the leader PID is reused.
 Ruk fences the assignment again immediately before launching a command.
+Assigned `ruk sync` also rechecks the exact assignment from inside the dependency
+lock before reading or changing projections, so a queued repair cannot cross a release.
 Managed detached `run` and `exec` commands forward `SIGINT` and `SIGTERM` to
 their POSIX process group and preserve conventional 130/143 exit codes. Ordinary
 release is rejected until acquisition handoff finishes.
@@ -46,6 +63,19 @@ rebuilt from the package store before the next assigned command. Warm capacity
 counts only projections whose dependency inputs and integrity fingerprint still
 validate, including linked package targets. `ruk status --json` reports
 `projection-changed` and recommends `ruk sync` when integrity validation fails.
+Status and list JSON also expose `lastActivityAt`, derived `autoRenewing`,
+`primaryCheckout`, `managed`, and `activeAssignments`.
+Heartbeat state writes receive bounded retries; a persistent renewal failure is
+a retryable `RESOURCE_BUSY` error and stops the tracked command.
+
+Treat the repository's primary checkout as a control location. When active
+assignments exist, `ruk run` and `ruk sync` deny task work there by default.
+Acquire a dedicated workspace. Use `--allow-shared-checkout` only for a single
+intentional command, or follow the repository's `sharedCheckoutPolicy` when it
+is explicitly set to `warn` or `allow`. The guard coordinates Ruk commands but
+cannot block direct Git or filesystem writes. In default `deny` mode, Ruk
+serializes primary-checkout task execution with assignment publication, so an
+acquisition cannot appear after the task's safety check and race its work.
 
 Use `ruk warm --count <n> --json` before a known burst of agents. The count is
 the desired number of available prepared workspaces, not the number to add;
@@ -65,6 +95,8 @@ Use `ruk gc --json` to preview collection. Apply only when requested with
 `ruk gc --apply --json`. Add `--force-expired` only with explicit authority to
 reclaim expired assignments; expiry alone does not make them safe to remove.
 Forced collection revalidates expiry atomically before changing lifecycle state.
+An expired timestamp is not collectible while a current fenced lease keeper
+still reports `autoRenewing: true`; GC skips active managed work.
 GC recovers interrupted preparations, pre-handoff acquisitions, and collections
 after the age cutoff; it revalidates handoff state under the acquisition lock
 and preserves recovery markers after failed cleanup. Workspace and warm locks
@@ -74,6 +106,13 @@ removed by an already-running collection.
 GC revalidates each candidate under its acquisition lock and carries that fence
 through the lifecycle transition. A renewal made during acquisition handoff is preserved.
 An unreadable identity for a live lock owner is treated as busy, never stale.
+Initial keeper validity starts after the state lock is acquired, and heartbeat
+updates are monotonic with explicit renewal. If heartbeat-triggered process
+cleanup cannot verify the original detached leader or rule out surviving
+descendants, Ruk reports retryable resource contention and retains the exact
+assignment for recovery.
+Completion timestamps are clamped to the latest renewal, and nested heartbeat
+failures remain retryable `RESOURCE_BUSY` errors in JSON output.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read

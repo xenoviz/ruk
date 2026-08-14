@@ -39,7 +39,8 @@ ruk run -- bun test
 
 `ruk run` checks dependency inputs and projection integrity before starting the
 command. Inside an assigned workspace, it also records the child process so
-release can clean it up safely.
+release can clean it up safely. While the command remains active, Ruk renews
+the assignment automatically.
 
 Use the repository's normal Git workflow. Commit or otherwise save every file
 you intend to keep before release.
@@ -50,8 +51,8 @@ you intend to keep before release.
 ruk status --json
 ```
 
-A ready assigned workspace reports its lifecycle, assignment ID, expiry, and
-current dependency fingerprint.
+A ready assigned workspace reports its lifecycle, assignment ID, expiry,
+latest activity, automatic-renewal status, and current dependency fingerprint.
 
 ## 4. Release the exact assignment
 
@@ -70,8 +71,9 @@ its changes.
 
 ## Longer work
 
-Assignments default to eight hours. Renew before `expiresAt` when work
-continues:
+Assignments default to an eight-hour idle window. Active Ruk-managed commands
+renew automatically. Renew explicitly when work continues outside those
+commands, such as a long editor-only session:
 
 ```sh
 ruk renew 46bc4998-95b0-4d16-b017-69b06a13747b --json

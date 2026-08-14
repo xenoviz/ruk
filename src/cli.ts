@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withAssignmentActivity } from "./activity.js";
+import { activeAssignmentCount, sharedCheckoutDiagnostic } from "./checkout.js";
 import { loadConfig, detectPackageManager } from "./config.js";
 import {
   assertSharedBackendSupported,
@@ -9,6 +11,7 @@ import {
   dependenciesPresent,
   ensureDependencies,
 } from "./dependencies.js";
+import { retainedAssignmentFailure } from "./errors.js";
 import { dependencyFingerprint } from "./fingerprint.js";
 import {
   addWorktree,
@@ -31,12 +34,14 @@ import {
   deleteWorkspaceRecord,
   findAssignments,
   finishWorkspaceReturn,
+  assignmentIsAutoRenewing,
   identifyGcCandidates,
   markWorkspaceAssigned,
   markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
   recordSuccessfulAcquisition,
+  retainAssignmentAfterAcquisitionFailure,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
@@ -46,7 +51,8 @@ import { withDirectoryLock } from "./lock.js";
 import { portEnvironment } from "./ports.js";
 import {
   commandExists,
-  ProcessIdentityUnavailableError,
+  containsProcessIdentityUnavailableError,
+  freshTrackedProcessExists,
   processIdentity,
   requireChildProcessSession,
   requireProcessIdentity,
@@ -54,9 +60,24 @@ import {
   terminateTrackedProcess,
   trackedProcessExists,
 } from "./process.js";
-import { deleteTreeState, readState, storePaths, treeKey, treeLockPath } from "./state.js";
+import {
+  deleteTreeState,
+  primaryCheckoutLockPath,
+  readState,
+  storePaths,
+  treeKey,
+  treeLockPath,
+} from "./state.js";
 import { diskStatistics, usageStatistics } from "./statistics.js";
-import type { CliIo, DependencyReporter, StorePaths, TrackedProcessRecord, WorkspaceRecord } from "./types.js";
+import type {
+  CliIo,
+  DependencyReporter,
+  Repository,
+  SharedCheckoutPolicy,
+  StorePaths,
+  TrackedProcessRecord,
+  WorkspaceRecord,
+} from "./types.js";
 import { formatUpdate, updateRuk } from "./update.js";
 import type { Distribution } from "./update.js";
 import { VERSION } from "./version.js";
@@ -69,8 +90,8 @@ Usage:
   ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] [--json]
   ruk renew <assignment-id> [--ttl <minutes>] [--json]
   ruk release <assignment-id> [--force] [--json]
-  ruk sync [--json]
-  ruk run -- <command> [args...]
+  ruk sync [--allow-shared-checkout] [--json]
+  ruk run [--allow-shared-checkout] -- <command> [args...]
   ruk exec <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] -- <command> [args...]
   ruk warm --count <n> [--from <ref>] [--fetch] [--json]
   ruk shell <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...]
@@ -104,6 +125,7 @@ interface ParsedOptions {
   disk?: boolean;
   count?: string;
   ports?: string[];
+  allowSharedCheckout?: boolean;
 }
 
 function parseOptions(
@@ -178,26 +200,94 @@ function dependencyReporter(io: CliIo, json: boolean): DependencyReporter {
       };
 }
 
-async function sync(cwd: string, io: CliIo, json = false, emit = true) {
-  const value = await context(cwd);
-  const result = await ensureDependencies({
-    ...value,
-    reporter: dependencyReporter(io, json),
-  });
-  const output = {
-    status: result.alreadyAttached ? "ready" : "prepared",
-    fingerprint: result.fingerprint,
-    mode: result.mode,
-    path: value.repository.root,
+async function withPrimaryCheckoutFence<T>(
+  repository: Repository,
+  paths: StorePaths,
+  policy: SharedCheckoutPolicy,
+  allowSharedCheckout: boolean,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!repository.primaryCheckout || policy !== "deny" || allowSharedCheckout) return operation();
+  return withDirectoryLock(primaryCheckoutLockPath(paths), operation);
+}
+
+async function sync(
+  cwd: string,
+  io: CliIo,
+  json = false,
+  emit = true,
+  allowSharedCheckout = false,
+  guardSharedCheckout = true,
+  allowedAcquisitionOperationId?: string,
+) {
+  const { repository, config } = await repositoryContext(cwd);
+  const paths = storePaths(repository.commonDir);
+  const synchronize = async () => {
+    const state = await readState(paths);
+    if (guardSharedCheckout) {
+      const diagnostic = sharedCheckoutDiagnostic(
+        repository,
+        state,
+        config.sharedCheckoutPolicy,
+        allowSharedCheckout,
+      );
+      if (diagnostic && !json) io.stderr.write(diagnostic);
+    }
+    const manager = await detectPackageManager(repository.root, config);
+    const value = { repository, config, manager };
+    const lifecycle = state.workspaces[treeKey(repository.root)];
+    const expectedSyncAssignmentId = lifecycle?.lifecycle === "assigned"
+      ? lifecycle.assignment?.id
+      : undefined;
+    const prepare = (signal?: AbortSignal) => ensureDependencies({
+      ...value,
+      reporter: dependencyReporter(io, json),
+      ...(signal ? { signal } : {}),
+      ...(expectedSyncAssignmentId
+        ? {
+            beforePrepare: async () => {
+              signal?.throwIfAborted();
+              const current = (await readState(paths)).workspaces[treeKey(repository.root)];
+              if (
+                current?.lifecycle !== "assigned" ||
+                (current.operationId !== null && current.operationId !== allowedAcquisitionOperationId) ||
+                current.assignment?.id !== expectedSyncAssignmentId
+              ) {
+                throw new Error(
+                  `Assignment ${expectedSyncAssignmentId} does not exist or no longer owns ${repository.root}`,
+                );
+              }
+            },
+          }
+        : {}),
+    });
+    const result = expectedSyncAssignmentId
+      ? await withAssignmentActivity(paths, expectedSyncAssignmentId, prepare)
+      : await prepare();
+    const output = {
+      status: result.alreadyAttached ? "ready" : "prepared",
+      fingerprint: result.fingerprint,
+      mode: result.mode,
+      path: value.repository.root,
+    };
+    if (emit) {
+      io.stdout.write(
+        json
+          ? jsonLine(output)
+          : `${result.alreadyAttached ? "Dependencies already ready" : "Dependencies prepared"} for ${result.fingerprint.slice(0, 12)} (${result.mode}).\n`,
+      );
+    }
+    return { ...result, path: value.repository.root };
   };
-  if (emit) {
-    io.stdout.write(
-      json
-        ? jsonLine(output)
-        : `${result.alreadyAttached ? "Dependencies already ready" : "Dependencies prepared"} for ${result.fingerprint.slice(0, 12)} (${result.mode}).\n`,
-    );
-  }
-  return { ...result, path: value.repository.root };
+  return guardSharedCheckout
+    ? withPrimaryCheckoutFence(
+      repository,
+      paths,
+      config.sharedCheckoutPolicy,
+      allowSharedCheckout,
+      synchronize,
+    )
+    : synchronize();
 }
 
 function minutes(value: string | undefined, fallback: number, name: string, allowZero = false): number {
@@ -279,7 +369,15 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
         branch,
         startPoint,
       });
-      const prepared = await sync(workspace.path, io, options.json ?? false, false);
+      const prepared = await sync(
+        workspace.path,
+        io,
+        options.json ?? false,
+        false,
+        false,
+        true,
+        workspace.operationId ?? undefined,
+      );
       dependenciesReady = true;
       if (operationId) {
         workspace = await markWorkspaceAssigned(paths, workspace.path, operationId, {
@@ -317,6 +415,28 @@ async function acquire(args: readonly string[], cwd: string, io: CliIo, emit = t
       }
       return result;
     } catch (error) {
+      if (workspace.assignment && containsProcessIdentityUnavailableError(error)) {
+        const retained = retainedAssignmentFailure(
+          workspace.assignment.id,
+          workspace.path,
+          workspace.assignment.expiresAt,
+          error,
+        )!;
+        if (workspace.operationId !== null) {
+          workspace = await retainAssignmentAfterAcquisitionFailure(
+            paths,
+            workspace.assignment!.id,
+            workspace.operationId,
+            retained.message,
+          );
+        }
+        throw retainedAssignmentFailure(
+          workspace.assignment!.id,
+          workspace.path,
+          workspace.assignment!.expiresAt,
+          error,
+        )!;
+      }
       const message = error instanceof Error ? error.message : String(error);
       let returning = false;
       try {
@@ -561,6 +681,13 @@ async function list(args: readonly string[], cwd: string, io: CliIo) {
       lifecycle: lifecycle?.lifecycle ?? null,
       assignmentId: lifecycle?.assignment?.id ?? null,
       expiresAt: lifecycle?.assignment?.expiresAt ?? null,
+      lastActivityAt: lifecycle?.assignment?.lastActivityAt ?? null,
+      autoRenewing: lifecycle?.assignment
+        ? assignmentIsAutoRenewing(lifecycle.assignment)
+        : false,
+      primaryCheckout: treeKey(workspace.path) === treeKey(repository.primaryRoot),
+      managed: lifecycle !== undefined,
+      activeAssignments: activeAssignmentCount(state),
     };
   });
   if (options.json) {
@@ -583,6 +710,7 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
   const state = await readState(paths);
   const record = state.trees[treeKey(value.repository.root)];
   const lifecycle = state.workspaces[treeKey(value.repository.root)];
+  const activeAssignments = activeAssignmentCount(state);
   const current = await dependencyFingerprint({ root: value.repository.root, manager: value.manager });
   const modulesPresent = await dependenciesPresent(
     value.repository.root,
@@ -611,6 +739,13 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     lifecycle: lifecycle?.lifecycle ?? null,
     assignmentId: lifecycle?.assignment?.id ?? null,
     expiresAt: lifecycle?.assignment?.expiresAt ?? null,
+    lastActivityAt: lifecycle?.assignment?.lastActivityAt ?? null,
+    autoRenewing: lifecycle?.assignment
+      ? assignmentIsAutoRenewing(lifecycle.assignment)
+      : false,
+    primaryCheckout: value.repository.primaryCheckout,
+    managed: lifecycle !== undefined,
+    activeAssignments,
   };
   if (options.json) {
     io.stdout.write(jsonLine(result));
@@ -624,6 +759,8 @@ async function status(args: readonly string[], cwd: string, io: CliIo) {
     if (options.explain && reason) io.stdout.write(`Reason:      ${reason}\nRecovery:    ${result.recovery}\n`);
     io.stdout.write(`Lifecycle:   ${result.lifecycle ?? "unmanaged"}\n`);
     if (result.assignmentId) io.stdout.write(`Assignment:  ${result.assignmentId} (expires ${result.expiresAt})\n`);
+    if (result.assignmentId) io.stdout.write(`Activity:    ${result.lastActivityAt} (${result.autoRenewing ? "auto-renewing" : "idle"})\n`);
+    if (result.primaryCheckout) io.stdout.write(`Checkout:    primary (${activeAssignments} active assignment${activeAssignments === 1 ? "" : "s"})\n`);
     if (!ready && !options.explain) io.stdout.write("Next:        ruk sync\n");
   }
   return result;
@@ -883,127 +1020,157 @@ async function execute(
   forwardInterrupt = detached,
 ): Promise<number> {
   const separator = args.indexOf("--");
-  const command = separator < 0 ? [...args] : args.slice(separator + 1);
+  let allowSharedCheckout = false;
+  let command: string[];
+  if (separator < 0) {
+    allowSharedCheckout = args[0] === "--allow-shared-checkout";
+    command = allowSharedCheckout ? args.slice(1) : [...args];
+  } else {
+    const parsed = parseOptions(args.slice(0, separator), { flags: ["--allow-shared-checkout"] });
+    requirePositionals(parsed.positional, 0, "run options must appear before --");
+    allowSharedCheckout = parsed.options.allowSharedCheckout ?? false;
+    command = args.slice(separator + 1);
+  }
   if (command.length === 0) throw new Error("run requires a command");
-  if (separator > 0) throw new Error(`Unknown run option ${args[0]}`);
-  const value = await context(cwd);
-  const { repository } = value;
+  const { repository, config } = await repositoryContext(cwd);
   const [program, ...programArgs] = command;
   const paths = storePaths(repository.commonDir);
-  let state = await readState(paths);
-  let lifecycle = state.workspaces[treeKey(repository.root)];
-  if (lifecycle && (
-    lifecycle.lifecycle !== "assigned" ||
-    !lifecycle.assignment ||
-    lifecycle.operationId !== null
-  )) {
-    throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
-  }
-  const expectedAssignmentId = lifecycle?.assignment?.id;
-  const tree = state.trees[treeKey(repository.root)];
-  if (
-    !lifecycle?.assignment ||
-    !tree ||
-    tree.fingerprint !== (await dependencyFingerprint({ root: repository.root, manager: value.manager })).fingerprint ||
-    !(await dependencyProjectionsAreValid(repository.root, tree))
-  ) {
-    await sync(repository.root, io);
-    state = await readState(paths);
-    lifecycle = state.workspaces[treeKey(repository.root)];
-    if (expectedAssignmentId && lifecycle?.assignment?.id !== expectedAssignmentId) {
-      throw new Error(`Assignment ${expectedAssignmentId} no longer owns ${repository.root}`);
-    }
-    if (!expectedAssignmentId && lifecycle) {
-      throw new Error(`Workspace ${repository.root} became managed during dependency synchronization`);
-    }
-  }
-  if (!lifecycle) {
-    const result = await run(program!, programArgs, {
-      cwd: repository.root,
-      env: process.env,
-      stdio: "inherit",
-      allowFailure: true,
-    });
-    return result.code;
-  }
-  if (lifecycle.lifecycle !== "assigned" || !lifecycle.assignment) {
-    throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
-  }
-
-  const assignmentId = expectedAssignmentId ?? lifecycle.assignment.id;
-  const environment = { ...process.env, ...portEnvironment(lifecycle.assignment.ports) };
-  const tracking: { record?: TrackedProcessRecord } = {};
-  let pendingSignal: NodeJS.Signals | undefined;
-  const forwardSignal = (signal: NodeJS.Signals) => {
-    pendingSignal = signal;
-    const groupId = tracking.record?.groupId;
-    if (!groupId) return;
-    pendingSignal = undefined;
-    try { process.kill(-groupId, signal); } catch { /* The command may already have exited. */ }
-  };
-  let execution!: ReturnType<typeof run>;
-  if (forwardInterrupt && process.platform !== "win32") {
-    process.on("SIGINT", forwardSignal);
-    process.on("SIGTERM", forwardSignal);
-  }
-  try {
-    await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
-      const current = (await readState(paths)).workspaces[treeKey(repository.root)];
+  return withPrimaryCheckoutFence(
+    repository,
+    paths,
+    config.sharedCheckoutPolicy,
+    allowSharedCheckout,
+    async () => {
+      let state = await readState(paths);
+      const diagnostic = sharedCheckoutDiagnostic(
+        repository,
+        state,
+        config.sharedCheckoutPolicy,
+        allowSharedCheckout,
+      );
+      if (diagnostic) io.stderr.write(diagnostic);
+      const manager = await detectPackageManager(repository.root, config);
+      const value = { repository, config, manager };
+      let lifecycle = state.workspaces[treeKey(repository.root)];
+      if (lifecycle && (
+        lifecycle.lifecycle !== "assigned" ||
+        !lifecycle.assignment ||
+        lifecycle.operationId !== null
+      )) {
+        throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
+      }
+      const expectedAssignmentId = lifecycle?.assignment?.id;
+      const tree = state.trees[treeKey(repository.root)];
       if (
-        current?.lifecycle !== "assigned" ||
-        current.operationId !== null ||
-        current.assignment?.id !== assignmentId
+        !lifecycle?.assignment ||
+        !tree ||
+        tree.fingerprint !== (await dependencyFingerprint({ root: repository.root, manager: value.manager })).fingerprint ||
+        !(await dependencyProjectionsAreValid(repository.root, tree))
       ) {
-        throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
+        await sync(repository.root, io, false, true, false, false);
+        state = await readState(paths);
+        lifecycle = state.workspaces[treeKey(repository.root)];
+        if (expectedAssignmentId && lifecycle?.assignment?.id !== expectedAssignmentId) {
+          throw new Error(`Assignment ${expectedAssignmentId} no longer owns ${repository.root}`);
+        }
+        if (!expectedAssignmentId && lifecycle) {
+          throw new Error(`Workspace ${repository.root} became managed during dependency synchronization`);
+        }
       }
-      let registered!: () => void;
-      const registration = new Promise<void>((resolve) => { registered = resolve; });
-      execution = run(program!, programArgs, {
-        cwd: repository.root,
-        env: environment,
-        stdio: "inherit",
-        allowFailure: true,
-        detached,
-        onSpawn: async (pid) => {
-          const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
-          const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
-          if (!startedAt) {
-            registered();
-            return;
-          }
-          const record: TrackedProcessRecord = {
-            pid: session?.pid ?? pid,
-            ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
-            ...(session?.sessionId === undefined
-              ? {}
-              : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
-            ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
-            command: [...command],
-            startedAt,
-          };
-          await addAssignmentProcess(paths, assignmentId, record);
-          tracking.record = record;
-          if (pendingSignal) forwardSignal(pendingSignal);
-          registered();
-        },
-      });
-      await Promise.race([registration, execution.then(() => undefined)]);
-    });
-    const result = await execution;
-    if (tracking.record && !(await trackedProcessExists(tracking.record))) {
+      if (!lifecycle) {
+        const result = await run(program!, programArgs, {
+          cwd: repository.root,
+          env: process.env,
+          stdio: "inherit",
+          allowFailure: true,
+        });
+        return result.code;
+      }
+      if (lifecycle.lifecycle !== "assigned" || !lifecycle.assignment) {
+        throw new Error(`Workspace ${repository.root} is ${lifecycle.lifecycle}, expected assigned`);
+      }
+
+      const assignmentId = expectedAssignmentId ?? lifecycle.assignment.id;
+      const environment = { ...process.env, ...portEnvironment(lifecycle.assignment.ports) };
+      const tracking: { record?: TrackedProcessRecord } = {};
+      let pendingSignal: NodeJS.Signals | undefined;
+      const forwardSignal = (signal: NodeJS.Signals) => {
+        pendingSignal = signal;
+        const groupId = tracking.record?.groupId;
+        if (!groupId) return;
+        pendingSignal = undefined;
+        try { process.kill(-groupId, signal); } catch { /* The command may already have exited. */ }
+      };
+      let execution!: ReturnType<typeof run>;
+      if (forwardInterrupt && process.platform !== "win32") {
+        process.on("SIGINT", forwardSignal);
+        process.on("SIGTERM", forwardSignal);
+      }
       try {
-        await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
-      } catch {
-        // Release may already have consumed the tracked record.
+        return await withAssignmentActivity(
+          paths,
+          assignmentId,
+          async (signal) => {
+            await withDirectoryLock(treeLockPath(paths, repository.root), async () => {
+              signal.throwIfAborted();
+              const current = (await readState(paths)).workspaces[treeKey(repository.root)];
+              if (
+                current?.lifecycle !== "assigned" ||
+                current.operationId !== null ||
+                current.assignment?.id !== assignmentId
+              ) {
+                throw new Error(`Assignment ${assignmentId} does not exist or no longer owns ${repository.root}`);
+              }
+              let registered!: () => void;
+              const registration = new Promise<void>((resolve) => { registered = resolve; });
+              execution = run(program!, programArgs, {
+                cwd: repository.root,
+                env: environment,
+                stdio: "inherit",
+                allowFailure: true,
+                detached,
+                signal,
+                onSpawn: async (pid) => {
+                  const session = sessionMarker ? await requireChildProcessSession(pid, sessionMarker) : undefined;
+                  const startedAt = session?.startedAt ?? await requireProcessIdentity(pid);
+                  if (!startedAt) return;
+                  const record: TrackedProcessRecord = {
+                    pid: session?.pid ?? pid,
+                    ...(process.platform === "win32" || !detached ? {} : { groupId: pid }),
+                    ...(session?.sessionId === undefined
+                      ? {}
+                      : { sessionId: session.sessionId, sessionStartedAt: session.sessionStartedAt }),
+                    ...(session?.terminalId === undefined ? {} : { terminalId: session.terminalId }),
+                    command: [...command],
+                    startedAt,
+                  };
+                  await addAssignmentProcess(paths, assignmentId, record);
+                  tracking.record = record;
+                  if (pendingSignal) forwardSignal(pendingSignal);
+                  registered();
+                },
+              });
+              await Promise.race([registration, execution.then(() => undefined)]);
+            });
+            const result = await execution;
+            if (tracking.record && !(await freshTrackedProcessExists(tracking.record))) {
+              try {
+                await removeAssignmentProcess(paths, assignmentId, tracking.record.pid, tracking.record.startedAt);
+              } catch {
+                // Release may already have consumed the tracked record.
+              }
+            }
+            return result.code;
+          },
+        );
+      } finally {
+        if (forwardInterrupt && process.platform !== "win32") {
+          process.off("SIGINT", forwardSignal);
+          process.off("SIGTERM", forwardSignal);
+        }
       }
-    }
-    return result.code;
-  } finally {
-    if (forwardInterrupt && process.platform !== "win32") {
-      process.off("SIGINT", forwardSignal);
-      process.off("SIGTERM", forwardSignal);
-    }
-  }
+    },
+  );
 }
 
 async function warm(args: readonly string[], cwd: string, io: CliIo) {
@@ -1124,7 +1291,7 @@ async function runAssignedAndRelease(
   } catch (error) {
     commandError = error;
   }
-  if (commandError instanceof ProcessIdentityUnavailableError) {
+  if (containsProcessIdentityUnavailableError(commandError)) {
     retainedAssignment(io, assigned, commandError);
     throw commandError;
   }
@@ -1255,9 +1422,18 @@ export async function main(argv: readonly string[], options: MainOptions = {}): 
     return 0;
   }
   if (command === "init" || command === "sync") {
-    const { options: parsed, positional } = parseOptions(args, { flags: ["--json"] });
+    const { options: parsed, positional } = parseOptions(args, {
+      flags: command === "sync" ? ["--json", "--allow-shared-checkout"] : ["--json"],
+    });
     requirePositionals(positional, 0, `${command} does not accept positional arguments`);
-    await sync(cwd, io, parsed.json ?? false);
+    await sync(
+      cwd,
+      io,
+      parsed.json ?? false,
+      true,
+      parsed.allowSharedCheckout ?? false,
+      command === "sync",
+    );
     return 0;
   }
   if (command === "create") {

@@ -32,6 +32,8 @@ Ruk is an early release with a deliberately small, tested surface:
 - reserve named host-local ports and inject them into assigned processes;
 - report recorded reuse, preparation, failure, timing, and optional disk metrics;
 - track commands launched by `ruk run` and safely collect recorded workspaces;
+- renew assignments automatically while Ruk-managed work remains active;
+- keep the primary checkout as a guarded control location during parallel work;
 - fingerprint root and workspace manifests, lockfiles, package-manager config,
   patches, runtime, platform, architecture, and install strategy;
 - serialize preparation of the same workspace;
@@ -76,12 +78,12 @@ Acquire a workspace for an agent and retain both values from its JSON output:
 ruk acquire agent/auth-flow --owner agent-17 --json
 cd <returned-path>
 ruk run -- bun test
-ruk renew <returned-assignmentId> --json
 ruk release <returned-assignmentId> --json
 ```
 
 The assignment ID is a fencing token, so renew and release must use the exact
-value returned by acquire. See the [agent JSON contract](./docs/agent-interface.md)
+value returned by acquire. Managed commands renew automatically while active;
+use explicit `renew` for long idle editing sessions. See the [agent JSON contract](./docs/agent-interface.md)
 and [workspace lifecycle design](./docs/plans/2026-08-03-workspace-lifecycle-design.md).
 
 Prepare the current workspace:
@@ -102,6 +104,12 @@ Run a command after verifying dependency readiness:
 ruk run -- bun test
 ruk run -- bun run typecheck
 ```
+
+When other Ruk assignments are active, `run` and `sync` refuse task work in the
+primary checkout by default. Acquire a dedicated workspace, configure
+`sharedCheckoutPolicy`, or use `--allow-shared-checkout` for one intentional
+command. Default deny-mode task execution is serialized with assignment
+publication rather than relying on a point-in-time state snapshot.
 
 Run a short job with automatic safe release, or prewarm before an agent burst:
 

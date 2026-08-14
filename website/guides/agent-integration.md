@@ -9,7 +9,7 @@ For a ready-made instruction package, use the maintained
 ## Required lifecycle
 
 ```text
-acquire -> work at returned path -> renew when needed -> release exact ID
+acquire -> work at returned path -> managed work auto-renews -> release exact ID
 ```
 
 1. Call `ruk acquire <branch> --owner <stable-id> --json` from the source
@@ -18,7 +18,8 @@ acquire -> work at returned path -> renew when needed -> release exact ID
 3. Set the agent's working directory to `path`.
 4. Launch commands with `ruk run -- ...`.
 5. Call `ruk sync --json` after dependency files change.
-6. Renew before `expiresAt` when work continues.
+6. Managed commands renew automatically. Explicitly renew long idle work that
+   continues outside a Ruk operation.
 7. Commit or export intended work, then release the exact assignment ID.
 
 For a short command that leaves a clean tree, the composed form performs the
@@ -63,6 +64,17 @@ fields keep their names, types, and meanings.
 Only processes launched through `ruk run` are recorded. Ruk does not discover
 commands started directly in another terminal or arbitrary daemons. The agent
 runner remains responsible for those processes.
+
+While a managed command is active, Ruk maintains a fenced lease keeper. Inspect
+`lastActivityAt` and `autoRenewing` through status JSON. If keeper renewal loses
+the assignment fence, Ruk stops the tracked command instead of allowing it to
+continue under uncertain ownership.
+
+Run task commands in the acquired path. The primary checkout denies `ruk run`
+and `ruk sync` while assignments are active unless repository policy or
+`--allow-shared-checkout` explicitly permits sharing. In the default deny mode,
+the check and assignment publication share a fence, so acquisition cannot race
+past a successful check.
 
 ## Named ports
 

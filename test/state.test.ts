@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readState, setTreeState, storePaths, treeKey } from "../src/state.js";
+import { emptyMetrics, readState, setTreeState, storePaths, treeKey } from "../src/state.js";
 
 test("state updates are atomic across concurrent workspaces", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-state-"));
@@ -41,7 +41,7 @@ test("state rejects corrupted and unsupported data", async (t) => {
   await assert.rejects(readState(paths), /Unsupported or invalid Ruk state/);
 });
 
-test("state safely migrates v1 preparation records to v3", async (t) => {
+test("state safely migrates v1 preparation records to v4", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-state-migrate-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const paths = storePaths(root);
@@ -59,12 +59,60 @@ test("state safely migrates v1 preparation records to v3", async (t) => {
   await fs.writeFile(paths.state, JSON.stringify({ version: 1, trees: { [key]: tree } }));
 
   const migrated = await readState(paths);
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, 4);
   assert.deepEqual(migrated.trees[key], tree);
   assert.deepEqual(migrated.workspaces, {});
   assert.equal(migrated.metrics.acquisitions, 0);
 
   await setTreeState(paths, workspace, { ...tree, fingerprint: "updated" });
   const persisted = JSON.parse(await fs.readFile(paths.state, "utf8")) as { version: number };
-  assert.equal(persisted.version, 3);
+  assert.equal(persisted.version, 4);
+});
+
+test("state migrates v3 assignments to v4 activity records", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-state-v3-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const paths = storePaths(root);
+  const workspacePath = path.join(root, "workspace");
+  const key = treeKey(workspacePath);
+  await fs.mkdir(paths.root, { recursive: true });
+  await fs.writeFile(paths.state, JSON.stringify({
+    version: 3,
+    trees: {},
+    workspaces: {
+      [key]: {
+        path: workspacePath,
+        managed: true,
+        branch: "agent/test",
+        lifecycle: "assigned",
+        operationId: null,
+        assignment: {
+          id: "46bc4998-95b0-4d16-b017-69b06a13747b",
+          owner: "agent",
+          hostname: "host",
+          assignedAt: "2026-01-01T00:00:00.000Z",
+          renewedAt: "2026-01-01T01:00:00.000Z",
+          expiresAt: "2026-01-01T03:00:00.000Z",
+          ports: {},
+        },
+        processes: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T01:00:00.000Z",
+        availableAt: null,
+        failure: null,
+      },
+    },
+    metrics: emptyMetrics(),
+  }));
+
+  const migrated = await readState(paths);
+  const assignment = migrated.workspaces[key]!.assignment as typeof migrated.workspaces[typeof key]["assignment"] & {
+    leaseDurationMinutes: number;
+    lastActivityAt: string;
+    leaseKeepers: unknown[];
+  };
+  assert.equal(migrated.version, 4);
+  assert.equal(assignment!.leaseDurationMinutes, 120);
+  assert.equal(assignment!.lastActivityAt, "2026-01-01T01:00:00.000Z");
+  assert.deepEqual(assignment!.leaseKeepers, []);
 });

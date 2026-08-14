@@ -6,6 +6,8 @@ import test from "node:test";
 import {
   addAssignmentProcess,
   allocateAssignmentPorts,
+  assignmentIsAutoRenewing,
+  beginAssignmentActivity,
   beginWorkspaceCollection,
   beginWorkspaceReturn,
   cancelWorkspaceCollection,
@@ -13,24 +15,29 @@ import {
   deleteWorkspaceRecord,
   findAssignments,
   finishWorkspaceReturn,
+  finishAssignmentActivity,
   identifyGcCandidates,
   markWorkspaceAssigned,
   markWorkspaceAvailable,
   markWorkspaceFailed,
   recordPreparingWorkspace,
   recordSuccessfulAcquisition,
+  refreshAssignmentActivity,
   removeAssignmentProcess,
   renewAssignment,
   reserveAvailableWorkspace,
+  retainAssignmentAfterAcquisitionFailure,
 } from "../src/lifecycle.js";
 import { withDirectoryLock } from "../src/lock.js";
-import { readState, storePaths, treeKey } from "../src/state.js";
+import { primaryCheckoutLockPath, readState, storePaths, treeKey } from "../src/state.js";
 import type { StorePaths, WorkspaceRecord } from "../src/types.js";
 
 const T0 = "2026-01-01T00:00:00.000Z";
 const T1 = "2026-01-01T01:00:00.000Z";
 const T2 = "2026-01-01T02:00:00.000Z";
 const T3 = "2026-01-01T03:00:00.000Z";
+const T4 = "2026-01-01T04:00:00.000Z";
+const T5 = "2026-01-01T05:00:00.000Z";
 
 async function fixture(t: test.TestContext): Promise<{ root: string; paths: StorePaths }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-lifecycle-"));
@@ -115,6 +122,31 @@ test("preparation and assignment finalizers are fenced by immutable IDs", async 
   await assert.rejects(beginWorkspaceReturn(paths, first.assignment!.id, T3), /does not exist/);
 });
 
+test("retained acquisition failures clear the handoff marker for exact release", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspacePath = path.join(root, "workspace");
+  const preparing = await prepare(paths, workspacePath);
+  const assigned = await markWorkspaceAssigned(paths, workspacePath, preparing.operationId!, {
+    owner: "agent",
+    hostname: "host",
+    expiresAt: T2,
+    now: T0,
+  });
+  await renewAssignment(paths, assigned.assignment!.id, T3, T1);
+
+  const retained = await retainAssignmentAfterAcquisitionFailure(
+    paths,
+    assigned.assignment!.id,
+    assigned.operationId!,
+    "installer process could not be verified",
+    T1,
+  );
+  assert.equal(retained.operationId, null);
+  assert.equal(retained.failure, "installer process could not be verified");
+  assert.equal(retained.assignment!.expiresAt, T3);
+  assert.equal((await beginWorkspaceReturn(paths, assigned.assignment!.id, T2)).lifecycle, "returning");
+});
+
 test("renewal requires the exact active assignment", async (t) => {
   const { root, paths } = await fixture(t);
   const workspace = await assign(paths, path.join(root, "workspace"));
@@ -132,6 +164,116 @@ test("renewal requires the exact active assignment", async (t) => {
   );
   await assert.rejects(beginWorkspaceReturn(paths, workspace.assignment!.id, T2, T2), /renewed before collection/);
   assert.equal((await readState(paths)).workspaces[treeKey(workspace.path)]!.lifecycle, "assigned");
+});
+
+test("assignment activity renews the lease and fences concurrent keepers", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"));
+  const assignmentId = workspace.assignment!.id;
+  const firstKeeper = "00000000-0000-4000-8000-000000000001";
+  const secondKeeper = "00000000-0000-4000-8000-000000000002";
+
+  const first = await beginAssignmentActivity(paths, assignmentId, {
+    keeperId: firstKeeper,
+    validUntil: T3,
+    now: T1,
+  });
+  assert.equal(first.assignment!.lastActivityAt, T1);
+  assert.equal(first.assignment!.expiresAt, T3);
+  assert.equal(first.assignment!.leaseKeepers.length, 1);
+  assert.equal(assignmentIsAutoRenewing(first.assignment!, T1), true);
+
+  const second = await beginAssignmentActivity(paths, assignmentId, {
+    keeperId: secondKeeper,
+    validUntil: T4,
+    now: T2,
+  });
+  assert.equal(second.assignment!.expiresAt, T4);
+  assert.equal(second.assignment!.leaseKeepers.length, 2);
+
+  const refreshed = await refreshAssignmentActivity(paths, assignmentId, {
+    keeperId: firstKeeper,
+    validUntil: T5,
+    now: T3,
+  });
+  assert.equal(refreshed.assignment!.expiresAt, T5);
+  assert.equal(refreshed.assignment!.leaseKeepers.find(({ id }) => id === firstKeeper)?.heartbeatAt, T3);
+
+  const oneRemaining = await finishAssignmentActivity(paths, assignmentId, firstKeeper, T3);
+  assert.deepEqual(oneRemaining.assignment!.leaseKeepers.map(({ id }) => id), [secondKeeper]);
+  assert.equal(assignmentIsAutoRenewing(oneRemaining.assignment!, T3), true);
+  assert.equal(assignmentIsAutoRenewing(oneRemaining.assignment!, T4), false);
+
+  const finished = await finishAssignmentActivity(paths, assignmentId, secondKeeper, T3);
+  assert.deepEqual(finished.assignment!.leaseKeepers, []);
+  assert.equal(finished.assignment!.expiresAt, T5);
+  await assert.rejects(
+    finishAssignmentActivity(paths, crypto.randomUUID(), secondKeeper, T3),
+    /does not exist/,
+  );
+});
+
+test("a delayed activity refresh cannot shorten a newer explicit renewal", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"));
+  const assignmentId = workspace.assignment!.id;
+  const keeperId = "00000000-0000-4000-8000-000000000006";
+
+  await beginAssignmentActivity(paths, assignmentId, {
+    keeperId,
+    validUntil: T3,
+    now: T1,
+  });
+  await renewAssignment(paths, assignmentId, T5, T4);
+  const refreshed = await refreshAssignmentActivity(paths, assignmentId, {
+    keeperId,
+    validUntil: T3,
+    now: T2,
+  });
+
+  assert.equal(refreshed.assignment!.renewedAt, T4);
+  assert.equal(refreshed.assignment!.lastActivityAt, T4);
+  assert.equal(refreshed.assignment!.expiresAt, T5);
+  assert.deepEqual(
+    refreshed.assignment!.leaseKeepers.find(({ id }) => id === keeperId),
+    { id: keeperId, heartbeatAt: T4, validUntil: T5 },
+  );
+});
+
+test("activity completion cannot move a renewed lease backward", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"));
+  const assignmentId = workspace.assignment!.id;
+  const keeperId = "00000000-0000-4000-8000-000000000007";
+
+  await beginAssignmentActivity(paths, assignmentId, {
+    keeperId,
+    validUntil: T4,
+    now: T2,
+  });
+  await renewAssignment(paths, assignmentId, T5, T4);
+  const finished = await finishAssignmentActivity(paths, assignmentId, keeperId, T1);
+
+  assert.equal(finished.assignment!.renewedAt, T4);
+  assert.equal(finished.assignment!.lastActivityAt, T4);
+  assert.equal(finished.assignment!.expiresAt, T5);
+  assert.equal(finished.updatedAt, T4);
+});
+
+test("forced GC does not select an expired assignment with a current keeper", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"), T0, T1);
+  await beginAssignmentActivity(paths, workspace.assignment!.id, {
+    keeperId: "00000000-0000-4000-8000-000000000003",
+    validUntil: T3,
+    now: T0,
+  });
+
+  assert.equal((await identifyGcCandidates(paths, T0, T2, true)).length, 0);
+  assert.deepEqual(
+    (await identifyGcCandidates(paths, T0, T4, true)).map(({ reason }) => reason),
+    ["expired-assignment"],
+  );
 });
 
 test("return transitions retain ownership until tracked processes are removed", async (t) => {
@@ -222,6 +364,44 @@ test("only one concurrent caller reserves an available workspace", async (t) => 
   );
   assert.equal(results.filter(Boolean).length, 1);
   assert.equal((await findAssignments(paths, { now: T2 })).length, 1);
+});
+
+test("assignment publication waits for the primary-checkout task fence", async (t) => {
+  const { root, paths } = await fixture(t);
+  const available = await makeAvailable(paths, path.join(root, "available"));
+  const preparing = await prepare(paths, path.join(root, "preparing"));
+  let releaseFence!: () => void;
+  let fenceReady!: () => void;
+  const held = new Promise<void>((resolve) => { releaseFence = resolve; });
+  const ready = new Promise<void>((resolve) => { fenceReady = resolve; });
+  const fence = withDirectoryLock(primaryCheckoutLockPath(paths), async () => {
+    fenceReady();
+    await held;
+  });
+  await ready;
+
+  let reservationSettled = false;
+  let assignmentSettled = false;
+  const reservation = reserveAvailableWorkspace(paths, {
+    owner: "reserved",
+    hostname: "host",
+    expiresAt: T3,
+    now: T2,
+  }, available.path).finally(() => { reservationSettled = true; });
+  const assignment = markWorkspaceAssigned(paths, preparing.path, preparing.operationId!, {
+    owner: "prepared",
+    hostname: "host",
+    expiresAt: T3,
+    now: T2,
+  }).finally(() => { assignmentSettled = true; });
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(reservationSettled, false);
+  assert.equal(assignmentSettled, false);
+  releaseFence();
+  await fence;
+  assert.equal((await reservation)?.lifecycle, "assigned");
+  assert.equal((await assignment).lifecycle, "assigned");
 });
 
 test("warm workspaces become available and named ports remain unique", async (t) => {

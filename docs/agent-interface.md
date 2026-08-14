@@ -17,7 +17,9 @@ ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [
 ```
 
 The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
-`<hostname>:<pid>`.
+`<hostname>:<pid>`. Managed Ruk operations renew the assignment automatically
+while they remain active; the TTL still controls how long an idle assignment
+remains current after the latest observed activity.
 
 ```json
 {
@@ -38,6 +40,19 @@ The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
 `assignmentId` is an immutable fencing token. Store it and use it for renew
 and release. `reused` reports whether Ruk assigned an available managed
 workspace instead of creating one.
+
+If dependency synchronization in a reused assignment aborts without being able
+to verify that its installer process tree is gone, acquisition fails with a
+retryable `RESOURCE_BUSY` error and retains the workspace. That error includes
+`assignmentId`, `path`, `expiresAt`, and a `recovery` release command so
+automation can preserve and later recover the exact fenced assignment. Ruk
+clears the incomplete acquisition marker before returning this error, so the
+exact recovery command is accepted when the caller decides cleanup is safe.
+The returned expiry is the current retained-state value, including a heartbeat
+renewal that completed while dependency synchronization was running.
+Assigned synchronization rechecks the exact assignment after acquiring the
+dependency lock; release or reassignment while waiting makes the operation fail
+without touching dependency projections.
 
 `--fetch` explicitly refreshes the remote selected by `--from`; without
 `--from`, Ruk resolves the primary remote's advertised default branch. Fully
@@ -132,12 +147,32 @@ output. Expired assigned or returning workspaces are only reported unless both
 `--apply` and `--force-expired` are present; successfully forced removals are
 omitted from `expired`, and apply output is recomputed from final lifecycle state.
 Forced collection rechecks the current expiry in the lifecycle state transaction,
-so a concurrent renewal prevents collection.
+so a concurrent renewal prevents collection. It also skips assignments with a
+current fenced lease keeper even when their stored expiry has just elapsed.
 
 ## Inspecting and running
 
 `ruk list --json` and `ruk status --json` include `lifecycle`, `assignmentId`,
-and `expiresAt`; assignment fields are null when no assignment is active.
+`expiresAt`, `lastActivityAt`, `autoRenewing`, `primaryCheckout`, `managed`, and
+`activeAssignments`. Assignment timestamps are null when no assignment is
+active. `autoRenewing` is true only while a current fenced keeper is visible.
+Transient heartbeat writes receive bounded retries. A persistent write failure
+or lost assignment fence stops the managed command and is reported as retryable
+`RESOURCE_BUSY`. A refresh that waited behind a newer explicit renewal cannot
+regress its timestamps or shorten its expiry, and initial keeper registration
+captures its validity window only after acquiring the state lock. If stopping
+the command cannot verify the original detached leader or prove that its process
+tree is gone, Ruk preserves that cleanup failure and retains the assignment
+instead of returning the workspace to the pool.
+Attached POSIX cleanup verifies the leader and every captured descendant's start
+identity immediately before signaling it; a reused PID or an unreadable identity
+for a process that is still alive retains the assignment. Ruk also keeps the
+workspace tree lock until process registration succeeds or failed-registration
+cleanup settles, preventing concurrent release during that handoff.
+The heartbeat failure is still reported if operation work resolves while its
+failure hook is running; concurrent success cannot hide a lost renewal fence.
+Nested activity-renewal failures are reported as retryable `RESOURCE_BUSY`, and
+keeper completion cannot shorten a newer renewal when the wall clock moves backward.
 Status reports `projection-changed` with a `ruk sync` recovery when recorded
 projection contents or linked package targets no longer match their fingerprint.
 `ruk run -- ...` validates dependency inputs and projection integrity, then
@@ -147,6 +182,12 @@ working directory.
 Detached managed `run` and `exec` commands forward wrapper `SIGINT` and
 `SIGTERM` signals to their recorded POSIX process group and return conventional
 130 or 143 exit codes when the child uses the default signal disposition.
+
+The primary checkout is a control location while assignments are active.
+`ruk run` and `ruk sync` refuse task work there by default. Repositories can set
+`sharedCheckoutPolicy` to `warn` or `allow`; `--allow-shared-checkout` permits
+one intentional command. A denied JSON `sync` reports retryable
+`RESOURCE_BUSY`, `activeAssignments`, and a `ruk acquire <branch>` recovery.
 
 `ruk exec <branch> -- <command>` composes acquire, run, and normal release. It
 retains the assignment when the command leaves a dirty tree, cleanup fails, or
