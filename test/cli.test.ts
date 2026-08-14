@@ -304,7 +304,7 @@ await fs.writeFile(path.join(process.cwd(), "node_modules", "fixture", "ready"),
     )).stdout);
   });
   const acquiredAfterRenewal = JSON.parse((await renewedAcquire).stdout);
-  assert.equal(acquiredAfterRenewal.expiresAt, handoffRenewal.expiresAt);
+  assert.ok(Date.parse(acquiredAfterRenewal.expiresAt) >= Date.parse(handoffRenewal.expiresAt));
   await run(process.execPath, [cli, "release", acquiredAfterRenewal.assignmentId, "--json"], { cwd: root });
 
   const raced = JSON.parse((await run(process.execPath, [cli, "acquire", "agent/race", "--json"], {

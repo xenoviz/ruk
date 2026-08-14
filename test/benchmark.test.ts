@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   runtimeBenchmarkResult,
   summarizeSamples,
-} from "../scripts/benchmark-runtime.js";
+} from "../scripts/runtime-benchmark-schema.js";
 
 test("runtime benchmark summaries and result schema are deterministic", () => {
   assert.deepEqual(summarizeSamples([30, 10, 20, 40]), {
