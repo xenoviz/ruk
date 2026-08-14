@@ -90,6 +90,9 @@ removed by an already-running collection.
 GC revalidates each candidate under its acquisition lock and carries that fence
 through the lifecycle transition. A renewal made during acquisition handoff is preserved.
 An unreadable identity for a live lock owner is treated as busy, never stale.
+Heartbeat updates are monotonic with explicit renewal. If heartbeat-triggered
+process cleanup cannot rule out surviving descendants, Ruk reports retryable
+resource contention and retains the exact assignment for recovery.
 
 Ruk coordinates one host and cleans only processes and workspaces it recorded.
 Do not claim multi-host locking or arbitrary orphan discovery. Read

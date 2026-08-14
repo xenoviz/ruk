@@ -132,6 +132,9 @@ fail, Ruk stops the managed command, preserves the current assignment where
 possible, and returns a retryable machine-readable error. Removing a keeper is
 best effort after the operation has already failed; its validity window still
 prevents a stale `autoRenewing` value from persisting.
+The locked activity mutation never accepts a timestamp older than the current
+renewal. Abort cleanup failures are aggregated with the heartbeat failure, and
+an unverifiable attached process tree keeps the assignment fenced for recovery.
 
 ## Expiry and garbage collection
 

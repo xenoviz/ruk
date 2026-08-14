@@ -29,6 +29,13 @@ test("structured failures expose stable automation categories", () => {
     message: "Process 42 could not be identified, so its workspace cannot be released safely",
     retryable: true,
   });
+  assert.equal(
+    errorRecord(new AggregateError([
+      new Error("heartbeat failed"),
+      new ProcessIdentityUnavailableError(42),
+    ], "activity and cleanup failed")).code,
+    "RESOURCE_BUSY",
+  );
   assert.deepEqual(errorRecord(new Error("Could not enumerate POSIX processes: unavailable")), {
     status: "error",
     code: "RESOURCE_BUSY",

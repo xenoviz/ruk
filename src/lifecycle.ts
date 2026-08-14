@@ -367,17 +367,26 @@ export async function refreshAssignmentActivity(
   return updateState(paths, (state) => {
     const workspace = findByAssignment(state.workspaces, assignmentId);
     requireLifecycle(workspace, "assigned");
-    const now = timestamp(input.now, "now");
-    const validUntil = timestamp(input.validUntil, "validUntil");
-    if (Date.parse(validUntil) <= Date.parse(now)) {
+    const observedAt = timestamp(input.now, "now");
+    const requestedValidUntil = timestamp(input.validUntil, "validUntil");
+    if (Date.parse(requestedValidUntil) <= Date.parse(observedAt)) {
       throw new Error("validUntil must be after now");
     }
+    const current = workspace.assignment!;
+    const now = Date.parse(observedAt) < Date.parse(current.renewedAt)
+      ? current.renewedAt
+      : observedAt;
+    const effectiveValidUntil = new Date(
+      Date.parse(now) + Date.parse(requestedValidUntil) - Date.parse(observedAt),
+    ).toISOString();
     const keeperId = uuid(input.keeperId, "keeperId");
-    const keeper = workspace.assignment!.leaseKeepers.find(({ id }) => id === keeperId);
+    const keeper = current.leaseKeepers.find(({ id }) => id === keeperId);
     if (!keeper) throw new Error(`Lease keeper ${keeperId} is not active`);
     keeper.heartbeatAt = now;
-    keeper.validUntil = validUntil;
-    workspace.assignment!.leaseKeepers = workspace.assignment!.leaseKeepers.filter(
+    keeper.validUntil = Date.parse(effectiveValidUntil) < Date.parse(keeper.validUntil)
+      ? keeper.validUntil
+      : effectiveValidUntil;
+    current.leaseKeepers = current.leaseKeepers.filter(
       (candidate) => candidate.id === keeperId || Date.parse(candidate.validUntil) > Date.parse(now),
     );
     recordActivity(workspace, now);

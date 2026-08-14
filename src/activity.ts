@@ -157,7 +157,18 @@ export async function withAssignmentActivity<T>(
     const result = await Promise.race([work, heartbeatFailure]);
     return result;
   } catch (error) {
-    if (heartbeatError !== undefined) await work.catch(() => undefined);
+    if (heartbeatError !== undefined) {
+      try {
+        await work;
+      } catch (operationError) {
+        if (operationError !== error) {
+          throw new AggregateError(
+            [error, operationError],
+            `Assignment ${assignmentId} activity renewal and operation cleanup failed`,
+          );
+        }
+      }
+    }
     throw error;
   } finally {
     controller.abort();

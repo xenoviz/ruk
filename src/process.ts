@@ -33,6 +33,18 @@ export class ProcessIdentityUnavailableError extends Error {
   }
 }
 
+export function containsProcessIdentityUnavailableError(
+  error: unknown,
+): boolean {
+  if (error instanceof ProcessIdentityUnavailableError) return true;
+  if (error instanceof AggregateError) {
+    return error.errors.some((nested) => containsProcessIdentityUnavailableError(nested));
+  }
+  return error instanceof Error && error.cause !== undefined
+    ? containsProcessIdentityUnavailableError(error.cause)
+    : false;
+}
+
 interface IdentityProbeRequest {
   resolve: (identity: string | null) => void;
   reject: (error: unknown) => void;
@@ -620,9 +632,17 @@ async function terminateSpawnedProcess(pid: number, detached: boolean, expectedI
     try { process.kill(-pid, "SIGKILL"); return true; } catch (error) { if (!isMissingProcess(error)) throw error; }
     return false;
   }
-  if (!expectedIdentity) return false;
   const identity = await freshProcessIdentity(pid);
-  if (!identity) return false;
+  if (!identity) {
+    try {
+      if (await freshProcessDescendantsExist(pid)) throw new ProcessIdentityUnavailableError(pid);
+    } catch (error) {
+      if (error instanceof ProcessIdentityUnavailableError) throw error;
+      throw new ProcessIdentityUnavailableError(pid);
+    }
+    return false;
+  }
+  if (!expectedIdentity) throw new ProcessIdentityUnavailableError(pid);
   if (identity !== expectedIdentity) throw new Error(`Refusing to terminate reused process ID ${pid}`);
   const result = await run("ps", ["-e", "-o", "pid=", "-o", "ppid=", "-o", "stat="], { allowFailure: true });
   if (result.code !== 0) throw new Error(`Could not enumerate POSIX processes: ${result.stderr.trim()}`);

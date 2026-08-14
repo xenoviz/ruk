@@ -187,6 +187,33 @@ test("assignment activity renews the lease and fences concurrent keepers", async
   );
 });
 
+test("a delayed activity refresh cannot shorten a newer explicit renewal", async (t) => {
+  const { root, paths } = await fixture(t);
+  const workspace = await assign(paths, path.join(root, "workspace"));
+  const assignmentId = workspace.assignment!.id;
+  const keeperId = "00000000-0000-4000-8000-000000000006";
+
+  await beginAssignmentActivity(paths, assignmentId, {
+    keeperId,
+    validUntil: T3,
+    now: T1,
+  });
+  await renewAssignment(paths, assignmentId, T5, T4);
+  const refreshed = await refreshAssignmentActivity(paths, assignmentId, {
+    keeperId,
+    validUntil: T3,
+    now: T2,
+  });
+
+  assert.equal(refreshed.assignment!.renewedAt, T4);
+  assert.equal(refreshed.assignment!.lastActivityAt, T4);
+  assert.equal(refreshed.assignment!.expiresAt, T5);
+  assert.deepEqual(
+    refreshed.assignment!.leaseKeepers.find(({ id }) => id === keeperId),
+    { id: keeperId, heartbeatAt: T4, validUntil: T5 },
+  );
+});
+
 test("forced GC does not select an expired assignment with a current keeper", async (t) => {
   const { root, paths } = await fixture(t);
   const workspace = await assign(paths, path.join(root, "workspace"), T0, T1);

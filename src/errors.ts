@@ -1,6 +1,6 @@
 import { AssignmentActivityError } from "./activity.js";
 import { SharedCheckoutError } from "./checkout.js";
-import { ProcessIdentityUnavailableError } from "./process.js";
+import { containsProcessIdentityUnavailableError } from "./process.js";
 
 export interface ErrorRecord {
   status: "error";
@@ -41,7 +41,7 @@ export function errorRecord(error: unknown): ErrorRecord {
   }
   const match = error instanceof DependencyPreparationError
     ? [/.*/, "DEPENDENCY_PREPARATION_FAILED", true] as const
-    : error instanceof ProcessIdentityUnavailableError
+    : containsProcessIdentityUnavailableError(error)
       ? [/.*/, "RESOURCE_BUSY", true] as const
       : error instanceof AssignmentActivityError
         ? [/.*/, "RESOURCE_BUSY", true] as const

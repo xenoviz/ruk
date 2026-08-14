@@ -123,6 +123,28 @@ test("process runner terminates a managed child when its abort signal fires", as
   await assert.rejects(running, /heartbeat lost|cannot be released safely/);
 });
 
+test("process runner fails closed when attached abort cleanup cannot inspect descendants", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX process enumeration is required");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-process-abort-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const ps = path.join(root, "ps");
+  await fs.writeFile(ps, "#!/bin/sh\nexit 1\n");
+  await fs.chmod(ps, 0o755);
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = root;
+  const controller = new AbortController();
+  try {
+    const running = run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      signal: controller.signal,
+      onSpawn: () => controller.abort(new Error("heartbeat lost")),
+    });
+    await assert.rejects(running, /cannot be released safely/);
+  } finally {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+  }
+});
+
 test("command detection recognizes the active Node executable", async () => {
   assert.equal(await commandExists(process.execPath), true);
   assert.equal(await commandExists(path.join(os.tmpdir(), "ruk-command-that-does-not-exist")), false);

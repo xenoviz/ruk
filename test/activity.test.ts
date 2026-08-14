@@ -14,6 +14,10 @@ import {
   refreshAssignmentActivity,
   renewAssignment,
 } from "../src/lifecycle.js";
+import {
+  containsProcessIdentityUnavailableError,
+  ProcessIdentityUnavailableError,
+} from "../src/process.js";
 import { readState, storePaths } from "../src/state.js";
 
 async function fixture(t: test.TestContext, leaseDurationMinutes = 480) {
@@ -102,6 +106,32 @@ test("withAssignmentActivity reports a lost keeper and invokes failure cleanup",
   );
 
   assert.equal(cleaned, true);
+});
+
+test("withAssignmentActivity preserves a failed abort cleanup", async (t) => {
+  const { paths, assignmentId } = await fixture(t);
+
+  await assert.rejects(
+    withAssignmentActivity(
+      paths,
+      assignmentId,
+      async (signal) => {
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        throw new ProcessIdentityUnavailableError(42);
+      },
+      {
+        heartbeatIntervalMs: 10,
+        retryAttempts: 0,
+        refresh: async () => { throw new Error("heartbeat write failed"); },
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(containsProcessIdentityUnavailableError(error), true);
+      assert.match(error.message, /operation cleanup failed/);
+      return true;
+    },
+  );
 });
 
 test("withAssignmentActivity retries transient heartbeat writes before failing work", async (t) => {

@@ -49,8 +49,8 @@ import { withDirectoryLock } from "./lock.js";
 import { portEnvironment } from "./ports.js";
 import {
   commandExists,
+  containsProcessIdentityUnavailableError,
   freshTrackedProcessExists,
-  ProcessIdentityUnavailableError,
   processIdentity,
   requireChildProcessSession,
   requireProcessIdentity,
@@ -1241,7 +1241,7 @@ async function runAssignedAndRelease(
   } catch (error) {
     commandError = error;
   }
-  if (commandError instanceof ProcessIdentityUnavailableError) {
+  if (containsProcessIdentityUnavailableError(commandError)) {
     retainedAssignment(io, assigned, commandError);
     throw commandError;
   }

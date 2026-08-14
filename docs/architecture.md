@@ -128,7 +128,9 @@ Managed `run`, `exec`, `shell`, and assigned `sync` operations register a
 short-lived keeper and renew from the assignment's stored lease duration while
 work continues. Multiple keepers can coexist, and each removes only its own
 fenced record. A lost keeper stops its tracked command rather than allowing
-cleanup to race an unowned process.
+cleanup to race an unowned process. Heartbeat timestamps are monotonic inside
+the state transaction, so a delayed refresh cannot shorten or overwrite a
+newer explicit renewal.
 Process cleanup is limited to children recorded through `ruk run` for the
 assignment. If identity lookup fails while descendants remain, automatic
 release stops and retains the assignment. Leaderless POSIX process groups fail
@@ -138,6 +140,9 @@ process record, so a recently exited child cannot remain falsely active.
 Windows registration cleanup terminates the new process tree only with a verified
 leader identity and otherwise retains ownership while descendants remain or the
 leader PID is reused.
+Abort cleanup follows the same fail-closed rule for attached children. If
+descendants cannot be ruled out, the cleanup error is preserved with the
+heartbeat failure and automatic release retains the assignment.
 Interactive shells use their isolated session ID on Linux and controlling
 terminal on macOS, where `ps` does not expose the POSIX session ID. A live
 identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
