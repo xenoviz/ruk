@@ -31,5 +31,10 @@ try {
 
   process.stdout.write("Verified the native Ruk executable.\n");
 } finally {
-  await fs.rm(temporary, { recursive: true, force: true });
+  await fs.rm(temporary, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
 }
