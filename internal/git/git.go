@@ -273,6 +273,36 @@ func (client Client) Fetch(ctx context.Context, cwd, remote, ref string) error {
 	return nil
 }
 
+// FetchDefaultBranch resolves the selected remote's symbolic HEAD, fetches the
+// remote, and returns the exact remote-tracking ref. It never guesses a branch
+// name from local configuration.
+func (client Client) FetchDefaultBranch(ctx context.Context, cwd string) (string, error) {
+	remote, err := client.SelectRemote(ctx, cwd, "")
+	if err != nil {
+		return "", err
+	}
+	result, err := client.run(ctx, cwd, []string{"ls-remote", "--symref", remote, "HEAD"})
+	if err != nil {
+		return "", fmt.Errorf("resolve default branch for %s: %w", remote, err)
+	}
+	branch := ""
+	for _, line := range strings.Split(strings.ReplaceAll(result.Stdout, "\r\n", "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "ref:" && strings.HasPrefix(fields[1], "refs/heads/") && fields[2] == "HEAD" {
+			branch = strings.TrimPrefix(fields[1], "refs/heads/")
+			break
+		}
+	}
+	if branch == "" {
+		return "", fmt.Errorf("Git remote %s does not advertise a default branch", remote)
+	}
+	ref := "refs/remotes/" + remote + "/" + branch
+	if err := client.Fetch(ctx, cwd, remote, ref); err != nil {
+		return "", err
+	}
+	return ref, nil
+}
+
 // AddWorktree creates a linked worktree at destination. Existing local
 // branches are checked out directly; missing branches are created from
 // startPoint. Detached pool workspaces never create or reuse branch names.
