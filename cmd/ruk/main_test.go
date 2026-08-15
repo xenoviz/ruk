@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
+
+	"github.com/xenoviz/ruk/internal/cli"
 )
 
 func TestRunMainPreservesVersionAndErrorBoundary(t *testing.T) {
@@ -24,7 +27,25 @@ func TestRunMainPreservesVersionAndErrorBoundary(t *testing.T) {
 	if code := runMain([]string{"unknown"}, &stdout, &stderr); code != 1 {
 		t.Fatalf("error exit code = %d, want 1", code)
 	}
-	if stdout.String() != "" || stderr.String() != "ruk: command is not implemented\n" {
+	if stdout.String() != "" || stderr.String() != "ruk: Unknown command unknown. Run ruk --help.\n" {
 		t.Fatalf("error stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunMainWritesOneStructuredErrorWhenJSONIsRequested(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runMain([]string{"status", "--unknown", "--json"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	var record cli.ErrorRecord
+	if err := json.Unmarshal(stderr.Bytes(), &record); err != nil {
+		t.Fatalf("stderr = %q: %v", stderr.String(), err)
+	}
+	if record.Status != "error" || record.Code != cli.InvalidArgumentCode || record.Retryable {
+		t.Fatalf("record = %#v", record)
 	}
 }
