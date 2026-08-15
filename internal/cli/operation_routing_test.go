@@ -164,7 +164,7 @@ func TestApplicationRoutesReturnDiscoveryErrorsWithoutCallingOperations(t *testi
 		},
 		Warm: func(context.Context, git.Repository, cli.WarmRequest) (lifecycle.WarmResult, error) {
 			called = true
-			return cli.WarmResult{}, nil
+			return lifecycle.WarmResult{}, nil
 		},
 	})
 	code, err := application.Run(context.Background(), []string{"warm", "--count", "1"})
