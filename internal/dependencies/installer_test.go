@@ -114,7 +114,7 @@ func TestInstallerPrepareRejectsUnsupportedSharedModesAndVersions(t *testing.T) 
 		manager PackageManager
 		wantErr string
 	}{
-		{name: "unsupported manager", manager: PackageManager{Name: "npm", Version: "11.0.0", Command: []string{"npm", "install"}, DependencyMode: "shared"}, wantErr: `The shared dependency backend does not support npm; use dependencyMode "managed"`},
+		{name: "unsupported manager", manager: PackageManager{Name: "npm", Version: "11.0.0", Command: []string{"npm", "install"}, DependencyMode: "shared"}, wantErr: `Ruk's shared dependency backend does not support npm`},
 		{name: "bun below minimum", manager: PackageManager{Name: "bun", Version: "1.3.13", Command: []string{"bun", "install"}, DependencyMode: "shared"}, wantErr: "bun 1.3.14 or newer is required"},
 		{name: "pnpm unknown version", manager: PackageManager{Name: "pnpm", Version: "unknown", Command: []string{"pnpm", "install"}, DependencyMode: "shared"}, wantErr: "pnpm 10.12.1 or newer is required"},
 		{name: "bun non-isolated linker", manager: PackageManager{Name: "bun", Version: "1.3.14", Command: []string{"bun", "install", "--linker=hoisted"}, DependencyMode: "shared"}, wantErr: "Bun's global virtual store requires the isolated linker"},
