@@ -22,6 +22,11 @@ type shellProcessRunnerStub struct {
 func (stub *shellProcessRunnerStub) Run(_ context.Context, command []string, options processpkg.RunOptions) (processpkg.RunResult, error) {
 	stub.command = append([]string(nil), command...)
 	stub.options = options
+	if stub.err == nil && options.Register != nil {
+		if err := options.Register(context.Background(), stub.result.Record); err != nil {
+			return stub.result, err
+		}
+	}
 	return stub.result, stub.err
 }
 
@@ -94,6 +99,39 @@ func TestNativeShellTerminalFailsClosedWhenDescendantsRemain(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "descendants") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNativeShellTerminalRegistersUntilTheExactTreeDrains(t *testing.T) {
+	record := shellProcessRecord()
+	runner := &shellProcessRunnerStub{result: processpkg.RunResult{Record: record}}
+	tracker := &shellProcessTrackerStub{}
+	events := []string{}
+	terminal := cli.NewNativeShellTerminal(cli.ShellTerminalOptions{
+		Runner:  runner,
+		Tracker: tracker,
+		Register: func(_ context.Context, assignmentID string, registered state.TrackedProcessRecord) error {
+			events = append(events, "register:"+assignmentID)
+			if registered.PID != record.PID || registered.StartedAt != record.StartedAt {
+				t.Fatalf("registered record = %#v", registered)
+			}
+			return nil
+		},
+		Remove: func(_ context.Context, assignmentID string, removed state.TrackedProcessRecord) error {
+			events = append(events, "remove:"+assignmentID)
+			if removed.PID != record.PID || removed.StartedAt != record.StartedAt {
+				t.Fatalf("removed record = %#v", removed)
+			}
+			return nil
+		},
+	})
+
+	result, err := terminal.Run(context.Background(), shellTerminalRequest())
+	if err != nil || !result.DescendantsDrained {
+		t.Fatalf("Run() = %#v, %v", result, err)
+	}
+	if got := strings.Join(events, ","); got != "register:assignment-1,remove:assignment-1" {
+		t.Fatalf("registration events = %q", got)
 	}
 }
 
