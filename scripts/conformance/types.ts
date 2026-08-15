@@ -23,6 +23,7 @@ export interface ConformanceScenario {
   domains?: readonly ConformanceDomain[];
   fixture?: RepositoryFixture;
   compareState?: boolean;
+  compareFinalState?: boolean;
   metadata?: Readonly<Record<string, unknown>>;
 }
 

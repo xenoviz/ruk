@@ -5,7 +5,7 @@
     "fixture": {
       "files": {
         "package.json": "{\"name\":\"conformance-fixture\",\"version\":\"1.0.0\"}\n",
-        ".rukrc.json": "{\"installCommand\":[\"node\",\"-e\",\"process.exit(0)\"]}\n"
+        ".rukrc.json": "{\"installCommand\":[\"node\",\"-e\",\"require('fs').mkdirSync('node_modules',{recursive:true})\"]}\n"
       }
     },
     "steps": [

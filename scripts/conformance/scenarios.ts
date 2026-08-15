@@ -83,6 +83,10 @@ export function validateScenarios(value: unknown): ConformanceScenario[] {
     }
     const compareState = entry["compareState"];
     if (compareState !== undefined && typeof compareState !== "boolean") throw new Error(`Conformance scenario ${entry["name"]} has invalid compareState`);
+    const compareFinalState = entry["compareFinalState"];
+    if (compareFinalState !== undefined && typeof compareFinalState !== "boolean") {
+      throw new Error(`Conformance scenario ${entry["name"]} has invalid compareFinalState`);
+    }
     const args = rawArgs as string[] | undefined;
     const normalizedDomains = domains as ConformanceDomain[] | undefined;
     const fixture = validateFixture(entry["fixture"], index);
@@ -93,6 +97,7 @@ export function validateScenarios(value: unknown): ConformanceScenario[] {
       ...(normalizedDomains ? { domains: normalizedDomains } : {}),
       ...(fixture ? { fixture } : {}),
       ...(compareState === undefined ? {} : { compareState }),
+      ...(compareFinalState === undefined ? {} : { compareFinalState }),
       ...(isRecord(entry["metadata"]) ? { metadata: entry["metadata"] } : {}),
     };
   });

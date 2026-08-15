@@ -36,15 +36,25 @@ function keyIsTimestamp(key: string | undefined): boolean {
 }
 
 function keyIsPort(key: string | undefined): boolean {
-  return key !== undefined && /(?:^|port$|portNumber$)/i.test(key);
+  return key !== undefined && /^(?:port|portNumber)$/i.test(key);
+}
+
+function keyIsPreparationDuration(key: string | undefined): boolean {
+  return key !== undefined && /^(?:total|last|average)PreparationMs$/i.test(key);
+}
+
+function keyIsFingerprint(key: string | undefined): boolean {
+  return key !== undefined && /^(?:fingerprint|preparedFingerprint|projectionFingerprint)$/i.test(key);
 }
 
 function normalizeValue(value: unknown, context: NormalizationContext, key?: string): unknown {
   if (typeof value === "string") {
     if (keyIsTimestamp(key)) return "<timestamp>";
     if (keyIsPID(key)) return "<pid>";
+    if (keyIsFingerprint(key)) return "<fingerprint>";
     return normalizeText(value, context);
   }
+  if (typeof value === "number" && keyIsPreparationDuration(key)) return "<duration>";
   if (typeof value === "number" && keyIsPort(key)) return "<port>";
   if (typeof value === "number" && keyIsPID(key)) return "<pid>";
   if (Array.isArray(value)) return value.map((entry) => normalizeValue(entry, context));
@@ -59,7 +69,7 @@ function normalizeValue(value: unknown, context: NormalizationContext, key?: str
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([entryKey, entryValue]) => [
           entryKey,
-          key === "ports" && typeof entryValue === "number"
+          key?.toLowerCase() === "ports" && typeof entryValue === "number"
             ? "<port>"
             : normalizeValue(entryValue, context, entryKey),
         ]),

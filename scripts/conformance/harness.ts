@@ -22,6 +22,8 @@ import type {
   ScenarioComparison,
 } from "./types.js";
 
+const FIXTURE_COMMIT_DATE = "2026-01-01T00:00:00.000Z";
+
 async function writeFixture(repository: string, fixture: RepositoryFixture): Promise<void> {
   for (const [relative, contents] of Object.entries(fixture.files ?? {})) {
     const target = path.resolve(repository, relative);
@@ -38,12 +40,17 @@ async function freshRepository(root: string, fixture: RepositoryFixture = {}): P
   await fs.mkdir(repository, { recursive: false });
   await writeFixture(repository, fixture);
   if (fixture.git !== false) {
+    const gitEnvironment = {
+      ...process.env,
+      GIT_AUTHOR_DATE: FIXTURE_COMMIT_DATE,
+      GIT_COMMITTER_DATE: FIXTURE_COMMIT_DATE,
+    };
     await run("git", ["init", "-q"], { cwd: repository });
-    await run("git", ["config", "user.email", "conformance@example.invalid"], { cwd: repository });
-    await run("git", ["config", "user.name", "Conformance Harness"], { cwd: repository });
+    await run("git", ["config", "user.email", "conformance@example.invalid"], { cwd: repository, env: gitEnvironment });
+    await run("git", ["config", "user.name", "Conformance Harness"], { cwd: repository, env: gitEnvironment });
     if (Object.keys(fixture.files ?? {}).length === 0) await fs.writeFile(path.join(repository, ".keep"), "fixture\n");
-    await run("git", ["add", "--all"], { cwd: repository });
-    await run("git", ["commit", "-qm", "fixture"], { cwd: repository });
+    await run("git", ["add", "--all"], { cwd: repository, env: gitEnvironment });
+    await run("git", ["commit", "-qm", "fixture"], { cwd: repository, env: gitEnvironment });
     if (fixture.state !== undefined) {
       const statePath = path.join(repository, ".git", "ruk", "state.json");
       await fs.mkdir(path.dirname(statePath), { recursive: true });
@@ -89,6 +96,19 @@ function comparisonPrefix(index: number, step: ConformanceStep): string {
   return `step ${index + 1} (${step.name})`;
 }
 
+function streamDifference(
+  left: string,
+  leftJSON: unknown | null,
+  right: string,
+  rightJSON: unknown | null,
+  context: { roots: readonly string[] },
+): "text" | "json" | null {
+  if (leftJSON !== null || rightJSON !== null) {
+    return canonicalJSON(leftJSON, context) === canonicalJSON(rightJSON, context) ? null : "json";
+  }
+  return normalizeText(left, context) === normalizeText(right, context) ? null : "text";
+}
+
 export function compareStepOutput(
   step: ConformanceStep,
   typescript: ObservedCLIResult,
@@ -100,14 +120,10 @@ export function compareStepOutput(
   const prefix = comparisonPrefix(index, step);
   const differences: string[] = [];
   if (typescript.exitCode !== go.exitCode) differences.push(`${prefix}: exit code differs`);
-  if (normalizeText(typescript.stdout, context) !== normalizeText(go.stdout, context)) differences.push(`${prefix}: stdout differs`);
-  if (normalizeText(typescript.stderr, context) !== normalizeText(go.stderr, context)) differences.push(`${prefix}: stderr differs`);
-  if (typescript.stdoutJSON !== null || go.stdoutJSON !== null) {
-    if (canonicalJSON(typescript.stdoutJSON, context) !== canonicalJSON(go.stdoutJSON, context)) differences.push(`${prefix}: stdout JSON differs`);
-  }
-  if (typescript.stderrJSON !== null || go.stderrJSON !== null) {
-    if (canonicalJSON(typescript.stderrJSON, context) !== canonicalJSON(go.stderrJSON, context)) differences.push(`${prefix}: stderr JSON differs`);
-  }
+  const stdoutDifference = streamDifference(typescript.stdout, typescript.stdoutJSON, go.stdout, go.stdoutJSON, context);
+  if (stdoutDifference) differences.push(`${prefix}: stdout${stdoutDifference === "json" ? " JSON" : ""} differs`);
+  const stderrDifference = streamDifference(typescript.stderr, typescript.stderrJSON, go.stderr, go.stderrJSON, context);
+  if (stderrDifference) differences.push(`${prefix}: stderr${stderrDifference === "json" ? " JSON" : ""} differs`);
   if (step.compareState !== false && canonicalJSON(typescript.state, context) !== canonicalJSON(go.state, context)) differences.push(`${prefix}: state differs`);
   return differences;
 }
@@ -145,7 +161,8 @@ export function compareOutput(
       index,
     ));
   }
-  if (scenario.compareState !== false) {
+  const compareFinalState = scenario.compareFinalState ?? scenario.compareState !== false;
+  if (compareFinalState) {
     const context = { roots: roots.map(normalizeRepositoryPath) };
     if (canonicalJSON(typescript.finalState, context) !== canonicalJSON(go.finalState, context)) {
       differences.push("final state differs");
@@ -160,7 +177,13 @@ function resultValue(result: ObservedCLIResult, property: string): string | unde
   return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
 }
 
-function resolveStepArguments(
+function sourceOutput(label: string, result: ObservedCLIResult): string {
+  const stdout = result.stdout.trim() || "<empty>";
+  const stderr = result.stderr.trim() || "<empty>";
+  return `${label} exited with code ${result.exitCode}; stdout=${JSON.stringify(stdout)}; stderr=${JSON.stringify(stderr)}`;
+}
+
+export function resolveStepArguments(
   args: readonly string[],
   previous: ReadonlyMap<string, ObservedCLIResult>,
   last: ObservedCLIResult | undefined,
@@ -169,9 +192,18 @@ function resolveStepArguments(
     const separator = expression.indexOf(".");
     const stepName = separator < 0 ? undefined : expression.slice(0, separator);
     const property = separator < 0 ? expression : expression.slice(separator + 1);
+    const sourceLabel = stepName ? `step ${stepName}` : "the previous step";
     const source = stepName ? previous.get(stepName) : last;
-    const value = source ? resultValue(source, property) : undefined;
-    if (value === undefined) throw new Error(`Conformance step reference ${expression} is unavailable`);
+    if (!source) {
+      throw new Error(`Conformance step reference ${expression} is unavailable: ${sourceLabel} has no result`);
+    }
+    if (source.exitCode !== 0) {
+      throw new Error(`Conformance step reference ${expression} cannot use ${sourceLabel}: ${sourceOutput(sourceLabel, source)}`);
+    }
+    const value = resultValue(source, property);
+    if (value === undefined) {
+      throw new Error(`Conformance step reference ${expression} is unavailable: ${sourceOutput(sourceLabel, source)}`);
+    }
     return value;
   }));
 }
