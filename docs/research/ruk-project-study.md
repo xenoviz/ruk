@@ -1,8 +1,14 @@
-# Ruk project study
+# Ruk project study (historical snapshot)
 
 Research snapshot: 2026-08-04. This note is based on repository-owned
 documentation, implementation, tests, scripts, and workflows, plus the dated
 GitHub project-state observations called out explicitly below.
+
+This note describes the pre-Go 0.2 repository state and retains its original
+source links for auditability. For the current Go-native runtime, distributions,
+and release behavior, use the [architecture guide](../architecture.md),
+[installation guide](../../website/getting-started/install.md), and the public
+documentation site.
 
 ## Executive summary
 

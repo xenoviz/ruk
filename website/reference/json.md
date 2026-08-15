@@ -1,7 +1,9 @@
 # JSON contracts
 
 Use `--json` for automation. Paths are absolute and timestamps are ISO 8601 UTC
-strings. Consumers must ignore unknown object fields.
+strings. Consumers must ignore unknown object fields. The installed runtime is
+a native Go binary in both npm and standalone distributions; JSON contracts are
+shared across those distributions.
 
 ## Acquire
 
@@ -102,3 +104,10 @@ treated as `OPERATION_FAILED`.
 
 A denied shared-checkout command reports `RESOURCE_BUSY`, sets `retryable` to
 `true`, and also includes `activeAssignments` and `recovery`.
+
+## Update distribution
+
+Package updates report the package-manager method (`npm`, `bun`, `pnpm`, or
+`yarn`) and delegate installation to that manager. Standalone updates report
+`standalone` and the selected native asset. Stable versions ignore prerelease
+releases; a current prerelease version follows newer prereleases automatically.

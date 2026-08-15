@@ -17,6 +17,8 @@ hero:
 features:
   - title: Local by design
     details: Ruk coordinates worktrees on one host. It needs no service, account, or long-running daemon.
+  - title: Native and lightweight
+    details: One dependency-free Go runtime powers npm and standalone distributions, with native process inspection on Windows.
   - title: Fenced ownership
     details: Every assignment receives an immutable ID, so delayed automation cannot release a workspace after reassignment.
   - title: Dependency-aware

@@ -1,6 +1,7 @@
 # Agent interface
 
-Use `--json` for automation. On success, Ruk writes exactly one JSON value and
+Ruk's installed command is a dependency-free native Go binary. Use `--json` for
+automation. On success, Ruk writes exactly one JSON value and
 a trailing newline to stdout. Human-mode progress and dependency-installer
 output use the terminal; JSON mode discards installer streams so verbose tools
 cannot grow an unbounded in-memory buffer. A failure exits nonzero, writes one
@@ -226,3 +227,12 @@ Stable categories include `INVALID_ARGUMENT`, `ASSIGNMENT_CONFLICT`,
 `OPERATION_FAILED`. Consumers must still ignore unknown fields and categories.
 Malformed `.rukrc.json` input and TTL values outside the supported date range
 are non-retryable `INVALID_ARGUMENT` errors raised before acquisition.
+
+## Update ownership
+
+`ruk update` is explicit and never runs in the background. An npm installation
+delegates the exact version to the package manager recorded by its durable
+distribution marker; standalone binaries verify the release manifest and
+replace their native executable atomically. Stable installations select stable
+releases. A current prerelease follows newer prereleases automatically, which
+keeps beta installations on the beta channel without a second flag.

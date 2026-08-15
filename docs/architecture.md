@@ -2,28 +2,34 @@
 
 ## Toolchain and distributions
 
-Ruk is authored in strict TypeScript and uses the pinned Bun toolchain for
-dependency installation, repository scripts, and standalone executable builds.
-TypeScript performs static checking and emits the Node-compatible npm package.
+Ruk's shipped runtime is a single dependency-free Go application. The CLI uses
+native operating-system APIs for process inspection, locking, signals, and
+atomic replacement. Git and repository package managers remain explicit child
+processes; Ruk does not reimplement them.
 
-The core uses portable `node:*` APIs and must not depend on `Bun.*` APIs. This
-keeps one source tree valid for both distributions:
+The same Go runtime is distributed in two forms:
 
-- compiled JavaScript for Node.js 22.14 and newer, published to npm without
-  runtime dependencies;
-- self-contained Bun executables for Linux, macOS, and Windows.
+- a small `@xenoviz/ruk` npm package with one of seven optional native platform
+  packages; the package installer places the verified binary on the user's
+  package-manager path and exits;
+- standalone Linux, macOS, and Windows binaries for x64 and ARM64, including a
+  Linux x64 musl build, with checksums and provenance attestations.
 
-Both distributions must exercise real Git subprocess behavior in CI. A binary
-that only starts or prints its version is not considered verified.
+Node.js, Bun, pnpm, and Yarn may run package-manager installation or update
+hooks, but none is retained as Ruk's command supervisor. Bun remains a
+repository tool for VitePress and supporting scripts. Both distributions must
+exercise real Git subprocess behavior in CI; a binary that only starts or
+prints its version is not considered verified.
 
 ## Updates and release trust
 
 Self-update is an explicit operation; ordinary commands never contact GitHub.
 The package distribution delegates an exact version to the package manager that
-owns the installation. Standalone builds download only release assets from the
-canonical repository, enforce a size limit, verify the SHA-256 digest committed
-by the readiness manifest, and replace the executable through a same-directory
-staged file.
+owns the installation. A durable marker records that installer ownership so
+path layouts do not silently select the wrong manager. Standalone builds
+download only release assets from the canonical repository, enforce a size
+limit, verify the SHA-256 digest committed by the readiness manifest, and
+replace the executable through a same-directory staged file.
 
 GitHub release visibility is not update readiness. Protected version tags are
 immutable after creation, and the release workflow rejects a triggering commit
@@ -33,7 +39,9 @@ assets. A final job creates a mutable draft release, verifies the staged
 checksums, uploads the assets, uploads `ruk-release.json` last, and only then
 publishes the immutable release.
 Update discovery considers only stable releases with a valid readiness manifest
-and falls back to the previous ready release while publication is incomplete.
+for stable installs. A version already carrying a prerelease identifier follows
+newer prereleases on that channel without a second opt-in. Incomplete releases
+are ignored, so update discovery falls back to the previous ready release.
 
 POSIX replacement retains a rollback copy until the new executable reports the
 expected version. Windows defers replacement to a detached operating-system
@@ -51,22 +59,24 @@ replacement.
 
 ## Boundaries
 
-Ruk has five deliberately separate concerns:
+Ruk has deliberately separate Go packages:
 
-1. `git.js` discovers repositories and performs Git worktree operations.
-2. `fingerprint.js` identifies dependency inputs without interpreting source.
-3. `dependencies.js` prepares one local projection through a selected backend.
-4. `state.js` records preparation metadata under the common Git directory.
-5. `update.js` owns release discovery, installer delegation, integrity checks,
-   and executable replacement.
-6. `ports.js` performs short-lived OS port probes, coordinates a host-level
-   reservation registry, and maps names into environment variables.
-7. `statistics.js` derives aggregate and optional on-demand disk measurements.
-8. `activity.js` owns assignment heartbeat timing and keeper cleanup.
-9. `checkout.js` owns primary-checkout sharing policy and diagnostics.
+1. `internal/git` discovers repositories and performs Git worktree operations.
+2. `internal/dependencies` identifies dependency inputs and prepares one local
+   projection through a selected backend.
+3. `internal/state` records preparation metadata under the common Git directory.
+4. `internal/lifecycle` owns assignments, activity keepers, returns, warm, and
+   garbage collection.
+5. `internal/process` owns process identity, descendants, signals, and safe
+   termination, with native Windows and POSIX implementations.
+6. `internal/ports` and `internal/statistics` own host reservations and bounded
+   usage reporting.
+7. `internal/update` owns release discovery, installer delegation, integrity
+   checks, prerelease selection, and executable replacement.
+8. `internal/cli` composes these modules and owns the human and JSON boundary.
 
-`cli.js` composes these modules. Business rules should remain in the closest
-module instead of accumulating in the CLI.
+Business rules remain in the module that owns the relevant state or operating-
+system action instead of accumulating in the CLI.
 
 ## Safety invariants
 
@@ -155,13 +165,13 @@ accepted as completion only when an OS liveness check confirms that process no
 longer exists. The workspace tree lock remains held until child registration is
 persisted or failed registration cleanup settles, so release cannot recycle the
 worktree during that handoff.
-Interactive shells use their isolated session ID on Linux and controlling
-terminal on macOS, where `ps` does not expose the POSIX session ID. A live
-identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
-cleanup, and a leaderless Linux session fails closed. Detached managed commands
-explicitly forward wrapper interrupt and termination signals to their process group.
-Linux checks for the util-linux `script` command before acquiring an interactive
-shell workspace.
+Interactive shells inherit the user's terminal and run behind a native POSIX
+process-group or Windows job boundary. Ruk records the shell leader and checks
+the tracked tree after it exits; an unverifiable or leaderless record fails
+closed. The Go runtime does not launch util-linux `script`, PowerShell, or a
+shell helper to provide this boundary, and this adapter does not allocate a PTY
+or ConPTY. Detached managed commands explicitly forward wrapper interrupt and
+termination signals to their tracked process group or job.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same

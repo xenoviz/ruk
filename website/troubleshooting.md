@@ -9,6 +9,10 @@ on `PATH`, then run:
 ruk --version
 ```
 
+The npm package installs a native platform binary. Node.js or Bun may be needed
+by the package manager during installation, but neither is required to run the
+command afterward.
+
 ## The declared package manager is missing
 
 Ruk uses the repository's `packageManager` field before lockfile detection.
@@ -58,6 +62,10 @@ recovery target before using `--force-expired`.
 Without `--force`, Ruk preserves the assignment when a recorded process does
 not stop gracefully. Inspect the process and retry. Forced release escalates to
 forceful process-tree termination.
+
+On Windows, routine Ruk liveness checks use native process APIs and do not
+launch PowerShell. If a process remains, preserve the assignment and inspect
+the recorded process before considering forced recovery.
 
 ## Shared mode fails checks
 

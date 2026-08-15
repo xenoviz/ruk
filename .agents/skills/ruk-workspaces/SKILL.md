@@ -5,6 +5,13 @@ description: Manage Ruk workspaces for coding agents. Use when an agent must acq
 
 # Ruk Workspaces
 
+Ruk 0.3 runs as one dependency-free native Go binary. The npm distribution
+installs the matching platform package, while standalone downloads provide the
+same command without Node.js or Bun. Package-manager runtimes may still be
+needed to install or update the npm distribution; they are not Ruk's command
+supervisor. On Windows, routine process liveness uses native APIs and does not
+launch PowerShell.
+
 ## Workflow
 
 1. Run `ruk acquire <branch> --owner <stable-agent-id> --json` from the source
@@ -51,13 +58,14 @@ Managed detached `run` and `exec` commands forward `SIGINT` and `SIGTERM` to
 their POSIX process group and preserve conventional 130/143 exit codes. Ordinary
 release is rejected until acquisition handoff finishes.
 Inspect that process tree before forcing release. Use `ruk shell <branch>` for
-an interactive, terminal-attached assigned shell; its isolated terminal session
-keeps surviving descendants tracked after the shell exits (by session ID on
-Linux and a live, identity-fenced controlling-terminal sentinel on macOS).
-Leaderless Linux session records fail closed rather than signaling a reused ID.
-Non-interactive shell input skips PTY allocation so EOF remains observable and
-forwards interrupts to its detached process group. Commit intended work before
-exit so normal release can succeed. Release integrity-validates recorded dependency projections:
+an interactive, terminal-attached assigned shell. Ruk inherits the terminal and
+uses a native POSIX process group or Windows job boundary to track descendants
+after the shell leader exits. It does not launch `script`, PowerShell, or another
+shell helper, and it does not claim to allocate a PTY or ConPTY. A leaderless or
+unverifiable process record fails closed rather than signaling a reusable
+numeric ID. Non-interactive shell input keeps EOF observable and forwards
+interrupts to its tracked process group. Commit intended work before exit so
+normal release can succeed. Release integrity-validates recorded dependency projections:
 unchanged projections stay warm, while modified projections are discarded and
 rebuilt from the package store before the next assigned command. Warm capacity
 counts only projections whose dependency inputs and integrity fingerprint still
@@ -67,6 +75,13 @@ Status and list JSON also expose `lastActivityAt`, derived `autoRenewing`,
 `primaryCheckout`, `managed`, and `activeAssignments`.
 Heartbeat state writes receive bounded retries; a persistent renewal failure is
 a retryable `RESOURCE_BUSY` error and stops the tracked command.
+
+Automatic renewal is activity-based, not filesystem-based. Ruk records activity
+for fenced operations it owns; edits made directly by an editor, build tool, or
+another terminal do not renew the lease. Renew explicitly before the idle
+window expires when work continues outside `run`, `exec`, `shell`, or assigned
+`sync`. A current keeper can keep an expired timestamp from being collected,
+but expiry alone never transfers ownership.
 
 Treat the repository's primary checkout as a control location. When active
 assignments exist, `ruk run` and `ruk sync` deny task work there by default.
@@ -127,8 +142,14 @@ the underlying installer; select shared mode explicitly only when the custom
 command implements a supported Bun or pnpm shared layout.
 Active acquisition handoffs are retryable `RESOURCE_BUSY` errors; unknown
 configuration keys, malformed `.rukrc.json`, and invalid TTL ranges are
-non-retryable `INVALID_ARGUMENT` errors. Interactive Linux shells require the
-util-linux `script` command, which Ruk checks before acquiring a workspace.
+non-retryable `INVALID_ARGUMENT` errors. Interactive Linux shells do not depend
+on the util-linux `script` command.
 Forced GC reports only expired assignments that remain active after collection.
 Explicit shorthand `remote/branch` fetches reject missing remotes unless the
 start point is an existing local branch.
+
+For updates, stable installations select completed stable releases. A current
+prerelease follows newer prereleases automatically. Package installations
+delegate the exact version to their owning package manager; standalone
+installations verify the native asset and replace it atomically. Never infer
+installer ownership from a path when the distribution marker is available.
