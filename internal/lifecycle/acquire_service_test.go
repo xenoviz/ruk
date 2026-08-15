@@ -209,7 +209,7 @@ func TestAcquireCleanupFailureRetainsReusableAssignmentForRecovery(t *testing.T)
 	}
 }
 
-func TestAcquireRejectsConcurrentOwnershipChangeAndDoesNotTouchWorktree(t *testing.T) {
+func TestAcquireSkipsConcurrentOwnershipChangeAndUsesFreshWorktree(t *testing.T) {
 	t.Parallel()
 	store := newMemoryStore()
 	path := addAvailableWorkspace(t, store, "concurrent", "2026-01-01T00:00:00.000Z", nil, state.LifecycleAvailable)
@@ -233,7 +233,7 @@ func TestAcquireRejectsConcurrentOwnershipChangeAndDoesNotTouchWorktree(t *testi
 	if err != nil {
 		t.Fatalf("Acquire returned an error after skipping the changed candidate: %v", err)
 	}
-	if result.Path != freshPath || worktree.assigned != 0 || len(worktree.createdPaths) != 1 || worktree.createdPaths[0] != freshPath {
+	if result.Path != freshPath || worktree.assigned != 1 || len(worktree.createdPaths) != 1 || worktree.createdPaths[0] != freshPath {
 		t.Fatalf("candidate race worktree/result = %#v / %#v", worktree, result)
 	}
 }

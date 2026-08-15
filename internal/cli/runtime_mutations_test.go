@@ -105,7 +105,7 @@ func TestNewMutationAdaptersBuildsAllRoutesAndCreateOrchestratesFreshWorktree(t 
 	if err != nil {
 		t.Fatalf("Acquire returned an error: %v", err)
 	}
-	if result.Path == "" || result.Status != "assigned" || len(workspace.created) != 1 || len(workspace.assigned) != 0 {
+	if result.Path == "" || result.Status != "assigned" || len(workspace.created) != 1 || len(workspace.assigned) != 1 {
 		t.Fatalf("result=%#v created=%#v assigned=%#v", result, workspace.created, workspace.assigned)
 	}
 	if !strings.Contains(workspace.created[0], "agent-fresh") || !strings.HasSuffix(workspace.created[0], "|HEAD") {
