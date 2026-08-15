@@ -185,6 +185,12 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 		return ShellResult{}, errors.New("shell acquire returned an incomplete assignment")
 	}
 	base := ShellResult{Shell: shell, AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: acquired.ExpiresAt}
+	if input.Stderr != nil {
+		if _, err := fmt.Fprintf(input.Stderr, "Shell workspace: %s\nAssignment: %s\n", acquired.Path, acquired.AssignmentID); err != nil {
+			base.Retained = true
+			return base, retainedShellError(acquired, fmt.Errorf("write shell handoff: %w", err))
+		}
+	}
 	terminal, terminalErr := service.terminal.Run(ctx, ShellTerminalRequest{
 		AssignmentID: acquired.AssignmentID, WorkspacePath: acquired.Path, Shell: shell,
 		Stdin: input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
