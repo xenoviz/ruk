@@ -273,6 +273,41 @@ func (client Client) Fetch(ctx context.Context, cwd, remote, ref string) error {
 	return nil
 }
 
+// AddWorktree creates a linked worktree at destination. Existing local
+// branches are checked out directly; missing branches are created from
+// startPoint. Detached pool workspaces never create or reuse branch names.
+func (client Client) AddWorktree(ctx context.Context, cwd, destination, branch, startPoint string, detach bool) error {
+	if destination == "" {
+		return errors.New("worktree destination must not be empty")
+	}
+	if startPoint == "" {
+		startPoint = "HEAD"
+	}
+
+	args := []string{"worktree", "add"}
+	if detach {
+		args = append(args, "--detach", destination, startPoint)
+	} else {
+		if branch == "" {
+			return errors.New("worktree branch must not be empty")
+		}
+		exists, err := client.LocalBranchExists(ctx, cwd, branch)
+		if err != nil {
+			return fmt.Errorf("inspect worktree branch %s: %w", branch, err)
+		}
+		if exists {
+			args = append(args, destination, branch)
+		} else {
+			args = append(args, "-b", branch, destination, startPoint)
+		}
+	}
+
+	if _, err := client.run(ctx, cwd, args); err != nil {
+		return fmt.Errorf("add worktree %s: %w", destination, err)
+	}
+	return nil
+}
+
 func (client Client) remoteFromStartPoint(ctx context.Context, cwd, startPoint string) (string, bool, error) {
 	if startPoint == "" || strings.HasPrefix(startPoint, "-") {
 		return "", false, nil
