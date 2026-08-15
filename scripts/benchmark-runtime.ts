@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -187,6 +187,39 @@ function isPowerShell(name: string): boolean {
   return normalized === "powershell.exe" || normalized === "pwsh.exe" || normalized === "powershell" || normalized === "pwsh";
 }
 
+export function hasCompleteRootSample(report: ProcessReport, rootPids: readonly number[]): boolean {
+  const processIDs = new Set(report.processes.map((process) => process.pid));
+  return rootPids.every((pid) => processIDs.has(pid));
+}
+
+async function waitForWrapperCompletion(completion: Promise<WrapperResult[]>, timeoutMs: number): Promise<boolean> {
+  let settled = false;
+  await Promise.race([
+    completion.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    ),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+  return settled;
+}
+
+async function stopWrapperRoots(
+  children: readonly ChildProcessWithoutNullStreams[],
+  completion: Promise<WrapperResult[]>,
+): Promise<void> {
+  for (const child of children) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+  }
+  if (await waitForWrapperCompletion(completion, 5_000)) return;
+  for (const child of children) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
+  if (!await waitForWrapperCompletion(completion, 5_000)) {
+    throw new Error("benchmark wrapper roots did not settle after termination");
+  }
+}
+
 async function measureWrappers(
   commands: readonly CommandSpec[],
   durationMs: number,
@@ -194,7 +227,7 @@ async function measureWrappers(
   legacyBaseline: boolean,
 ): Promise<Measurement> {
   const started = performance.now();
-  const children = [];
+  const children: ChildProcessWithoutNullStreams[] = [];
   const completions: Array<Promise<WrapperResult>> = [];
   for (const [index, spec] of commands.entries()) {
     const childStarted = performance.now();
@@ -205,11 +238,11 @@ async function measureWrappers(
     });
     children.push(child);
     completions.push(new Promise<WrapperResult>((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
-    child.once("error", reject);
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+      child.once("error", reject);
       child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr, elapsedMs: performance.now() - childStarted }));
     }));
     if (process.platform === "win32" && index < commands.length - 1) {
@@ -228,43 +261,66 @@ async function measureWrappers(
   let peakWindowsPowerShellChildren = 0;
   let idleCaptured = false;
   let coldCaptured = false;
+  const recordReport = (report: ProcessReport, rootPids: readonly number[], includeRSS: boolean): boolean => {
+    const rootSet = new Set(rootPids);
+    const childProcesses = report.processes.filter((process) => !rootSet.has(process.pid));
+    peakChildProcessCount = Math.max(peakChildProcessCount, childProcesses.length);
+    peakWindowsPowerShellChildren = Math.max(
+      peakWindowsPowerShellChildren,
+      childProcesses.filter((process) => isPowerShell(process.name)).length,
+    );
+    if (!includeRSS) return true;
+    if (!hasCompleteRootSample(report, rootPids)) return false;
+    const residentBytes = report.processes
+      .filter((process) => rootSet.has(process.pid))
+      .reduce((total, process) => total + process.rssBytes, 0);
+    peakResidentBytes = Math.max(peakResidentBytes, residentBytes);
+    if (!coldCaptured) {
+      coldResidentBytes = residentBytes;
+      coldCaptured = true;
+    }
+    if (!idleCaptured && performance.now() - started >= durationMs / 4) {
+      idleResidentBytes = residentBytes;
+      idleChildProcessCount = childProcesses.length;
+      idleCaptured = true;
+    }
+    return true;
+  };
   const deadline = started + durationMs + 30_000;
-  while (children.some(({ exitCode, signalCode }) => exitCode === null && signalCode === null)) {
-    if (performance.now() > deadline) {
-      for (const child of children) child.kill();
-      throw new Error(`benchmark workload exceeded ${Math.round((deadline - started) / 1000)} seconds`);
-    }
-    const rootPids = children.flatMap(({ pid, exitCode, signalCode }) => (
-      pid && exitCode === null && signalCode === null ? [pid] : []
-    ));
-    if (rootPids.length > 0) {
-      const report = await inspect(inspector, rootPids);
-      const rootSet = new Set(rootPids);
-      // Compare Ruk wrapper overhead, not the workload process both runtimes
-      // are supervising. Descendants remain in the report for process-count
-      // and PowerShell-storm detection.
-      const residentBytes = report.processes
-        .filter((process) => rootSet.has(process.pid))
-        .reduce((total, process) => total + process.rssBytes, 0);
-      const childProcesses = report.processes.filter((process) => !rootSet.has(process.pid));
-      const childProcessCount = childProcesses.length;
-      const powershellChildren = childProcesses.filter((process) => isPowerShell(process.name)).length;
-      peakResidentBytes = Math.max(peakResidentBytes, residentBytes);
-      peakChildProcessCount = Math.max(peakChildProcessCount, childProcessCount);
-      peakWindowsPowerShellChildren = Math.max(peakWindowsPowerShellChildren, powershellChildren);
-      if (!coldCaptured && report.processes.length > 0) {
-        coldResidentBytes = residentBytes;
-        coldCaptured = true;
+  let results: WrapperResult[];
+  try {
+    while (children.some(({ exitCode, signalCode }) => exitCode === null && signalCode === null)) {
+      if (performance.now() > deadline) {
+        throw new Error(`benchmark workload exceeded ${Math.round((deadline - started) / 1000)} seconds`);
       }
-      if (!idleCaptured && performance.now() - started >= durationMs / 4 && report.processes.length > 0) {
-        idleResidentBytes = residentBytes;
-        idleChildProcessCount = childProcessCount;
-        idleCaptured = true;
+      const rootPids = children.flatMap(({ pid, exitCode, signalCode }) => (
+        pid && exitCode === null && signalCode === null ? [pid] : []
+      ));
+      if (rootPids.length > 0) {
+        recordReport(await inspect(inspector, rootPids), rootPids, true);
       }
+      await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 100 : 50));
     }
-    await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 100 : 50));
+    results = await completion;
+    if (process.platform === "win32") {
+      // Toolhelp keeps a child process's creator PID after the parent exits.
+      // Inspect every original root once more so an orphaned PowerShell child
+      // cannot disappear merely because its Ruk wrapper has completed.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const allRootPids = children.flatMap(({ pid }) => pid ? [pid] : []);
+      if (allRootPids.length > 0) recordReport(await inspect(inspector, allRootPids), allRootPids, false);
+    }
+  } catch (error) {
+    try {
+      await stopWrapperRoots(children, completion);
+    } catch (cleanupError) {
+      process.stderr.write(`Benchmark wrapper cleanup failed: ${String(cleanupError)}\n`);
+    }
+    throw error;
   }
-  const results = await completion;
+  if (!coldCaptured || !idleCaptured || peakResidentBytes === 0) {
+    throw new Error("process inspector never returned a complete root RSS sample");
+  }
   const tolerated = legacyBaseline
     ? results.filter((result) => isTolerableLegacyWrapperFailure(result, durationMs))
     : [];
@@ -293,8 +349,7 @@ async function measureWrappers(
 export function isTolerableLegacyWrapperFailure(result: WrapperResult, durationMs: number): boolean {
   if (result.code === 0 || result.elapsedMs < durationMs - 250 || result.stdout.trim() !== "") return false;
   const message = result.stderr.trim();
-  return /^ruk: Process \d+ could not be identified, so its workspace cannot be released safely$/.test(message) ||
-    /^ruk: EPERM: operation not permitted, rename .+state\.json\.\d+\.tmp' -> '.+state\.json'$/.test(message);
+  return /^ruk: Process \d+ could not be identified, so its workspace cannot be released safely$/.test(message);
 }
 
 async function benchmarkTarget(
@@ -425,6 +480,12 @@ function makeSummary(result: RuntimeBenchmarkResult): string {
   return lines.join("\n");
 }
 
+export function observedGoPowerShellChildren(targets: readonly TargetBenchmark[]): number {
+  const go = targets.find((target) => target.name === "go");
+  return (go?.wrappers ?? [])
+    .reduce((maximum, wrapper) => Math.max(maximum, wrapper.peakWindowsPowerShellChildren.maximum), 0);
+}
+
 function makeAssertions(targets: readonly TargetBenchmark[], concurrencyLevels: readonly number[]): RuntimeBenchmarkResult["assertions"] {
   const node = targets.find((target) => target.name === "node");
   const go = targets.find((target) => target.name === "go");
@@ -440,8 +501,7 @@ function makeAssertions(targets: readonly TargetBenchmark[], concurrencyLevels: 
   const reductions = Object.values(ramReductionPercentByConcurrency);
   const ramTargetMet = reductions.length > 0 && reductions.every((value) => value !== null && value >= 50);
   if (!ramTargetMet) failureReasons.push("Go did not reduce median peak RSS by at least 50% at every requested concurrency level");
-  const observedWindowsPowerShellChildren = (go?.wrappers ?? [])
-    .reduce((maximum, wrapper) => Math.max(maximum, wrapper.peakWindowsPowerShellChildren.maximum), 0);
+  const observedWindowsPowerShellChildren = observedGoPowerShellChildren(targets);
   const applicable = process.platform === "win32";
   const zeroRoutineWindowsPowerShellChildren = !applicable || observedWindowsPowerShellChildren === 0;
   if (!zeroRoutineWindowsPowerShellChildren) failureReasons.push("routine Windows PowerShell children were observed");

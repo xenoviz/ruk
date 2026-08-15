@@ -63,6 +63,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/verify-release.ts
+      - name: Test migration tooling
+        run: bun test test/conformance/*.test.ts test/benchmark.test.ts
       - name: Compare Go CLI with frozen golden
         run: bun run test:conformance
 
@@ -85,6 +87,9 @@ jobs:
         with:
           go-version: 1.24.6
           cache: true
+      - name: Test host-specific Go packages
+        if: runner.os != 'Linux'
+        run: go test ./...
       - name: Exercise native Go command
         run: |
           go run ./cmd/ruk --version

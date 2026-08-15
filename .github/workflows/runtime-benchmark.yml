@@ -2,9 +2,6 @@ name: Runtime benchmark
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - topic/codex/go-migration
 
 permissions:
   contents: read

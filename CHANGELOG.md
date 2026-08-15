@@ -10,7 +10,8 @@ versioning.
   contract.
 - Publish native npm platform packages for Linux, macOS, and Windows on x64 and
   ARM64, with glibc and musl Linux x64 variants.
-
+- Replace state atomically on Windows with bounded retries for transient file
+  sharing, access, and lock violations.
 - Automatically renew assignments during managed commands and dependency sync,
   using concurrent fenced keepers and observable activity timestamps.
 - Guard task commands in a shared primary checkout by default, with repository

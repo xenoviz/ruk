@@ -1,6 +1,6 @@
 # Ruk
 
-[![npm version](https://img.shields.io/npm/v/@xenoviz/ruk.svg)](https://www.npmjs.com/package/@xenoviz/ruk)
+[![npm beta version](https://img.shields.io/npm/v/@xenoviz/ruk?tag=beta&label=npm%20beta)](https://www.npmjs.com/package/@xenoviz/ruk)
 
 Ruk creates dependency-aware Git workspaces for parallel coding agents. It is
 an independent, Go-native worktree manager: no Treehouse runtime, service, or
@@ -39,7 +39,7 @@ Ruk 0.3 is a Go-native beta with a deliberately small, tested surface:
   patches, runtime, platform, architecture, and install strategy;
 - serialize preparation of the same workspace;
 - share immutable package content by default with supported Bun and pnpm versions;
-- allow repositories to opt out when an isolated layout is incompatible.
+- allow repositories to opt out when an isolated layout is incompatible;
 - inspect processes with native operating-system APIs, including Windows, so
   routine liveness checks do not launch PowerShell;
 - publish one native runtime through npm platform packages or standalone
@@ -60,8 +60,10 @@ worktrees or processes.
 
 ## Install
 
+Ruk 0.3 is currently published on npm's `beta` channel:
+
 ```bash
-npm install --global @xenoviz/ruk
+npm install --global @xenoviz/ruk@beta
 ```
 
 The package manager installs a matching native optional package for the host.
@@ -69,7 +71,7 @@ The `ruk` command then executes the native Go binary directly; Node.js is not
 kept resident as a command supervisor. Bun can also install the package:
 
 ```bash
-bun install --global @xenoviz/ruk
+bun install --global @xenoviz/ruk@beta
 ```
 
 GitHub Releases also provides standalone Linux, macOS, and Windows executables

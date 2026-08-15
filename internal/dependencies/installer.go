@@ -158,9 +158,9 @@ func (installer Installer) Prepare(ctx context.Context, root string, manager Pac
 	return prepared, nil
 }
 
-// AssertSharedBackendSupported validates the same backend/version matrix as
-// src/dependencies.ts. Version accepts the command's usual text forms (for
-// example "1.3.14" and "bun 1.3.14").
+// AssertSharedBackendSupported validates Ruk's shared backend/version matrix.
+// Version accepts the command's usual text forms (for example "1.3.14" and
+// "bun 1.3.14").
 func AssertSharedBackendSupported(name, version string) error {
 	minimum, ok := map[string][3]int{
 		"bun":  {1, 3, 14},

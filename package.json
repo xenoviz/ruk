@@ -31,6 +31,8 @@
     "worktree",
     "monorepo",
     "agents",
+    "go",
+    "golang",
     "bun",
     "pnpm"
   ],

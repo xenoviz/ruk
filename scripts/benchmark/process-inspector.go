@@ -40,12 +40,12 @@ func treeReport(roots []int, entries map[int]processEntry) processReport {
 		if seen[pid] {
 			return
 		}
-		value, ok := entries[pid]
-		if !ok {
-			return
-		}
 		seen[pid] = true
-		report.Processes = append(report.Processes, value.record)
+		if value, ok := entries[pid]; ok {
+			report.Processes = append(report.Processes, value.record)
+		}
+		// Windows retains the creator PID after a parent exits. Continue through
+		// a missing root so a leaderless descendant remains observable.
 		for _, child := range children[pid] {
 			visit(child)
 		}

@@ -246,9 +246,8 @@ func WriteError(destination io.Writer, err error, jsonMode bool) error {
 	return writeErr
 }
 
-// JSONRequested follows src/errors.ts: run, exec, and shell always reserve
-// --json for their child command (or do not support it), and a delimiter ends
-// Ruk's option scan.
+// JSONRequested keeps run, exec, and shell child arguments outside Ruk's JSON
+// option scan. A delimiter likewise ends the scan for every other command.
 func JSONRequested(argv []string) bool {
 	if len(argv) > 0 && (argv[0] == "run" || argv[0] == "exec" || argv[0] == "shell") {
 		return false

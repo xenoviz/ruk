@@ -6,16 +6,17 @@ command and JSON contract.
 
 ## Package installation
 
-Install globally with npm:
+Ruk 0.3 is currently published on npm's `beta` channel. Install it globally
+with npm:
 
 ```sh
-npm install --global @xenoviz/ruk
+npm install --global @xenoviz/ruk@beta
 ```
 
 You can also use Bun:
 
 ```sh
-bun install --global @xenoviz/ruk
+bun install --global @xenoviz/ruk@beta
 ```
 
 The package manager installs the matching optional native package for the host.

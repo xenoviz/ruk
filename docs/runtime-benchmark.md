@@ -24,9 +24,18 @@ The automated migration gate is at least 50% lower median peak RSS for the
 Ruk-owned wrapper processes than the Node artifact at all three concurrency
 levels, together with compatible CLI and JSON behavior. Cold and idle RSS are
 recorded as supporting evidence. Windows routine process inspection must launch
-zero PowerShell processes. Measurements are machine-specific, so attach the raw
-JSON and runner details to the migration pull request rather than treating one
-local sample as a universal number.
+zero PowerShell processes in the Go target; the legacy target's PowerShell count
+remains in the raw evidence as part of the comparison. A known legacy cleanup
+failure is tolerated only after that wrapper completed the full workload and
+only for the historical post-exit identity-retention error. Atomic state errors
+remain benchmark failures because they can occur before the workload starts.
+Every early failure and every Go failure still fails the benchmark.
+Windows wrapper starts are spaced by 100 ms for both targets, leaving more than
+ten seconds with all 20 wrappers active while avoiding an artificial synchronized
+write burst in the historical state implementation.
+Measurements are machine-specific, so attach the raw JSON and runner details to
+the migration pull request rather than treating one local sample as a universal
+number.
 
 The final release record still needs these values:
 

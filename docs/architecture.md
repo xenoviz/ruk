@@ -119,6 +119,9 @@ for automatic renewal.
 State is an optimization, not source of truth. Git and the dependency
 fingerprint remain authoritative. Invalid state fails visibly rather than being
 silently replaced.
+On Windows, state commits use atomic replace-with-write-through and retry only
+transient access, sharing, and lock violations; permanent replacement errors
+still fail immediately without deleting the last valid state.
 
 ## Workspace lifecycle
 
