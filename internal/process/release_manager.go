@@ -116,7 +116,43 @@ func (manager NativeProcessManager) Exists(ctx context.Context, record state.Tra
 	if manager.probe == nil || manager.tracker.Probe == nil {
 		return false, processUnavailable(int(record.PID), errors.New("process identity probe is unavailable"))
 	}
+	if record.GroupID != nil {
+		return manager.detachedGroupExists(ctx, record)
+	}
 	return manager.tracker.Exists(ctx, record)
+}
+
+func (manager NativeProcessManager) detachedGroupExists(ctx context.Context, record state.TrackedProcessRecord) (bool, error) {
+	pid := int(record.PID)
+	groupID := int(*record.GroupID)
+	if record.PID <= 0 || int64(pid) != record.PID || *record.GroupID <= 0 || int64(groupID) != *record.GroupID || record.StartedAt == "" {
+		return false, processUnavailable(pid, errors.New("invalid tracked process group record"))
+	}
+	observed, err := manager.probe.Inspect(ctx, pid)
+	if err != nil {
+		return false, processUnavailable(pid, err)
+	}
+	if observed.Alive {
+		if !observed.IdentityKnown || observed.Identity == "" {
+			return false, processUnavailable(pid, errors.New("process identity is unavailable"))
+		}
+		if observed.Identity == record.StartedAt {
+			return true, nil
+		}
+	}
+	if manager.table == nil {
+		return false, processUnavailable(pid, errors.New("process group table is unavailable"))
+	}
+	entries, err := manager.table.Snapshot(ctx)
+	if err != nil {
+		return false, processUnavailable(pid, err)
+	}
+	for _, entry := range entries {
+		if entry.GroupID == groupID {
+			return false, processUnavailable(pid, errors.New("tracked group remains after its leader exited or changed identity"))
+		}
+	}
+	return false, nil
 }
 
 // Terminate revalidates the exact persisted identity immediately before the
