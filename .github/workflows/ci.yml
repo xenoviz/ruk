@@ -105,8 +105,8 @@ jobs:
           go run ./cmd/ruk --version
           go run ./cmd/ruk --help
 
-  conformance:
-    name: TypeScript/Go conformance
+  go-conformance:
+    name: Go vs frozen golden conformance
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -122,19 +122,12 @@ jobs:
           bun-version: 1.3.14
       - name: Install conformance tooling
         run: bun install --frozen-lockfile --ignore-scripts
-      - name: Compare TypeScript and Go CLIs
+      - name: Test conformance tooling
+        run: bun test test/conformance/*.test.ts
+      - name: Compare Go CLI with frozen golden
         env:
           RUK_CONFORMANCE_VERBOSE: "1"
         run: bun run test:conformance
-      - name: Capture frozen TypeScript conformance
-        run: bun run conformance:capture
-      - name: Upload frozen conformance candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: conformance-golden-${{ github.sha }}
-          path: test/conformance/golden.json
-          if-no-files-found: error
-          retention-days: 1
 
   npm-smoke:
     name: Native npm install (${{ matrix.os }})
@@ -223,7 +216,7 @@ jobs:
   required:
     name: Required checks
     if: always()
-    needs: [go-quality, cross-compile, platform-smoke, conformance, npm-smoke, docs]
+    needs: [go-quality, cross-compile, platform-smoke, go-conformance, npm-smoke, docs]
     runs-on: ubuntu-latest
     steps:
       - name: Confirm required jobs passed
@@ -231,13 +224,13 @@ jobs:
           GO_QUALITY_RESULT: ${{ needs.go-quality.result }}
           CROSS_COMPILE_RESULT: ${{ needs.cross-compile.result }}
           PLATFORM_SMOKE_RESULT: ${{ needs.platform-smoke.result }}
-          CONFORMANCE_RESULT: ${{ needs.conformance.result }}
+          GO_CONFORMANCE_RESULT: ${{ needs.go-conformance.result }}
           NPM_SMOKE_RESULT: ${{ needs.npm-smoke.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
         run: |
           test "$GO_QUALITY_RESULT" = success
           test "$CROSS_COMPILE_RESULT" = success
           test "$PLATFORM_SMOKE_RESULT" = success
-          test "$CONFORMANCE_RESULT" = success
+          test "$GO_CONFORMANCE_RESULT" = success
           test "$NPM_SMOKE_RESULT" = success
           test "$DOCS_RESULT" = success

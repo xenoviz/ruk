@@ -1,70 +1,17 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readPackageJson, VERSION_PATTERN } from "./lib/package.js";
 import { isRecord } from "./lib/types.js";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
+const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const pkg = await readPackageJson(root);
-const required = {
-  name: "@xenoviz/ruk",
-  license: "MIT",
-  type: "module",
+const expectedDevelopmentDependencies = {
+  "@types/node": "22.20.1",
+  typescript: "7.0.2",
+  vitepress: "1.6.4",
+  vue: "3.5.40",
 };
-for (const [field, expected] of Object.entries(required)) {
-  if (pkg[field] !== expected) throw new Error(`package.json ${field} must be ${expected}`);
-}
-const bin = pkg["bin"];
-if (!isRecord(bin) || bin["ruk"] !== "dist/bin/ruk.js") {
-  throw new Error("package.json must expose the compiled Ruk executable");
-}
-const repository = pkg["repository"];
-if (!isRecord(repository) || repository["url"] !== "git+https://github.com/xenoviz/ruk.git") {
-  throw new Error("package.json repository must match the provenance repository");
-}
-if (typeof pkg["version"] !== "string" || !VERSION_PATTERN.test(pkg["version"])) {
-  throw new Error(`Invalid package version ${String(pkg["version"])}`);
-}
-if (pkg["dependencies"] || pkg["optionalDependencies"] || pkg["peerDependencies"]) {
-  throw new Error("The published Ruk runtime must remain dependency-free");
-}
-const developmentDependencies = pkg["devDependencies"];
-if (
-  !isRecord(developmentDependencies) ||
-  developmentDependencies["typescript"] !== "7.0.2" ||
-  developmentDependencies["@types/node"] !== "22.20.1" ||
-  developmentDependencies["vitepress"] !== "1.6.4" ||
-  developmentDependencies["vue"] !== "3.5.40" ||
-  Object.keys(developmentDependencies).length !== 4
-) {
-  throw new Error("Development dependencies must match the pinned TypeScript and documentation toolchains");
-}
-const overrides = pkg["overrides"];
-if (!isRecord(overrides) || overrides["vite"] !== "6.4.3" || Object.keys(overrides).length !== 1) {
-  throw new Error("Package overrides must pin the audited Vite documentation toolchain");
-}
-if (pkg["packageManager"] !== "bun@1.3.14") throw new Error("packageManager must pin Bun 1.3.14");
-for (const file of [
-  "README.md",
-  "LICENSE",
-  "bin/ruk.ts",
-  "bin/ruk-standalone.ts",
-  "bun.lock",
-  "tsconfig.json",
-  "scripts/create-release-manifest.ts",
-  "scripts/verify-release-update.ts",
-]) {
-  await fs.access(`${root}/${file}`);
-}
-const nativeRoot = await readPackageJson(`${root}/npm/ruk`);
-if (
-  nativeRoot["name"] !== "@xenoviz/ruk" ||
-  nativeRoot["version"] !== pkg["version"] ||
-  !isRecord(nativeRoot["ruk"]) ||
-  nativeRoot["ruk"]["distribution"] !== "package" ||
-  nativeRoot["ruk"]["binaryPath"] !== "bin/ruk"
-) {
-  throw new Error("npm/ruk must describe the dependency-free native package distribution");
-}
 const nativePackages = {
   "ruk-linux-x64": { name: "@xenoviz/ruk-linux-x64", target: "bun-linux-x64-baseline", binary: "native/ruk" },
   "ruk-linux-arm64": { name: "@xenoviz/ruk-linux-arm64", target: "bun-linux-arm64", binary: "native/ruk" },
@@ -74,6 +21,61 @@ const nativePackages = {
   "ruk-windows-x64": { name: "@xenoviz/ruk-windows-x64", target: "bun-windows-x64-baseline", binary: "native/ruk.exe" },
   "ruk-windows-arm64": { name: "@xenoviz/ruk-windows-arm64", target: "bun-windows-arm64", binary: "native/ruk.exe" },
 } as const;
+
+if (pkg["name"] !== "@xenoviz/ruk" || pkg["license"] !== "MIT" || pkg["type"] !== "module") {
+  throw new Error("Root package metadata is invalid");
+}
+if (pkg["private"] !== true) throw new Error("Root package must be private; npm publishes the staged npm/ruk package");
+if (pkg["bin"] !== undefined || pkg["files"] !== undefined || pkg["publishConfig"] !== undefined) {
+  throw new Error("Root tooling package must not describe a shipped runtime artifact");
+}
+if (typeof pkg["version"] !== "string" || !VERSION_PATTERN.test(pkg["version"])) {
+  throw new Error(`Invalid package version ${String(pkg["version"])}`);
+}
+if (pkg["dependencies"] || pkg["optionalDependencies"] || pkg["peerDependencies"]) {
+  throw new Error("The private tooling package must not add runtime dependencies");
+}
+const developmentDependencies = pkg["devDependencies"];
+if (!isRecord(developmentDependencies) || Object.keys(developmentDependencies).length !== Object.keys(expectedDevelopmentDependencies).length) {
+  throw new Error("Development dependencies must match the pinned tooling set");
+}
+for (const [name, version] of Object.entries(expectedDevelopmentDependencies)) {
+  if (developmentDependencies[name] !== version) throw new Error(`Development dependency ${name} must be pinned to ${version}`);
+}
+if (pkg["packageManager"] !== "bun@1.3.14") throw new Error("packageManager must pin Bun 1.3.14");
+
+for (const file of [
+  "README.md",
+  "LICENSE",
+  "bun.lock",
+  "tsconfig.json",
+  "npm/ruk/package.json",
+  "npm/ruk/bin/ruk",
+  "scripts/npm/install.mjs",
+  "scripts/npm/launcher.mjs",
+]) {
+  await fs.access(path.join(root, file));
+}
+
+const nativeRoot = await readPackageJson(path.join(root, "npm", "ruk"));
+if (
+  nativeRoot["name"] !== "@xenoviz/ruk" ||
+  nativeRoot["version"] !== pkg["version"] ||
+  !isRecord(nativeRoot["ruk"]) ||
+  nativeRoot["ruk"]["distribution"] !== "package" ||
+  nativeRoot["ruk"]["binaryPath"] !== "bin/ruk"
+) {
+  throw new Error("npm/ruk must describe the dependency-free native package distribution");
+}
+if (!isRecord(nativeRoot["bin"]) || nativeRoot["bin"]["ruk"] !== "bin/ruk") {
+  throw new Error("npm/ruk must expose the native launcher destination");
+}
+if (nativeRoot["dependencies"] !== undefined || nativeRoot["peerDependencies"] !== undefined) {
+  throw new Error("npm/ruk must not add runtime or peer dependencies beyond its optional native packages");
+}
+if (!isRecord(nativeRoot["scripts"]) || nativeRoot["scripts"]["postinstall"] !== "node scripts/npm/install.mjs") {
+  throw new Error("npm/ruk must install its native launcher through the postinstall script");
+}
 const optionalDependencies = nativeRoot["optionalDependencies"];
 if (!isRecord(optionalDependencies) || Object.keys(optionalDependencies).length !== Object.keys(nativePackages).length) {
   throw new Error("npm/ruk must list every native platform package as an optional dependency");
@@ -82,7 +84,7 @@ for (const [directory, expected] of Object.entries(nativePackages)) {
   if (optionalDependencies[expected.name] !== pkg["version"]) {
     throw new Error(`npm/ruk optional dependency ${expected.name} must match the root version`);
   }
-  const platform = await readPackageJson(`${root}/npm/${directory}`);
+  const platform = await readPackageJson(path.join(root, "npm", directory));
   const metadata = platform["ruk"];
   const files = platform["files"];
   if (
@@ -93,9 +95,13 @@ for (const [directory, expected] of Object.entries(nativePackages)) {
     metadata["target"] !== expected.target ||
     metadata["binary"] !== expected.binary ||
     !Array.isArray(files) ||
-    !files.includes("native")
+    files.length !== 1 ||
+    files[0] !== "native" ||
+    platform["bin"] !== undefined ||
+    platform["dependencies"] !== undefined
   ) {
-    throw new Error(`npm/${directory} must describe its verified native binary`);
+    throw new Error(`npm/${directory} must describe only its verified native binary`);
   }
 }
-process.stdout.write(`Validated ${String(pkg["name"])}@${pkg["version"]}.\n`);
+
+process.stdout.write(`Validated private tooling metadata and ${String(Object.keys(nativePackages).length)} native npm templates.\n`);

@@ -63,7 +63,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/verify-release.ts
-      - name: Compare TypeScript and Go CLIs
+      - name: Compare Go CLI with frozen golden
         run: bun run test:conformance
 
   platform-smoke:
