@@ -31,7 +31,10 @@ func treeReport(roots []int, entries map[int]processEntry) processReport {
 		children[value.record.ParentPID] = append(children[value.record.ParentPID], pid)
 	}
 	seen := make(map[int]bool)
-	report := processReport{}
+	// Keep the JSON contract stable when every requested root exits between the
+	// caller's liveness check and this process-table snapshot. A nil slice would
+	// encode as null, but the benchmark schema requires an array.
+	report := processReport{Processes: make([]processRecord, 0)}
 	var visit func(int)
 	visit = func(pid int) {
 		if seen[pid] {
