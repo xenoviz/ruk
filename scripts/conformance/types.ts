@@ -9,9 +9,17 @@ export interface RepositoryFixture {
   state?: unknown;
 }
 
-export interface ConformanceScenario {
+export interface ConformanceStep {
   name: string;
   args: readonly string[];
+  compareState?: boolean;
+}
+
+export interface ConformanceScenario {
+  name: string;
+  /** The single-step form remains supported for small legacy fixtures. */
+  args?: readonly string[];
+  steps?: readonly ConformanceStep[];
   domains?: readonly ConformanceDomain[];
   fixture?: RepositoryFixture;
   compareState?: boolean;
@@ -41,10 +49,17 @@ export interface ObservedCLIResult {
   state: unknown | null;
 }
 
+export interface ObservedScenario extends ObservedCLIResult {
+  steps: readonly ObservedCLIResult[];
+  finalState: unknown | null;
+}
+
 export interface ScenarioComparison {
   scenario: string;
-  typescript: ObservedCLIResult;
-  go: ObservedCLIResult;
+  typescript: ObservedScenario;
+  go: ObservedScenario;
+  typescriptSteps: readonly ObservedCLIResult[];
+  goSteps: readonly ObservedCLIResult[];
   differences: readonly string[];
 }
 

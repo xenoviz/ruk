@@ -1,6 +1,6 @@
 import path from "node:path";
 
-const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const ISO_TIMESTAMP = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3,9})?Z\b/g;
 const PROCESS_IDENTITY = /\b(?:PID|process(?: ID)?)\s+\d+\b/gi;
 
@@ -28,11 +28,15 @@ export function normalizeText(value: string, context: NormalizationContext = {})
 }
 
 function keyIsPID(key: string | undefined): boolean {
-	return key !== undefined && /^(?:pid|groupId|sessionId|processId)$/i.test(key);
+  return key !== undefined && /^(?:pid|groupId|sessionId|processId)$/i.test(key);
 }
 
 function keyIsTimestamp(key: string | undefined): boolean {
   return key !== undefined && /(?:At|Time|Date|Expires|Started|Renewed|Created|Updated|Until)$/i.test(key);
+}
+
+function keyIsPort(key: string | undefined): boolean {
+  return key !== undefined && /(?:^|port$|portNumber$)/i.test(key);
 }
 
 function normalizeValue(value: unknown, context: NormalizationContext, key?: string): unknown {
@@ -41,6 +45,7 @@ function normalizeValue(value: unknown, context: NormalizationContext, key?: str
     if (keyIsPID(key)) return "<pid>";
     return normalizeText(value, context);
   }
+  if (typeof value === "number" && keyIsPort(key)) return "<port>";
   if (typeof value === "number" && keyIsPID(key)) return "<pid>";
   if (Array.isArray(value)) return value.map((entry) => normalizeValue(entry, context));
   if (value && typeof value === "object") {
@@ -52,7 +57,12 @@ function normalizeValue(value: unknown, context: NormalizationContext, key?: str
     return Object.fromEntries(
       Object.entries(value)
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([entryKey, entryValue]) => [entryKey, normalizeValue(entryValue, context, entryKey)]),
+        .map(([entryKey, entryValue]) => [
+          entryKey,
+          key === "ports" && typeof entryValue === "number"
+            ? "<port>"
+            : normalizeValue(entryValue, context, entryKey),
+        ]),
     );
   }
   return value;
@@ -63,7 +73,7 @@ export function normalizeJSON(value: unknown, context: NormalizationContext = {}
 }
 
 export function canonicalJSON(value: unknown, context: NormalizationContext = {}): string {
-	return JSON.stringify(normalizeJSON(value, context)) ?? "null";
+  return JSON.stringify(normalizeJSON(value, context)) ?? "null";
 }
 
 export function parseJSON(value: string): unknown | null {

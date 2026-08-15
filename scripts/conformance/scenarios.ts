@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ConformanceDomain, ConformanceScenario, RepositoryFixture } from "./types.js";
+import type {
+  ConformanceDomain,
+  ConformanceScenario,
+  ConformanceStep,
+  RepositoryFixture,
+} from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -30,8 +35,47 @@ function validateFixture(value: unknown, index: number): RepositoryFixture | und
 export function validateScenarios(value: unknown): ConformanceScenario[] {
   if (!Array.isArray(value)) throw new Error("Conformance scenario file must contain an array");
   return value.map((entry, index): ConformanceScenario => {
-    if (!isRecord(entry) || typeof entry["name"] !== "string" || !Array.isArray(entry["args"]) || !entry["args"].every((arg) => typeof arg === "string")) {
+    if (!isRecord(entry) || typeof entry["name"] !== "string") {
+      throw new Error(`Conformance scenario ${index} must contain a name`);
+    }
+    const name = entry["name"] as string;
+    const rawArgs = entry["args"];
+    const rawSteps = entry["steps"];
+    if (rawArgs !== undefined && rawSteps !== undefined) {
+      throw new Error(`Conformance scenario ${name} cannot contain both args and steps`);
+    }
+    if (
+      rawArgs !== undefined &&
+      (!Array.isArray(rawArgs) || !rawArgs.every((arg) => typeof arg === "string"))
+    ) {
       throw new Error(`Conformance scenario ${index} must contain a name and string args`);
+    }
+    let steps: ConformanceStep[] | undefined;
+    if (rawSteps !== undefined) {
+      if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
+        throw new Error(`Conformance scenario ${name} steps must contain at least one step`);
+      }
+      steps = rawSteps.map((step, stepIndex): ConformanceStep => {
+        if (
+          !isRecord(step) ||
+          typeof step["name"] !== "string" ||
+          !Array.isArray(step["args"]) ||
+          !step["args"].every((arg) => typeof arg === "string")
+        ) {
+          throw new Error(`Conformance scenario ${name} step ${stepIndex} must contain a name and string args`);
+        }
+        const compareState = step["compareState"];
+        if (compareState !== undefined && typeof compareState !== "boolean") {
+          throw new Error(`Conformance scenario ${name} step ${stepIndex} has invalid compareState`);
+        }
+        return {
+          name: step["name"] as string,
+          args: step["args"] as string[],
+          ...(compareState === undefined ? {} : { compareState }),
+        };
+      });
+    } else if (rawArgs === undefined) {
+      throw new Error(`Conformance scenario ${name} must contain args or steps`);
     }
     const domains = entry["domains"];
     if (domains !== undefined && (!Array.isArray(domains) || !domains.every((domain) => ["core", "lifecycle", "dependencies", "ports"].includes(domain as string)))) {
@@ -39,19 +83,24 @@ export function validateScenarios(value: unknown): ConformanceScenario[] {
     }
     const compareState = entry["compareState"];
     if (compareState !== undefined && typeof compareState !== "boolean") throw new Error(`Conformance scenario ${entry["name"]} has invalid compareState`);
-    const name = entry["name"] as string;
-    const args = entry["args"] as string[];
+    const args = rawArgs as string[] | undefined;
     const normalizedDomains = domains as ConformanceDomain[] | undefined;
     const fixture = validateFixture(entry["fixture"], index);
     return {
       name,
-      args,
+      ...(args ? { args } : {}),
+      ...(steps ? { steps } : {}),
       ...(normalizedDomains ? { domains: normalizedDomains } : {}),
       ...(fixture ? { fixture } : {}),
       ...(compareState === undefined ? {} : { compareState }),
       ...(isRecord(entry["metadata"]) ? { metadata: entry["metadata"] } : {}),
     };
   });
+}
+
+export function scenarioSteps(scenario: ConformanceScenario): readonly ConformanceStep[] {
+  if (scenario.steps) return scenario.steps;
+  return [{ name: scenario.name, args: scenario.args ?? [] }];
 }
 
 export async function loadScenarios(file: string): Promise<ConformanceScenario[]> {
@@ -61,4 +110,15 @@ export async function loadScenarios(file: string): Promise<ConformanceScenario[]
 
 export function defaultScenarioFile(root: string): string {
   return path.join(root, "test", "conformance", "fixtures", "core.json");
+}
+
+export function defaultScenarioFiles(root: string): readonly string[] {
+  const fixtures = path.join(root, "test", "conformance", "fixtures");
+  return [
+    path.join(fixtures, "core.json"),
+    path.join(fixtures, "lifecycle.json"),
+    path.join(fixtures, "state-migrations.json"),
+    path.join(fixtures, "configuration.json"),
+    path.join(fixtures, "dependencies.json"),
+  ];
 }
