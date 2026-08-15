@@ -158,7 +158,7 @@ func BuildStatusResponse(input StatusQueryInput) (StatusRecord, error) {
 	}
 	tree, prepared := input.Snapshot.Trees[key]
 	workspace, managed := input.Snapshot.Workspaces[key]
-	ready := prepared && tree.Fingerprint == input.CurrentFingerprint && input.ProjectionsValid
+	ready := prepared && tree.Fingerprint == input.CurrentFingerprint && input.NodeModulesPresent && input.ProjectionsValid
 	record := StatusRecord{
 		Path:               input.Repository.Root,
 		Fingerprint:        input.CurrentFingerprint,
