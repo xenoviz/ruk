@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"time"
 
+	"github.com/xenoviz/ruk/internal/git"
 	updatepkg "github.com/xenoviz/ruk/internal/update"
 )
 
@@ -39,16 +42,24 @@ Bun or pnpm command.
 
 // Options configures an Application.
 type Options struct {
-	Version      string
-	Distribution updatepkg.Distribution
-	Stdout       io.Writer
-	Stderr       io.Writer
-	Update       UpdateOperation
+	Version            string
+	Distribution       updatepkg.Distribution
+	Stdout             io.Writer
+	Stderr             io.Writer
+	Update             UpdateOperation
+	CWD                string
+	DiscoverRepository RepositoryDiscovery
+	Queries            QueryDependencies
+	Now                func() time.Time
 }
 
 // UpdateOperation is injected so compatibility tests can exercise CLI output
 // without network access or executable replacement.
 type UpdateOperation func(context.Context, updatepkg.Options) (updatepkg.Result, error)
+
+// RepositoryDiscovery resolves the current checkout without coupling the
+// command router to Git subprocesses in compatibility tests.
+type RepositoryDiscovery func(context.Context, string) (git.Repository, error)
 
 // Application executes Ruk commands.
 type Application struct {
@@ -57,6 +68,10 @@ type Application struct {
 	stdout       io.Writer
 	stderr       io.Writer
 	update       UpdateOperation
+	cwd          string
+	discover     RepositoryDiscovery
+	queries      QueryDependencies
+	now          func() time.Time
 }
 
 // New creates a Ruk command application.
@@ -79,12 +94,33 @@ func New(options Options) *Application {
 			return updatepkg.Update(ctx, options, updatepkg.Hooks{})
 		}
 	}
+	cwd := options.CWD
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+		if cwd == "" {
+			cwd = "."
+		}
+	}
+	discover := options.DiscoverRepository
+	if discover == nil {
+		discover = func(ctx context.Context, cwd string) (git.Repository, error) {
+			return git.Discover(ctx, cwd, nil)
+		}
+	}
+	now := options.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Application{
 		version:      options.Version,
 		distribution: distribution,
 		stdout:       stdout,
 		stderr:       stderr,
 		update:       updateOperation,
+		cwd:          cwd,
+		discover:     discover,
+		queries:      mergeQueryDependencies(options.Queries, defaultQueryDependencies()),
+		now:          now,
 	}
 }
 
@@ -126,6 +162,46 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 		}
 		if _, err := io.WriteString(application.stdout, formatUpdate(result)); err != nil {
 			return 1, fmt.Errorf("write update result: %w", err)
+		}
+		return 0, nil
+	}
+	if invocation.Name == "list" || invocation.Name == "status" || invocation.Name == "stats" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		var output string
+		switch invocation.Name {
+		case "list":
+			records, err := application.queries.HandleList(ctx, repository, application.now())
+			if err != nil {
+				return 1, err
+			}
+			output, err = FormatList(records, invocation.JSON)
+			if err != nil {
+				return 1, err
+			}
+		case "status":
+			record, err := application.queries.HandleStatus(ctx, repository, application.now())
+			if err != nil {
+				return 1, err
+			}
+			output, err = FormatStatus(record, invocation.JSON, invocation.Explain)
+			if err != nil {
+				return 1, err
+			}
+		case "stats":
+			record, err := application.queries.HandleStats(ctx, repository, invocation.Disk)
+			if err != nil {
+				return 1, err
+			}
+			output, err = FormatStats(record, invocation.JSON)
+			if err != nil {
+				return 1, err
+			}
+		}
+		if _, err := io.WriteString(application.stdout, output); err != nil {
+			return 1, fmt.Errorf("write %s result: %w", invocation.Name, err)
 		}
 		return 0, nil
 	}
