@@ -7,12 +7,16 @@ export interface SampleSummary {
 export interface ConcurrencyBenchmark {
   concurrency: number;
   elapsedMs: SampleSummary;
+  coldResidentBytes: SampleSummary;
   idleResidentBytes: SampleSummary;
   peakResidentBytes: SampleSummary;
+  idleChildProcessCount: SampleSummary;
+  peakChildProcessCount: SampleSummary;
+  peakWindowsPowerShellChildren: SampleSummary;
 }
 
 export interface TargetBenchmark {
-  name: "node" | "bun-standalone" | "go-supervisor";
+  name: "node" | "go";
   runtimeVersion: string;
   binaryBytes: number;
   coldStartMs: SampleSummary;
@@ -20,12 +24,24 @@ export interface TargetBenchmark {
 }
 
 export interface RuntimeBenchmarkResult {
-  schemaVersion: 1;
+  schemaVersion: 2;
   generatedAt: string;
   platform: { os: NodeJS.Platform; architecture: string };
   sampleCount: number;
   wrapperDurationMs: number;
+  concurrencyLevels: number[];
   targets: TargetBenchmark[];
+  assertions: RuntimeBenchmarkAssertions;
+}
+
+export interface RuntimeBenchmarkAssertions {
+  minimumRamReductionPercent: number;
+  ramReductionPercentByConcurrency: Record<string, number | null>;
+  ramTargetMet: boolean;
+  zeroRoutineWindowsPowerShellChildren: boolean;
+  observedWindowsPowerShellChildren: number;
+  applicable: boolean;
+  failureReasons: string[];
 }
 
 export function summarizeSamples(values: readonly number[]): SampleSummary {
@@ -50,14 +66,18 @@ export function runtimeBenchmarkResult(input: {
   architecture: string;
   sampleCount: number;
   wrapperDurationMs: number;
+  concurrencyLevels: number[];
   targets: TargetBenchmark[];
+  assertions: RuntimeBenchmarkAssertions;
 }): RuntimeBenchmarkResult {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date(input.generatedAt).toISOString(),
     platform: { os: input.platform, architecture: input.architecture },
     sampleCount: input.sampleCount,
     wrapperDurationMs: input.wrapperDurationMs,
+    concurrencyLevels: [...input.concurrencyLevels],
     targets: input.targets,
+    assertions: input.assertions,
   };
 }

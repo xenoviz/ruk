@@ -13,18 +13,63 @@ import type {
   TargetBenchmark,
 } from "./runtime-benchmark-schema.js";
 
+type TargetName = TargetBenchmark["name"];
+
 interface CommandSpec {
   command: string;
   args: string[];
   cwd: string;
 }
 
+interface ProcessRecord {
+  pid: number;
+  parentPid: number;
+  name: string;
+  rssBytes: number;
+}
+
+interface ProcessReport {
+  processes: ProcessRecord[];
+}
+
 interface Target {
-  name: TargetBenchmark["name"];
+  name: TargetName;
   version: string;
   sizePath: string;
-  cold: CommandSpec;
-  wrappers(concurrency: number, sample: number): Promise<{ commands: CommandSpec[]; cleanup(): Promise<void> }>;
+  command: string;
+  prefix: string[];
+  childCommand: string;
+  cwd: string;
+}
+
+interface Workload {
+  commands: CommandSpec[];
+  cleanup(): Promise<void>;
+}
+
+interface ParsedArguments {
+  nodeCli: string;
+  binary: string;
+  samples: number;
+  durationMs: number;
+  concurrencyLevels: number[];
+  assertTarget: boolean;
+}
+
+interface Measurement {
+  elapsedMs: number;
+  coldResidentBytes: number;
+  idleResidentBytes: number;
+  peakResidentBytes: number;
+  idleChildProcessCount: number;
+  peakChildProcessCount: number;
+  peakWindowsPowerShellChildren: number;
+}
+
+interface InspectorTarget {
+  command: string;
+  args: string[];
+  cwd: string;
 }
 
 function run(spec: CommandSpec): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -36,8 +81,8 @@ function run(spec: CommandSpec): Promise<{ code: number; stdout: string; stderr:
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
-    child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
     child.once("error", reject);
     child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
   });
@@ -46,7 +91,7 @@ function run(spec: CommandSpec): Promise<{ code: number; stdout: string; stderr:
 async function requireSuccess(spec: CommandSpec): Promise<string> {
   const result = await run(spec);
   if (result.code !== 0) {
-    throw new Error(`${spec.command} ${spec.args.join(" ")} failed: ${result.stderr.trim()}`);
+    throw new Error(`${spec.command} ${spec.args.join(" ")} failed: ${result.stderr.trim() || result.stdout.trim()}`);
   }
   return result.stdout.trim();
 }
@@ -59,77 +104,26 @@ async function fileSize(target: string): Promise<number> {
   return sizes.reduce((total, size) => total + size, 0);
 }
 
-async function residentBytes(pids: readonly number[]): Promise<number> {
-  if (pids.length === 0) return 0;
-  if (process.platform === "linux") {
-    const values = await Promise.all(pids.map(async (pid) => {
-      try {
-        const status = await fs.readFile(`/proc/${pid}/status`, "utf8");
-        return Number(/^VmRSS:\s+(\d+)\s+kB$/m.exec(status)?.[1] ?? 0) * 1024;
-      } catch {
-        return 0;
-      }
-    }));
-    return values.reduce((total, value) => total + value, 0);
+function parseArguments(args: readonly string[], root: string): ParsedArguments {
+  const value = (name: string): string | undefined => {
+    const index = args.indexOf(name);
+    return index < 0 ? undefined : args[index + 1];
+  };
+  const nodeCli = path.resolve(value("--node") ?? path.join(root, "dist", "bin", "ruk.js"));
+  const binary = path.resolve(value("--binary") ?? path.join(root, "artifacts", process.platform === "win32" ? "ruk.exe" : "ruk"));
+  const samples = Number(value("--samples") ?? 3);
+  const durationMs = Number(value("--duration") ?? 5_000);
+  const concurrencyLevels = (value("--concurrency") ?? "1,10,20").split(",").map(Number);
+  const assertTarget = !args.includes("--no-assert");
+  if (!Number.isSafeInteger(samples) || samples < 1) throw new Error("--samples must be a positive integer");
+  if (!Number.isFinite(durationMs) || durationMs < 1_000) throw new Error("--duration must be at least 1000 milliseconds");
+  if (concurrencyLevels.length === 0 || concurrencyLevels.some((level) => !Number.isSafeInteger(level) || level < 1)) {
+    throw new Error("--concurrency must be a comma-separated list of positive integers");
   }
-  if (process.platform === "darwin") {
-    const output = await requireSuccess({
-      command: "ps",
-      args: ["-o", "rss=", "-p", pids.join(",")],
-      cwd: process.cwd(),
-    }).catch(() => "");
-    return output.split(/\s+/).filter(Boolean).reduce((total, value) => total + Number(value) * 1024, 0);
-  }
-  const expression = `(Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum`;
-  const output = await requireSuccess({
-    command: "powershell.exe",
-    args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", expression],
-    cwd: process.cwd(),
-  }).catch(() => "0");
-  return Number(output) || 0;
+  return { nodeCli, binary, samples, durationMs, concurrencyLevels, assertTarget };
 }
 
-async function coldStart(spec: CommandSpec): Promise<number> {
-  const started = performance.now();
-  await requireSuccess(spec);
-  return performance.now() - started;
-}
-
-async function measureWrappers(commands: readonly CommandSpec[], durationMs: number): Promise<{
-  elapsedMs: number;
-  idleResidentBytes: number;
-  peakResidentBytes: number;
-}> {
-  const started = performance.now();
-  const children = commands.map((spec) => spawn(spec.command, spec.args, {
-    cwd: spec.cwd,
-    stdio: "ignore",
-    windowsHide: true,
-  }));
-  const completion = Promise.all(children.map((child) => new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => resolve(code ?? 1));
-  })));
-  let peakResidentBytes = 0;
-  let idleResidentBytes = 0;
-  while (children.some(({ exitCode, signalCode }) => exitCode === null && signalCode === null)) {
-    const current = await residentBytes(
-      children.flatMap(({ pid, exitCode, signalCode }) => pid && exitCode === null && signalCode === null ? [pid] : []),
-    );
-    peakResidentBytes = Math.max(peakResidentBytes, current);
-    if (performance.now() - started >= durationMs / 2) {
-      idleResidentBytes = Math.max(idleResidentBytes, current);
-    }
-    await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 100 : 25));
-  }
-  const codes = await completion;
-  if (codes.some((code) => code !== 0)) {
-    throw new Error(`benchmark wrapper exited nonzero: ${codes.join(", ")}`);
-  }
-  return { elapsedMs: performance.now() - started, idleResidentBytes, peakResidentBytes };
-}
-
-async function makeRepository(root: string, nodeTarget: Omit<Target, "wrappers">): Promise<string> {
+async function makeRepository(root: string, node: Target): Promise<string> {
   const repository = path.join(root, "repository");
   const installer = path.join(root, "install.mjs");
   await fs.mkdir(repository, { recursive: true });
@@ -149,54 +143,140 @@ async function makeRepository(root: string, nodeTarget: Omit<Target, "wrappers">
   ]) {
     await requireSuccess({ command: "git", args, cwd: repository });
   }
-  await requireSuccess({ ...nodeTarget.cold, args: [...nodeTarget.cold.args.slice(0, -1), "init"], cwd: repository });
+  await requireSuccess({ command: node.command, args: [...node.prefix, "init"], cwd: repository });
   return repository;
 }
 
-function parseArguments(args: readonly string[]): {
-  binary: string;
-  samples: number;
-  durationMs: number;
-  concurrencyLevels: number[];
-} {
-  const value = (name: string) => {
-    const index = args.indexOf(name);
-    return index < 0 ? undefined : args[index + 1];
-  };
-  const binary = path.resolve(value("--binary") ?? path.join("artifacts", process.platform === "win32" ? "ruk.exe" : "ruk"));
-  const samples = Number(value("--samples") ?? 3);
-  const durationMs = Number(value("--duration") ?? 25_000);
-  const concurrencyLevels = (value("--concurrency") ?? "1,10,20").split(",").map(Number);
-  if (!Number.isSafeInteger(samples) || samples < 1) throw new Error("--samples must be a positive integer");
-  if (!Number.isFinite(durationMs) || durationMs < 250) throw new Error("--duration must be at least 250 milliseconds");
-  if (concurrencyLevels.length === 0 || concurrencyLevels.some((level) => !Number.isSafeInteger(level) || level < 1)) {
-    throw new Error("--concurrency must be a comma-separated list of positive integers");
+async function compileInspector(root: string, output: string): Promise<void> {
+  await requireSuccess({ command: "go", args: ["build", "-trimpath", "-o", output, "./scripts/benchmark"], cwd: root });
+}
+
+async function inspect(inspector: InspectorTarget, pids: readonly number[]): Promise<ProcessReport> {
+  const output = await requireSuccess({
+    command: inspector.command,
+    args: [...inspector.args, ...pids.flatMap((pid) => ["--pid", String(pid)])],
+    cwd: inspector.cwd,
+  });
+  const report = JSON.parse(output) as unknown;
+  if (!report || typeof report !== "object" || !Array.isArray((report as { processes?: unknown }).processes)) {
+    throw new Error("process inspector returned an invalid report");
   }
-  return { binary, samples, durationMs, concurrencyLevels };
+  return report as ProcessReport;
+}
+
+function isPowerShell(name: string): boolean {
+  const normalized = name.toLowerCase().replaceAll("\\", "/").split("/").at(-1) ?? "";
+  return normalized === "powershell.exe" || normalized === "pwsh.exe" || normalized === "powershell" || normalized === "pwsh";
+}
+
+async function measureWrappers(
+  commands: readonly CommandSpec[],
+  durationMs: number,
+  inspector: InspectorTarget,
+): Promise<Measurement> {
+  const started = performance.now();
+  const children = commands.map((spec) => spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    stdio: "ignore",
+    windowsHide: true,
+  }));
+  const completion = Promise.all(children.map((child) => new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code ?? 1));
+  })));
+  let idleResidentBytes = 0;
+  let coldResidentBytes = 0;
+  let idleChildProcessCount = 0;
+  let peakResidentBytes = 0;
+  let peakChildProcessCount = 0;
+  let peakWindowsPowerShellChildren = 0;
+  let idleCaptured = false;
+  let coldCaptured = false;
+  const deadline = started + durationMs + 30_000;
+  while (children.some(({ exitCode, signalCode }) => exitCode === null && signalCode === null)) {
+    if (performance.now() > deadline) {
+      for (const child of children) child.kill();
+      throw new Error(`benchmark workload exceeded ${Math.round((deadline - started) / 1000)} seconds`);
+    }
+    const rootPids = children.flatMap(({ pid, exitCode, signalCode }) => (
+      pid && exitCode === null && signalCode === null ? [pid] : []
+    ));
+    if (rootPids.length > 0) {
+      const report = await inspect(inspector, rootPids);
+      const rootSet = new Set(rootPids);
+      // Compare Ruk wrapper overhead, not the workload process both runtimes
+      // are supervising. Descendants remain in the report for process-count
+      // and PowerShell-storm detection.
+      const residentBytes = report.processes
+        .filter((process) => rootSet.has(process.pid))
+        .reduce((total, process) => total + process.rssBytes, 0);
+      const childProcesses = report.processes.filter((process) => !rootSet.has(process.pid));
+      const childProcessCount = childProcesses.length;
+      const powershellChildren = childProcesses.filter((process) => isPowerShell(process.name)).length;
+      peakResidentBytes = Math.max(peakResidentBytes, residentBytes);
+      peakChildProcessCount = Math.max(peakChildProcessCount, childProcessCount);
+      peakWindowsPowerShellChildren = Math.max(peakWindowsPowerShellChildren, powershellChildren);
+      if (!coldCaptured && report.processes.length > 0) {
+        coldResidentBytes = residentBytes;
+        coldCaptured = true;
+      }
+      if (!idleCaptured && performance.now() - started >= durationMs / 4 && report.processes.length > 0) {
+        idleResidentBytes = residentBytes;
+        idleChildProcessCount = childProcessCount;
+        idleCaptured = true;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 100 : 50));
+  }
+  const codes = await completion;
+  if (codes.some((code) => code !== 0)) {
+    throw new Error(`benchmark wrapper exited nonzero: ${codes.join(", ")}`);
+  }
+  return {
+    elapsedMs: performance.now() - started,
+    coldResidentBytes: coldCaptured ? coldResidentBytes : peakResidentBytes,
+    idleResidentBytes: idleCaptured ? idleResidentBytes : peakResidentBytes,
+    peakResidentBytes,
+    idleChildProcessCount: idleCaptured ? idleChildProcessCount : peakChildProcessCount,
+    peakChildProcessCount,
+    peakWindowsPowerShellChildren,
+  };
 }
 
 async function benchmarkTarget(
   target: Target,
+  repository: string,
+  inspector: InspectorTarget,
   samples: number,
   durationMs: number,
   concurrencyLevels: readonly number[],
 ): Promise<TargetBenchmark> {
   const coldStartMs: number[] = [];
   for (let sample = 0; sample < samples; sample += 1) {
-    coldStartMs.push(await coldStart(target.cold));
+    const started = performance.now();
+    await requireSuccess({ command: target.command, args: [...target.prefix, "--version"], cwd: target.cwd });
+    coldStartMs.push(performance.now() - started);
   }
   const wrappers: ConcurrencyBenchmark[] = [];
   for (const concurrency of concurrencyLevels) {
     const elapsed: number[] = [];
     const idle: number[] = [];
+    const cold: number[] = [];
     const peak: number[] = [];
+    const idleChildren: number[] = [];
+    const peakChildren: number[] = [];
+    const powershellChildren: number[] = [];
     for (let sample = 0; sample < samples; sample += 1) {
-      const workload = await target.wrappers(concurrency, sample);
+      const workload = await createWorkload(target, repository, concurrency, sample, durationMs);
       try {
-        const measurement = await measureWrappers(workload.commands, durationMs);
+        const measurement = await measureWrappers(workload.commands, durationMs, inspector);
         elapsed.push(measurement.elapsedMs);
         idle.push(measurement.idleResidentBytes);
+        cold.push(measurement.coldResidentBytes);
         peak.push(measurement.peakResidentBytes);
+        idleChildren.push(measurement.idleChildProcessCount);
+        peakChildren.push(measurement.peakChildProcessCount);
+        powershellChildren.push(measurement.peakWindowsPowerShellChildren);
       } finally {
         await workload.cleanup();
       }
@@ -204,8 +284,12 @@ async function benchmarkTarget(
     wrappers.push({
       concurrency,
       elapsedMs: summarizeSamples(elapsed),
+      coldResidentBytes: summarizeSamples(cold),
       idleResidentBytes: summarizeSamples(idle),
       peakResidentBytes: summarizeSamples(peak),
+      idleChildProcessCount: summarizeSamples(idleChildren),
+      peakChildProcessCount: summarizeSamples(peakChildren),
+      peakWindowsPowerShellChildren: summarizeSamples(powershellChildren),
     });
   }
   return {
@@ -217,109 +301,147 @@ async function benchmarkTarget(
   };
 }
 
+async function createWorkload(
+  target: Target,
+  repository: string,
+  concurrency: number,
+  sample: number,
+  durationMs: number,
+): Promise<Workload> {
+  const assignments: Array<{ assignmentId: string; path: string }> = [];
+  try {
+    for (let index = 0; index < concurrency; index += 1) {
+      const output = await requireSuccess({
+        command: target.command,
+        args: [...target.prefix, "acquire", `benchmark/${target.name}/${sample}/${index}`, "--ttl", "2", "--json"],
+        cwd: repository,
+      });
+      const parsed = JSON.parse(output) as { assignmentId?: unknown; path?: unknown };
+      if (typeof parsed.assignmentId !== "string" || typeof parsed.path !== "string") {
+        throw new Error("acquire returned an incomplete assignment");
+      }
+      assignments.push({ assignmentId: parsed.assignmentId, path: parsed.path });
+    }
+  } catch (error) {
+    await releaseAssignments(target, repository, assignments);
+    throw error;
+  }
+  return {
+    commands: assignments.map(({ path: cwd }) => ({
+      command: target.command,
+      args: [...target.prefix, "run", "--", target.childCommand, "-e", `setTimeout(() => {}, ${durationMs})`],
+      cwd,
+    })),
+    cleanup: async () => releaseAssignments(target, repository, assignments),
+  };
+}
+
+async function releaseAssignments(target: Target, repository: string, assignments: readonly { assignmentId: string }[]): Promise<void> {
+  const errors: string[] = [];
+  for (const { assignmentId } of assignments) {
+    try {
+      await requireSuccess({ command: target.command, args: [...target.prefix, "release", assignmentId, "--json"], cwd: repository });
+    } catch (error) {
+      errors.push(String(error));
+    }
+  }
+  if (errors.length > 0) throw new Error(`failed to release benchmark assignments: ${errors.join("; ")}`);
+}
+
+function makeSummary(result: RuntimeBenchmarkResult): string {
+  const lines = [
+    `Ruk runtime benchmark (${result.platform.os}/${result.platform.architecture})`,
+    `samples=${result.sampleCount}, duration=${result.wrapperDurationMs}ms, concurrency=${result.concurrencyLevels.join(",")}`,
+  ];
+  for (const target of result.targets) {
+    lines.push(`${target.name}: binary=${target.binaryBytes}B, cold-median=${target.coldStartMs.median}ms`);
+    for (const wrapper of target.wrappers) {
+      lines.push(`  c=${wrapper.concurrency}: cold-rss=${wrapper.coldResidentBytes.median}B, idle-rss=${wrapper.idleResidentBytes.median}B, peak-rss=${wrapper.peakResidentBytes.median}B, child-processes=${wrapper.peakChildProcessCount.median}, powershell=${wrapper.peakWindowsPowerShellChildren.median}`);
+    }
+  }
+  const assertion = result.assertions;
+  const reductions = Object.entries(assertion.ramReductionPercentByConcurrency)
+    .map(([concurrency, percent]) => `c=${concurrency}:${percent === null ? "n/a" : `${percent.toFixed(1)}%`}`)
+    .join(", ");
+  lines.push(`Go peak-RSS reduction: ${reductions}`);
+  lines.push(`RAM target (>=${assertion.minimumRamReductionPercent}%): ${assertion.ramTargetMet ? "PASS" : "FAIL"}`);
+  lines.push(`Windows PowerShell children: ${assertion.applicable ? assertion.observedWindowsPowerShellChildren : "not applicable"} (${assertion.zeroRoutineWindowsPowerShellChildren ? "PASS" : "FAIL"})`);
+  return lines.join("\n");
+}
+
+function makeAssertions(targets: readonly TargetBenchmark[], concurrencyLevels: readonly number[]): RuntimeBenchmarkResult["assertions"] {
+  const node = targets.find((target) => target.name === "node");
+  const go = targets.find((target) => target.name === "go");
+  const failureReasons: string[] = [];
+  const ramReductionPercentByConcurrency: Record<string, number | null> = {};
+  for (const concurrency of concurrencyLevels) {
+    const nodeSample = node?.wrappers.find((wrapper) => wrapper.concurrency === concurrency)?.peakResidentBytes.median;
+    const goSample = go?.wrappers.find((wrapper) => wrapper.concurrency === concurrency)?.peakResidentBytes.median;
+    ramReductionPercentByConcurrency[String(concurrency)] = nodeSample && nodeSample > 0 && goSample !== undefined
+      ? ((nodeSample - goSample) / nodeSample) * 100
+      : null;
+  }
+  const reductions = Object.values(ramReductionPercentByConcurrency);
+  const ramTargetMet = reductions.length > 0 && reductions.every((value) => value !== null && value >= 50);
+  if (!ramTargetMet) failureReasons.push("Go did not reduce median peak RSS by at least 50% at every requested concurrency level");
+  const observedWindowsPowerShellChildren = targets.flatMap((target) => target.wrappers)
+    .reduce((maximum, wrapper) => Math.max(maximum, wrapper.peakWindowsPowerShellChildren.maximum), 0);
+  const applicable = process.platform === "win32";
+  const zeroRoutineWindowsPowerShellChildren = !applicable || observedWindowsPowerShellChildren === 0;
+  if (!zeroRoutineWindowsPowerShellChildren) failureReasons.push("routine Windows PowerShell children were observed");
+  return {
+    minimumRamReductionPercent: 50,
+    ramReductionPercentByConcurrency,
+    ramTargetMet,
+    zeroRoutineWindowsPowerShellChildren,
+    observedWindowsPowerShellChildren,
+    applicable,
+    failureReasons,
+  };
+}
+
 export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchmarkResult> {
-  const { binary, samples, durationMs, concurrencyLevels } = parseArguments(args);
   const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-  const nodeCli = path.join(root, "dist", "bin", "ruk.js");
-  await Promise.all([fs.access(nodeCli), fs.access(binary)]).catch(() => {
-    throw new Error("Build the Node distribution and standalone binary before benchmarking");
+  const parsed = parseArguments(args, root);
+  await Promise.all([fs.access(parsed.nodeCli), fs.access(parsed.binary)]).catch(() => {
+    throw new Error("Build the TypeScript/Node oracle and production Go binary before benchmarking");
   });
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-runtime-benchmark-"));
   try {
-    const goBinary = path.join(temporary, process.platform === "win32" ? "go-supervisor.exe" : "go-supervisor");
-    await requireSuccess({
-      command: "go",
-      args: ["build", "-o", goBinary, path.join(root, "experiments", "go-supervisor", "main.go")],
-      cwd: root,
-    });
-    const nodeExecutable = process.env["RUK_BENCH_NODE"] ?? "node";
+    const inspectorPath = path.join(temporary, process.platform === "win32" ? "process-inspector.exe" : "process-inspector");
+    await compileInspector(root, inspectorPath);
+    const nodeExecutable = process.env["RUK_BENCH_NODE"] ?? process.execPath;
     const nodeVersion = await requireSuccess({ command: nodeExecutable, args: ["--version"], cwd: root });
-    const nodeBase = {
-      name: "node" as const,
-      version: nodeVersion,
-      sizePath: path.join(root, "dist"),
-      cold: { command: nodeExecutable, args: [nodeCli, "--version"], cwd: root },
+    const node: Target = {
+      name: "node", version: nodeVersion, sizePath: path.join(root, "dist"), command: nodeExecutable,
+      prefix: [parsed.nodeCli], childCommand: nodeExecutable, cwd: root,
     };
-    const repository = await makeRepository(temporary, nodeBase);
-    const childArgs = ["-e", `setTimeout(() => {}, ${durationMs})`];
-
-    const rukTarget = (
-      name: "node" | "bun-standalone",
-      command: string,
-      prefix: string[],
-      version: string,
-      sizePath: string,
-    ): Target => ({
-      name,
-      version,
-      sizePath,
-      cold: { command, args: [...prefix, "--version"], cwd: root },
-      wrappers: async (concurrency, sample) => {
-        const assignments: Array<{ path: string; assignmentId: string }> = [];
-        for (let index = 0; index < concurrency; index += 1) {
-          const output = await requireSuccess({
-            command,
-            args: [...prefix, "acquire", `benchmark/${name}/${sample}/${index}`, "--ttl", "1", "--json"],
-            cwd: repository,
-          });
-          assignments.push(JSON.parse(output) as { path: string; assignmentId: string });
-        }
-        return {
-          commands: assignments.map(({ path: cwd }) => ({
-            command,
-            args: [...prefix, "run", "--", nodeExecutable, ...childArgs],
-            cwd,
-          })),
-          cleanup: async () => {
-            for (const { assignmentId } of assignments) {
-              await requireSuccess({
-                command,
-                args: [...prefix, "release", assignmentId, "--json"],
-                cwd: repository,
-              });
-            }
-          },
-        };
-      },
-    });
-    const bunVersion = await requireSuccess({ command: "bun", args: ["--version"], cwd: root });
-    const goVersion = await requireSuccess({ command: "go", args: ["version"], cwd: root });
-    const targets: Target[] = [
-      rukTarget("node", nodeExecutable, [nodeCli], nodeVersion, path.join(root, "dist")),
-      rukTarget("bun-standalone", binary, [], `Bun ${bunVersion}`, binary),
-      {
-        name: "go-supervisor",
-        version: goVersion,
-        sizePath: goBinary,
-        cold: { command: goBinary, args: ["--help"], cwd: root },
-        wrappers: async (concurrency, sample) => {
-          const commands: CommandSpec[] = [];
-          for (let index = 0; index < concurrency; index += 1) {
-            const state = path.join(temporary, `go-${sample}-${concurrency}-${index}.json`);
-            await fs.writeFile(state, `${JSON.stringify({ assignmentId: `go-${sample}-${index}`, heartbeatAt: new Date(0).toISOString() })}\n`);
-            commands.push({
-              command: goBinary,
-              args: ["--state", state, "--heartbeat", "20s", nodeExecutable, ...childArgs],
-              cwd: temporary,
-            });
-          }
-          return { commands, cleanup: async () => {} };
-        },
-      },
+    const repository = await makeRepository(temporary, node);
+    const goVersion = await requireSuccess({ command: parsed.binary, args: ["--version"], cwd: root });
+    const go: Target = {
+      name: "go", version: goVersion, sizePath: parsed.binary, command: parsed.binary,
+      prefix: [], childCommand: nodeExecutable, cwd: root,
+    };
+    const inspector = { command: inspectorPath, args: [], cwd: root };
+    const targets = [
+      await benchmarkTarget(node, repository, inspector, parsed.samples, parsed.durationMs, parsed.concurrencyLevels),
+      await benchmarkTarget(go, repository, inspector, parsed.samples, parsed.durationMs, parsed.concurrencyLevels),
     ];
-    const targetResults: TargetBenchmark[] = [];
-    for (const target of targets) {
-      targetResults.push(await benchmarkTarget(target, samples, durationMs, concurrencyLevels));
-    }
     const result = runtimeBenchmarkResult({
       generatedAt: new Date().toISOString(),
       platform: process.platform,
       architecture: process.arch,
-      sampleCount: samples,
-      wrapperDurationMs: durationMs,
-      targets: targetResults,
+      sampleCount: parsed.samples,
+      wrapperDurationMs: parsed.durationMs,
+      concurrencyLevels: [...parsed.concurrencyLevels],
+      targets,
+      assertions: makeAssertions(targets, parsed.concurrencyLevels),
     });
+    process.stderr.write(`${makeSummary(result)}\n`);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    if (parsed.assertTarget && result.assertions.failureReasons.length > 0) {
+      throw new Error(result.assertions.failureReasons.join("; "));
+    }
     return result;
   } finally {
     await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch((error) => {
