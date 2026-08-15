@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 
@@ -31,7 +30,7 @@ func runMain(args []string, stdout, stderr io.Writer) int {
 	})
 	code, err := application.Run(context.Background(), args)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "ruk: %v\n", err)
+		_ = cli.WriteError(stderr, err, cli.JSONRequested(args))
 		return 1
 	}
 	return code

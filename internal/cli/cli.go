@@ -105,11 +105,11 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 		}
 		return 0, nil
 	}
-	if args[0] == "update" {
-		invocation, err := Parse(args)
-		if err != nil {
-			return 1, err
-		}
+	invocation, err := Parse(args)
+	if err != nil {
+		return 1, err
+	}
+	if invocation.Name == "update" {
 		result, err := application.update(ctx, updatepkg.Options{
 			Distribution:   application.distribution,
 			CurrentVersion: application.version,
