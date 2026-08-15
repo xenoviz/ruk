@@ -442,10 +442,10 @@ func ensureRegistryRoot(files RegistryFileSystem, root string) error {
 		return fmt.Errorf("inspect port registry root %s: %w", root, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("unsafe Ruk host port directory %s", root)
+		return fmt.Errorf("Unsafe Ruk host port directory %s", root)
 	}
 	if err := verifyRegistryRootOwner(info); err != nil {
-		return fmt.Errorf("unsafe Ruk host port directory %s: %w", root, err)
+		return fmt.Errorf("Unsafe Ruk host port directory %s: %w", root, err)
 	}
 	return nil
 }
