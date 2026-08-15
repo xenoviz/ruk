@@ -394,5 +394,5 @@ func elapsedMilliseconds(duration time.Duration) int64 {
 	if duration%time.Millisecond >= 500*time.Microsecond {
 		milliseconds++
 	}
-	return milliseconds
+	return int64(milliseconds)
 }
