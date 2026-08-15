@@ -57,6 +57,14 @@ func shellProcessRecord() state.TrackedProcessRecord {
 	return state.TrackedProcessRecord{PID: 42, GroupID: &groupID, StartedAt: "identity-42"}
 }
 
+func shellTerminalOptions(runner cli.ShellProcessRunner, tracker cli.ShellProcessTracker) cli.ShellTerminalOptions {
+	return cli.ShellTerminalOptions{
+		Runner: runner, Tracker: tracker,
+		Register: func(context.Context, string, state.TrackedProcessRecord) error { return nil },
+		Remove:   func(context.Context, string, state.TrackedProcessRecord) error { return nil },
+	}
+}
+
 func TestNativeShellTerminalRunsAnIsolatedNativeProcessAndDrainsIt(t *testing.T) {
 	runner := &shellProcessRunnerStub{result: processpkg.RunResult{
 		ExitCode: 130,
@@ -64,7 +72,7 @@ func TestNativeShellTerminalRunsAnIsolatedNativeProcessAndDrainsIt(t *testing.T)
 		Record:   shellProcessRecord(),
 	}}
 	tracker := &shellProcessTrackerStub{}
-	terminal := cli.NewNativeShellTerminal(cli.ShellTerminalOptions{Runner: runner, Tracker: tracker})
+	terminal := cli.NewNativeShellTerminal(shellTerminalOptions(runner, tracker))
 	request := shellTerminalRequest()
 
 	result, err := terminal.Run(context.Background(), request)
@@ -91,7 +99,7 @@ func TestNativeShellTerminalRunsAnIsolatedNativeProcessAndDrainsIt(t *testing.T)
 func TestNativeShellTerminalFailsClosedWhenDescendantsRemain(t *testing.T) {
 	runner := &shellProcessRunnerStub{result: processpkg.RunResult{Record: shellProcessRecord()}}
 	tracker := &shellProcessTrackerStub{alive: true}
-	terminal := cli.NewNativeShellTerminal(cli.ShellTerminalOptions{Runner: runner, Tracker: tracker})
+	terminal := cli.NewNativeShellTerminal(shellTerminalOptions(runner, tracker))
 
 	result, err := terminal.Run(context.Background(), shellTerminalRequest())
 	if err == nil || result.DescendantsDrained {
@@ -139,7 +147,7 @@ func TestNativeShellTerminalFailsClosedOnTrackerError(t *testing.T) {
 	trackerErr := errors.New("identity unavailable")
 	runner := &shellProcessRunnerStub{result: processpkg.RunResult{Record: shellProcessRecord()}}
 	tracker := &shellProcessTrackerStub{err: trackerErr}
-	terminal := cli.NewNativeShellTerminal(cli.ShellTerminalOptions{Runner: runner, Tracker: tracker})
+	terminal := cli.NewNativeShellTerminal(shellTerminalOptions(runner, tracker))
 
 	_, err := terminal.Run(context.Background(), shellTerminalRequest())
 	if !errors.Is(err, trackerErr) {
@@ -156,10 +164,7 @@ func TestNativeShellTerminalFailsClosedOnRunnerErrorOrInexactRecord(t *testing.T
 		{name: "missing identity", runner: &shellProcessRunnerStub{result: processpkg.RunResult{Record: state.TrackedProcessRecord{PID: 42}}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			terminal := cli.NewNativeShellTerminal(cli.ShellTerminalOptions{
-				Runner:  test.runner,
-				Tracker: &shellProcessTrackerStub{},
-			})
+			terminal := cli.NewNativeShellTerminal(shellTerminalOptions(test.runner, &shellProcessTrackerStub{}))
 			result, err := terminal.Run(context.Background(), shellTerminalRequest())
 			if err == nil || result.DescendantsDrained {
 				t.Fatalf("result/error = %#v/%v", result, err)
@@ -170,7 +175,7 @@ func TestNativeShellTerminalFailsClosedOnRunnerErrorOrInexactRecord(t *testing.T
 
 func TestNativeShellTerminalValidatesRequestBeforeSpawning(t *testing.T) {
 	runner := &shellProcessRunnerStub{}
-	terminal := cli.NewNativeShellTerminal(cli.ShellTerminalOptions{Runner: runner, Tracker: &shellProcessTrackerStub{}})
+	terminal := cli.NewNativeShellTerminal(shellTerminalOptions(runner, &shellProcessTrackerStub{}))
 	request := shellTerminalRequest()
 	request.AssignmentID = ""
 

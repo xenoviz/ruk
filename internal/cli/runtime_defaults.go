@@ -97,12 +97,12 @@ func NewRuntimeDefaults(options RuntimeDefaultsOptions) (RuntimeDefaults, error)
 		return runtimeExec(ctx, input, now, newID, mutations, options)
 	}
 	defaults.Shell = func(ctx context.Context, input ShellRouteInput) (ShellResult, error) {
-		return runtimeShell(ctx, input, mutations, options)
+		return runtimeShell(ctx, input, now, newID, mutations, options)
 	}
 	return defaults, nil
 }
 
-func runtimeShell(ctx context.Context, input ShellRouteInput, mutations MutationAdapters, options RuntimeDefaultsOptions) (ShellResult, error) {
+func runtimeShell(ctx context.Context, input ShellRouteInput, now func() time.Time, newID func() string, mutations MutationAdapters, options RuntimeDefaultsOptions) (ShellResult, error) {
 	if err := validateRepositoryContext(input.Repository); err != nil {
 		return ShellResult{}, err
 	}
@@ -111,7 +111,20 @@ func runtimeShell(ctx context.Context, input ShellRouteInput, mutations Mutation
 	}
 	terminal := options.ShellTerminal
 	if terminal == nil {
-		terminal = NewNativeShellTerminal(ShellTerminalOptions{})
+		_, _, lifecycleService, err := runtimeState(input.Repository, now, newID)
+		if err != nil {
+			return ShellResult{}, err
+		}
+		terminal = NewNativeShellTerminal(ShellTerminalOptions{
+			Register: func(ctx context.Context, assignmentID string, record state.TrackedProcessRecord) error {
+				_, err := lifecycleService.AddAssignmentProcess(ctx, assignmentID, record)
+				return err
+			},
+			Remove: func(ctx context.Context, assignmentID string, record state.TrackedProcessRecord) error {
+				_, err := lifecycleService.RemoveAssignmentProcess(ctx, assignmentID, record.PID, record.StartedAt)
+				return err
+			},
+		})
 	}
 	service := NewShellService(ShellOptions{
 		Acquire: func(ctx context.Context, request AcquireInput) (AcquireResult, error) {
