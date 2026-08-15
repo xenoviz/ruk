@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/xenoviz/ruk/internal/cli"
+	updatepkg "github.com/xenoviz/ruk/internal/update"
 )
 
 // version and distribution are injected by release builds. Distribution must
@@ -23,9 +24,10 @@ func main() {
 
 func runMain(args []string, stdout, stderr io.Writer) int {
 	application := cli.New(cli.Options{
-		Version: version,
-		Stdout:  stdout,
-		Stderr:  stderr,
+		Version:      version,
+		Distribution: updatepkg.Distribution(distribution),
+		Stdout:       stdout,
+		Stderr:       stderr,
 	})
 	code, err := application.Run(context.Background(), args)
 	if err != nil {

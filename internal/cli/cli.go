@@ -3,9 +3,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+
+	updatepkg "github.com/xenoviz/ruk/internal/update"
 )
 
 const helpText = `Ruk — dependency-aware Git workspaces for parallel coding agents
@@ -36,16 +39,24 @@ Bun or pnpm command.
 
 // Options configures an Application.
 type Options struct {
-	Version string
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Version      string
+	Distribution updatepkg.Distribution
+	Stdout       io.Writer
+	Stderr       io.Writer
+	Update       UpdateOperation
 }
+
+// UpdateOperation is injected so compatibility tests can exercise CLI output
+// without network access or executable replacement.
+type UpdateOperation func(context.Context, updatepkg.Options) (updatepkg.Result, error)
 
 // Application executes Ruk commands.
 type Application struct {
-	version string
-	stdout  io.Writer
-	stderr  io.Writer
+	version      string
+	distribution updatepkg.Distribution
+	stdout       io.Writer
+	stderr       io.Writer
+	update       UpdateOperation
 }
 
 // New creates a Ruk command application.
@@ -58,10 +69,22 @@ func New(options Options) *Application {
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	distribution := options.Distribution
+	if distribution == "" {
+		distribution = updatepkg.DistributionPackage
+	}
+	updateOperation := options.Update
+	if updateOperation == nil {
+		updateOperation = func(ctx context.Context, options updatepkg.Options) (updatepkg.Result, error) {
+			return updatepkg.Update(ctx, options, updatepkg.Hooks{})
+		}
+	}
 	return &Application{
-		version: options.Version,
-		stdout:  stdout,
-		stderr:  stderr,
+		version:      options.Version,
+		distribution: distribution,
+		stdout:       stdout,
+		stderr:       stderr,
+		update:       updateOperation,
 	}
 }
 
@@ -82,7 +105,44 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 		}
 		return 0, nil
 	}
+	if args[0] == "update" {
+		invocation, err := Parse(args)
+		if err != nil {
+			return 1, err
+		}
+		result, err := application.update(ctx, updatepkg.Options{
+			Distribution:   application.distribution,
+			CurrentVersion: application.version,
+			CheckOnly:      invocation.Check,
+		})
+		if err != nil {
+			return 1, err
+		}
+		if invocation.JSON {
+			if err := json.NewEncoder(application.stdout).Encode(result); err != nil {
+				return 1, fmt.Errorf("write update result: %w", err)
+			}
+			return 0, nil
+		}
+		if _, err := io.WriteString(application.stdout, formatUpdate(result)); err != nil {
+			return 1, fmt.Errorf("write update result: %w", err)
+		}
+		return 0, nil
+	}
 	return 1, errors.New("command is not implemented")
+}
+
+func formatUpdate(result updatepkg.Result) string {
+	switch result.Status {
+	case updatepkg.StatusUpToDate:
+		return fmt.Sprintf("Ruk %s is up to date.\n", result.CurrentVersion)
+	case updatepkg.StatusUpdateAvailable:
+		return fmt.Sprintf("Ruk %s is available (current %s).\n", result.LatestVersion, result.CurrentVersion)
+	case updatepkg.StatusScheduled:
+		return fmt.Sprintf("Ruk %s is verified and will replace the current executable after this process exits.\n", result.LatestVersion)
+	default:
+		return fmt.Sprintf("Updated Ruk from %s to %s using %s.\n", result.CurrentVersion, result.LatestVersion, result.Method)
+	}
 }
 
 func isHelpArgument(argument string) bool {
