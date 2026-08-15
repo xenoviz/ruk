@@ -14,7 +14,10 @@ import (
 	"github.com/xenoviz/ruk/internal/state"
 )
 
-const activityKeeperID = "11111111-1111-4111-8111-111111111111"
+const (
+	activityAssignmentID = "22222222-2222-4222-8222-222222222222"
+	activityKeeperID     = "11111111-1111-4111-8111-111111111111"
+)
 
 type activityStore struct {
 	mu      sync.Mutex
@@ -83,8 +86,8 @@ func activityFixture(t *testing.T, leaseMinutes float64) (*activityStore, *lifec
 	}
 	store := &activityStore{current: &state.State{Version: state.CurrentVersion, Trees: map[string]state.TreeRecord{}, Workspaces: map[string]state.WorkspaceRecord{}, Metrics: state.EmptyMetrics()}}
 	store.current.Workspaces[key] = state.WorkspaceRecord{
-		Path: path, Managed: true, Lifecycle: state.LifecycleAssigned,
-		Assignment: &state.AssignmentRecord{ID: "assignment-1", Owner: "owner", Hostname: "host", AssignedAt: "2026-01-01T00:00:00.000Z", RenewedAt: "2026-01-01T00:00:00.000Z", ExpiresAt: "2026-01-01T01:00:00.000Z", LeaseDurationMinutes: leaseMinutes, LastActivityAt: "2026-01-01T00:00:00.000Z", LeaseKeepers: []state.LeaseKeeperRecord{}, Ports: map[string]int64{}},
+		Path: path, Managed: true, Branch: "agent/activity", Lifecycle: state.LifecycleAssigned,
+		Assignment: &state.AssignmentRecord{ID: activityAssignmentID, Owner: "owner", Hostname: "host", AssignedAt: "2026-01-01T00:00:00.000Z", RenewedAt: "2026-01-01T00:00:00.000Z", ExpiresAt: "2026-01-01T01:00:00.000Z", LeaseDurationMinutes: leaseMinutes, LastActivityAt: "2026-01-01T00:00:00.000Z", LeaseKeepers: []state.LeaseKeeperRecord{}, Ports: map[string]int64{}},
 		Processes:  []state.TrackedProcessRecord{}, CreatedAt: "2026-01-01T00:00:00.000Z", UpdatedAt: "2026-01-01T00:00:00.000Z",
 	}
 	clock := newActivityClock(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
@@ -103,7 +106,7 @@ func TestActivityRunnerRefreshesAndCleansKeeper(t *testing.T) {
 	operationDone := make(chan struct{})
 	result := make(chan error, 1)
 	go func() {
-		result <- runner.Run(context.Background(), "assignment-1", func(context.Context) error {
+		result <- runner.Run(context.Background(), activityAssignmentID, func(context.Context) error {
 			close(operationStarted)
 			<-operationDone
 			return nil
@@ -151,10 +154,10 @@ func TestActivityRunnerRefreshPreservesConcurrentExplicitRenewal(t *testing.T) {
 	done := make(chan struct{})
 	result := make(chan error, 1)
 	go func() {
-		result <- runner.Run(context.Background(), "assignment-1", func(context.Context) error { <-done; return nil })
+		result <- runner.Run(context.Background(), activityAssignmentID, func(context.Context) error { <-done; return nil })
 	}()
 	now.Add(time.Minute)
-	renewed, err := lifecycleService.RenewAssignment(context.Background(), "assignment-1", now.Now().Add(10*time.Hour), nil)
+	renewed, err := lifecycleService.RenewAssignment(context.Background(), activityAssignmentID, now.Now().Add(10*time.Hour), nil)
 	if err != nil {
 		t.Fatalf("RenewAssignment returned an error: %v", err)
 	}
@@ -188,7 +191,7 @@ func TestActivityRunnerCancellationStopsOperationAndCleansKeeper(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		result <- runner.Run(ctx, "assignment-1", func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() })
+		result <- runner.Run(ctx, activityAssignmentID, func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() })
 	}()
 	time.Sleep(10 * time.Millisecond)
 	cancel()
@@ -208,7 +211,7 @@ func TestActivityRunnerOperationFailureIsPreserved(t *testing.T) {
 	ticker := &activityTicker{ticks: make(chan time.Time), stopped: make(chan struct{})}
 	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, NewID: func() string { return activityKeeperID }, Ticker: func(time.Duration) cli.ActivityTicker { return ticker }})
 	operationErr := errors.New("command failed")
-	if err := runner.Run(context.Background(), "assignment-1", func(context.Context) error { return operationErr }); !errors.Is(err, operationErr) {
+	if err := runner.Run(context.Background(), activityAssignmentID, func(context.Context) error { return operationErr }); !errors.Is(err, operationErr) {
 		t.Fatalf("operation error = %v", err)
 	}
 	store.mu.Lock()
@@ -224,7 +227,7 @@ func TestActivityRunnerJoinsCleanupFailureAsAssignmentActivityError(t *testing.T
 	ticker := &activityTicker{ticks: make(chan time.Time), stopped: make(chan struct{})}
 	cleanupErr := errors.New("state lock unavailable")
 	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, NewID: func() string { return activityKeeperID }, Ticker: func(time.Duration) cli.ActivityTicker { return ticker }})
-	err := runner.Run(context.Background(), "assignment-1", func(context.Context) error {
+	err := runner.Run(context.Background(), activityAssignmentID, func(context.Context) error {
 		store.mu.Lock()
 		store.fail = cleanupErr
 		store.mu.Unlock()

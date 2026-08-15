@@ -139,9 +139,9 @@ func TestRuntimeRunSubscribesAndForwardsManagedSignals(t *testing.T) {
 	store := state.NewStore(repository.CommonDir, lock.NewDirectoryLocker(lock.Config{}))
 	if err := store.Update(context.Background(), func(current *state.State) error {
 		current.Workspaces[key] = state.WorkspaceRecord{
-			Path: repository.Root, Managed: true, Lifecycle: state.LifecycleAssigned,
+			Path: repository.Root, Managed: true, Branch: "agent/signals", Lifecycle: state.LifecycleAssigned,
 			Assignment: &state.AssignmentRecord{
-				ID: "assignment-1", Owner: "owner", Hostname: "host",
+				ID: "33333333-3333-4333-8333-333333333333", Owner: "owner", Hostname: "host",
 				AssignedAt: "2026-08-16T10:00:00.000Z", RenewedAt: "2026-08-16T10:00:00.000Z",
 				ExpiresAt: "2026-08-16T18:00:00.000Z", LeaseDurationMinutes: 480,
 				LastActivityAt: "2026-08-16T10:00:00.000Z", LeaseKeepers: []state.LeaseKeeperRecord{}, Ports: map[string]int64{},
