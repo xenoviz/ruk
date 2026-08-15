@@ -22,12 +22,17 @@ func main() {
 }
 
 func runMain(args []string, stdout, stderr io.Writer) int {
-	application := cli.New(cli.Options{
-		Version:      version,
-		Distribution: updatepkg.Distribution(distribution),
-		Stdout:       stdout,
-		Stderr:       stderr,
-	})
+	defaults, err := cli.NewRuntimeDefaults(cli.RuntimeDefaultsOptions{})
+	if err != nil {
+		_ = cli.WriteError(stderr, err, cli.JSONRequested(args))
+		return 1
+	}
+	options := defaults.Options()
+	options.Version = version
+	options.Distribution = updatepkg.Distribution(distribution)
+	options.Stdout = stdout
+	options.Stderr = stderr
+	application := cli.New(options)
 	code, err := application.Run(context.Background(), args)
 	if err != nil {
 		_ = cli.WriteError(stderr, err, cli.JSONRequested(args))
