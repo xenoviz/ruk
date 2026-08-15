@@ -42,7 +42,7 @@ func TestNewRuntimeDefaultsProvidesApplicationRoutesAndNativeExecuteFallback(t *
 		t.Fatalf("NewRuntimeDefaults returned an error: %v", err)
 	}
 	options := defaults.Options()
-	if options.Sync == nil || options.Create == nil || options.Acquire == nil || options.Release == nil || options.Remove == nil || options.Warm == nil || options.GC == nil || options.Run == nil || options.Exec == nil || options.Now == nil {
+	if options.Sync == nil || options.Create == nil || options.Acquire == nil || options.Release == nil || options.Remove == nil || options.Warm == nil || options.GC == nil || options.Run == nil || options.Exec == nil || options.Shell == nil || options.Now == nil {
 		t.Fatalf("runtime defaults options = %#v, want every production route", options)
 	}
 	if runner := processpkg.NewRunner(); runner.Spawner == nil || runner.Describer == nil || runner.Cleaner == nil {
