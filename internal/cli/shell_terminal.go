@@ -48,7 +48,7 @@ func NewNativeShellTerminal(options ShellTerminalOptions) *NativeShellTerminal {
 	}
 	tracker := options.Tracker
 	if tracker == nil {
-		native := processpkg.NewTracker()
+		native := processpkg.NewNativeProcessManager()
 		tracker = native
 	}
 	return &NativeShellTerminal{runner: runner, tracker: tracker}
