@@ -115,6 +115,39 @@ test("installer validates and atomically places the exact native binary", async 
   );
 });
 
+test("installer resolves a native package hoisted beside the root package", async (t) => {
+  const consumer = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-hoisted-"));
+  t.after(() => fs.rm(consumer, { recursive: true, force: true }));
+  const root = path.join(consumer, "node_modules", "@xenoviz", "ruk");
+  const packageRoot = path.join(consumer, "node_modules", "@xenoviz", "ruk-linux-x64");
+  const native = path.join(packageRoot, "native", "ruk");
+  const contents = Buffer.from("hoisted-native-ruk-binary");
+  await fs.mkdir(path.join(root, "bin"), { recursive: true });
+  await fs.mkdir(path.dirname(native), { recursive: true });
+  await fs.writeFile(native, contents);
+  await fs.chmod(native, 0o755);
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
+    name: "@xenoviz/ruk",
+    version,
+    ruk: { distribution: "package", binaryPath: "bin/ruk" },
+  }));
+  await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "@xenoviz/ruk-linux-x64",
+    version,
+    ruk: {
+      distribution: "package",
+      target: "bun-linux-x64-baseline",
+      binary: "native/ruk",
+      sha256: crypto.createHash("sha256").update(contents).digest("hex"),
+    },
+  }));
+
+  const result = await installNativeLauncher({ root, platform: "linux", arch: "x64", libc: "glibc" });
+
+  assert.equal(result.packageName, "@xenoviz/ruk-linux-x64");
+  assert.deepEqual(await fs.readFile(path.join(root, "bin", "ruk")), contents);
+});
+
 test("installer ownership is derived from the package manager lifecycle", () => {
   assert.equal(installerFromEnvironment({ npm_execpath: "/home/me/.bun/bin/bun" }), "bun");
   assert.equal(installerFromEnvironment({ npm_execpath: "/pnpm/pnpm.cjs" }), "pnpm");
