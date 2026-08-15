@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -143,6 +144,26 @@ func TestNativeShellTerminalRegistersUntilTheExactTreeDrains(t *testing.T) {
 	}
 }
 
+func TestNativeShellTerminalForwardsPendingManagedSignals(t *testing.T) {
+	record := shellProcessRecord()
+	runner := &shellProcessRunnerStub{result: processpkg.RunResult{Record: record}}
+	forwarder := &shellSignalForwarderStub{}
+	signals := make(chan os.Signal, 1)
+	signals <- os.Interrupt
+	options := shellTerminalOptions(runner, &shellProcessTrackerStub{})
+	options.Forwarder = forwarder
+	options.Signals = signals
+	terminal := cli.NewNativeShellTerminal(options)
+
+	result, err := terminal.Run(context.Background(), shellTerminalRequest())
+	if err != nil || !result.DescendantsDrained {
+		t.Fatalf("Run() = %#v, %v", result, err)
+	}
+	if len(forwarder.signals) != 1 || forwarder.signals[0] != os.Interrupt || forwarder.record.PID != record.PID {
+		t.Fatalf("forwarded signals=%v record=%#v", forwarder.signals, forwarder.record)
+	}
+}
+
 func TestNativeShellTerminalFailsClosedOnTrackerError(t *testing.T) {
 	trackerErr := errors.New("identity unavailable")
 	runner := &shellProcessRunnerStub{result: processpkg.RunResult{Record: shellProcessRecord()}}
@@ -189,3 +210,14 @@ type nativeShellSignal string
 
 func (signal nativeShellSignal) String() string { return string(signal) }
 func (nativeShellSignal) Signal()               {}
+
+type shellSignalForwarderStub struct {
+	record  state.TrackedProcessRecord
+	signals []os.Signal
+}
+
+func (forwarder *shellSignalForwarderStub) ForwardSignal(_ context.Context, record state.TrackedProcessRecord, signal os.Signal) error {
+	forwarder.record = record
+	forwarder.signals = append(forwarder.signals, signal)
+	return nil
+}
