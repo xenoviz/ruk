@@ -154,9 +154,9 @@ type Runner struct {
 	Forwarder SignalForwarder
 }
 
-// NewRunner returns a native runner. Windows intentionally has no Job Object
-// implementation in this slice; detached intent is retained in the contract,
-// while platform cleanup remains identity-fenced.
+// NewRunner returns a native runner. Windows children are contained by a
+// kill-on-close Job Object, while POSIX detached children use an identity-
+// fenced process group.
 func NewRunner() Runner {
 	return Runner{
 		Spawner:   OSProcessSpawner{},

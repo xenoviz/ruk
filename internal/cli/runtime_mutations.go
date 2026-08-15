@@ -48,6 +48,22 @@ type MutationAdapterOptions struct {
 	PortRegistry     func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error)
 }
 
+// heldWorkspaceLocker is used only while acquireRepository already owns the
+// workspace handoff lock. Dependency preparation still receives the real
+// state store, so state mutations remain protected by the state lock; only
+// the nested workspace lock is elided to avoid self-deadlock.
+type heldWorkspaceLocker struct{}
+
+func (heldWorkspaceLocker) With(ctx context.Context, _ string, callback func() error) error {
+	if callback == nil {
+		return errors.New("workspace preparation lock: nil callback")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return callback()
+}
+
 // NewMutationAdapters builds the default mutation routes. It does not alter
 // Application or command routing; callers can assign the returned functions to
 // cli.Options when production mutation behavior is enabled.
@@ -230,7 +246,11 @@ func acquireRepository(ctx context.Context, repository git.Repository, input Acq
 	prepare := func(ctx context.Context, root string) (dependencies.EnsureResult, error) {
 		repo := repository
 		repo.Root = root
-		result, err := syncRoute(ctx, SyncCommandInput{Repository: repo, Emit: false})
+		result, err := syncRoute(ctx, SyncCommandInput{
+			Repository: repo,
+			Ensure:     dependencies.EnsureInput{Store: store, Locker: heldWorkspaceLocker{}},
+			Emit:       false,
+		})
 		if err != nil {
 			return dependencies.EnsureResult{}, err
 		}

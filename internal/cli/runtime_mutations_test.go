@@ -113,6 +113,53 @@ func TestNewMutationAdaptersBuildsAllRoutesAndCreateOrchestratesFreshWorktree(t 
 	}
 }
 
+func TestAcquirePreparationDoesNotReenterWorkspaceHandoffLock(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	workspace := &runtimeWorkspaceStub{}
+	preparationCalled := false
+	adapters, err := NewMutationAdapters(MutationAdapterOptions{
+		Now:   func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) },
+		NewID: func() string { return "00000000-0000-4000-8000-000000000020" },
+		Sync: func(ctx context.Context, input SyncCommandInput) (SyncCommandResult, error) {
+			if input.Ensure.Store == nil || input.Ensure.Locker == nil {
+				return SyncCommandResult{}, errors.New("acquire preparation did not receive its lock seams")
+			}
+			lockPath, err := MutationWorkspaceLockPath(input.Repository.CommonDir, input.Repository.Root)
+			if err != nil {
+				return SyncCommandResult{}, err
+			}
+			if err := input.Ensure.Locker.With(ctx, lockPath, func() error {
+				preparationCalled = true
+				return nil
+			}); err != nil {
+				return SyncCommandResult{}, err
+			}
+			if err := input.Ensure.Store.Update(ctx, func(*state.State) error { return nil }); err != nil {
+				return SyncCommandResult{}, err
+			}
+			return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
+		},
+		AcquireWorktree: func(git.Repository) (lifecycle.AcquisitionWorktree, error) { return workspace, nil },
+		PortRegistry: func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error) {
+			return nil, nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapters.Acquire(context.Background(), repository, AcquireInput{
+		Branch: "agent/no-lock-reentry", Owner: "owner", Hostname: "host",
+		Now: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Acquire returned an error: %v", err)
+	}
+	if !preparationCalled {
+		t.Fatal("dependency preparation did not run while the acquisition handoff lock was held")
+	}
+}
+
 func TestRandomMutationIDIsUUIDv4(t *testing.T) {
 	pattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	for index := 0; index < 8; index++ {
