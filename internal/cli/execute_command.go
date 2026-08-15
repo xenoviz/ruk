@@ -180,8 +180,28 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 	var signalErr error
 	watchCtx, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
+	var watcher sync.WaitGroup
 	if input.Mode == processpkg.Detached && input.Signals != nil {
+		for {
+			select {
+			case signal, ok := <-input.Signals:
+				if !ok {
+					input.Signals = nil
+					break
+				}
+				if isForwardedSignal(signal) {
+					pending = signal
+				}
+				continue
+			default:
+			}
+			break
+		}
+	}
+	if input.Mode == processpkg.Detached && input.Signals != nil {
+		watcher.Add(1)
 		go func() {
+			defer watcher.Done()
 			for {
 				select {
 				case signal, ok := <-input.Signals:
@@ -238,6 +258,7 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 		},
 	})
 	stopWatching()
+	watcher.Wait()
 	mu.Lock()
 	finalSignalErr := signalErr
 	trackedRecord := tracked
