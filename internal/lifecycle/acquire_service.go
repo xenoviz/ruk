@@ -319,6 +319,9 @@ func (service *AcquisitionService) acquireFresh(ctx context.Context, input Acqui
 		if err := service.worktree.Create(ctx, path, input.Assignment.Branch, input.StartPoint); err != nil {
 			return service.failPreparation(ctx, path, preparationID, true, err)
 		}
+		if err := service.worktree.Assign(ctx, path, input.Assignment.Branch, input.StartPoint); err != nil {
+			return service.failPreparation(ctx, path, preparationID, true, err)
+		}
 		dependency, prepErr := service.prepare(ctx, path)
 		if prepErr != nil {
 			return service.failPreparation(ctx, path, preparationID, true, prepErr)

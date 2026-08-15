@@ -145,7 +145,7 @@ func TestAcquireCreatesPreparingWorkspaceAndAssignsAfterPreparation(t *testing.T
 	if err != nil {
 		t.Fatalf("Acquire returned an error: %v", err)
 	}
-	if result.Reused || result.AssignmentID != assignmentID || worktree.created != 1 || worktree.assigned != 0 {
+	if result.Reused || result.AssignmentID != assignmentID || worktree.created != 1 || worktree.assigned != 1 {
 		t.Fatalf("result/worktree = %#v / %#v", result, worktree)
 	}
 	if !lockEnteredBeforePreparation {

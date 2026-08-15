@@ -372,6 +372,28 @@ func seedAvailableWorkspace(t *testing.T, commonDir, path string) {
 	}
 }
 
+func TestAssignmentProjectionsReturnsAnOwnedCopy(t *testing.T) {
+	path := filepath.Join("pool", "workspace")
+	key, err := state.TreeKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &state.State{
+		Trees: map[string]state.TreeRecord{key: {Projections: []string{"node_modules"}}},
+		Workspaces: map[string]state.WorkspaceRecord{key: {
+			Assignment: &state.AssignmentRecord{ID: "assignment-1"},
+		}},
+	}
+	got := assignmentProjections(snapshot, "assignment-1")
+	if len(got) != 1 || got[0] != "node_modules" {
+		t.Fatalf("assignmentProjections = %v", got)
+	}
+	got[0] = "changed"
+	if snapshot.Trees[key].Projections[0] != "node_modules" {
+		t.Fatal("assignmentProjections returned state-owned storage")
+	}
+}
+
 type createWorkspaceAdapterStub struct{}
 
 func (createWorkspaceAdapterStub) Create(context.Context, string, string, string, bool) error {

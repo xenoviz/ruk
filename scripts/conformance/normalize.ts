@@ -42,7 +42,7 @@ function keyIsPort(key: string | undefined): boolean {
 }
 
 function keyIsPreparationDuration(key: string | undefined): boolean {
-  return key !== undefined && /^(?:total|last|average)PreparationMs$/i.test(key);
+  return key !== undefined && (/^(?:total|last|average)PreparationMs$/i.test(key) || key === "leaseDurationMinutes");
 }
 
 function keyIsFingerprint(key: string | undefined): boolean {

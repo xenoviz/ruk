@@ -87,6 +87,16 @@ func TestLocalBranchAndRefVerificationUseExactRefs(t *testing.T) {
 	}
 }
 
+func TestCurrentBranchReportsDetachedCheckout(t *testing.T) {
+	runner := &fakeRunner{results: map[string]git.CommandResult{
+		"branch --show-current": {Stdout: "\n"},
+	}}
+	branch, err := git.NewClient(runner.call).CurrentBranch(context.Background(), ".")
+	if err != nil || branch != "(detached)" {
+		t.Fatalf("CurrentBranch = %q, %v; want (detached), nil", branch, err)
+	}
+}
+
 func TestSelectRemoteDoesNotMistakeLocalBranchForRemoteShorthand(t *testing.T) {
 	runner := &fakeRunner{results: map[string]git.CommandResult{
 		"remote": {Stdout: "origin\nupstream\n"},

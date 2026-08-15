@@ -193,18 +193,22 @@ func (client Client) ListRemotes(ctx context.Context, cwd string) ([]string, err
 	return remotes, nil
 }
 
-// CurrentBranch returns the current branch, or an empty string when detached.
+// CurrentBranch returns the current branch, or "(detached)" when detached.
 func CurrentBranch(ctx context.Context, cwd string, runner CommandRunner) (string, error) {
 	return NewClient(runner).CurrentBranch(ctx, cwd)
 }
 
-// CurrentBranch returns the current branch, or an empty string when detached.
+// CurrentBranch returns the current branch, or "(detached)" when detached.
 func (client Client) CurrentBranch(ctx context.Context, cwd string) (string, error) {
 	result, err := client.run(ctx, cwd, []string{"branch", "--show-current"})
 	if err != nil {
 		return "", fmt.Errorf("read current branch: %w", err)
 	}
-	return strings.TrimSpace(result.Stdout), nil
+	branch := strings.TrimSpace(result.Stdout)
+	if branch == "" {
+		return "(detached)", nil
+	}
+	return branch, nil
 }
 
 // SelectRemote chooses the remote relevant to startPoint. A qualified

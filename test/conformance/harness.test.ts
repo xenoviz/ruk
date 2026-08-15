@@ -21,8 +21,8 @@ test("conformance normalization removes repository-specific process values", () 
     `{"airport":43127,"port":"<port>","portNumber":"<port>"}`,
   );
   assert.equal(
-    canonicalJSON({ totalPreparationMs: 21, lastPreparationMs: 7, averagePreparationMs: 10 }, context),
-    `{"averagePreparationMs":"<duration>","lastPreparationMs":"<duration>","totalPreparationMs":"<duration>"}`,
+    canonicalJSON({ totalPreparationMs: 21, lastPreparationMs: 7, averagePreparationMs: 10, leaseDurationMinutes: 59.999 }, context),
+    `{"averagePreparationMs":"<duration>","lastPreparationMs":"<duration>","leaseDurationMinutes":"<duration>","totalPreparationMs":"<duration>"}`,
   );
   assert.equal(
     canonicalJSON({ fingerprint: "ts", preparedFingerprint: "go", projectionFingerprint: "other" }, context),

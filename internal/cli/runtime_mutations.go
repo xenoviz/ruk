@@ -332,11 +332,33 @@ func releaseRepository(ctx context.Context, repository git.Repository, assignmen
 			return result
 		},
 	})
-	result, err := release.ReleaseAssignment(ctx, assignmentID, lifecycle.ReleaseOptions{Force: force})
+	snapshot, err := store.Read(ctx)
+	if err != nil {
+		return RepositoryReleaseResult{}, err
+	}
+	preserved := assignmentProjections(snapshot, assignmentID)
+	result, err := release.ReleaseAssignment(ctx, assignmentID, lifecycle.ReleaseOptions{Force: force, PreservedProjections: preserved})
 	if err != nil {
 		return RepositoryReleaseResult{}, err
 	}
 	return RepositoryReleaseResult{Workspace: result.Workspace, CleanedProcesses: result.CleanedProcesses}, nil
+}
+
+func assignmentProjections(snapshot *state.State, assignmentID string) []string {
+	if snapshot == nil {
+		return nil
+	}
+	for key, workspace := range snapshot.Workspaces {
+		if workspace.Assignment == nil || workspace.Assignment.ID != assignmentID {
+			continue
+		}
+		tree, ok := snapshot.Trees[key]
+		if !ok {
+			return nil
+		}
+		return append([]string(nil), tree.Projections...)
+	}
+	return nil
 }
 
 func removeRepository(ctx context.Context, input RemoveInput) error {
