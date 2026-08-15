@@ -28,6 +28,7 @@ type RuntimeDefaults struct {
 	GC        GCRouteOperation
 	Run       RunRouteOperation
 	Exec      ExecRouteOperation
+	Shell     ShellRouteOperation
 }
 
 // Options returns all production mutation and runtime routes for cli.New.
@@ -36,7 +37,7 @@ func (defaults RuntimeDefaults) Options() Options {
 		Sync: defaults.Mutations.Sync, Create: defaults.Mutations.Create,
 		Acquire: defaults.Mutations.Acquire, Release: defaults.Mutations.Release,
 		Remove: defaults.Mutations.Remove, Warm: defaults.Warm, GC: defaults.GC,
-		Run: defaults.Run, Exec: defaults.Exec, Now: defaults.Now,
+		Run: defaults.Run, Exec: defaults.Exec, Shell: defaults.Shell, Now: defaults.Now,
 	}
 }
 
@@ -56,6 +57,7 @@ type RuntimeDefaultsOptions struct {
 
 	ExecuteRunner   processpkg.Runner
 	ExecuteActivity ExecuteActivityRunner
+	ShellTerminal   ShellTerminal
 }
 
 // NewRuntimeDefaults constructs fail-closed production routes. It does not
@@ -94,7 +96,59 @@ func NewRuntimeDefaults(options RuntimeDefaultsOptions) (RuntimeDefaults, error)
 	defaults.Exec = func(ctx context.Context, input ExecRouteInput) (int, error) {
 		return runtimeExec(ctx, input, now, newID, mutations, options)
 	}
+	defaults.Shell = func(ctx context.Context, input ShellRouteInput) (ShellResult, error) {
+		return runtimeShell(ctx, input, mutations, options)
+	}
 	return defaults, nil
+}
+
+func runtimeShell(ctx context.Context, input ShellRouteInput, mutations MutationAdapters, options RuntimeDefaultsOptions) (ShellResult, error) {
+	if err := validateRepositoryContext(input.Repository); err != nil {
+		return ShellResult{}, err
+	}
+	if mutations.Acquire == nil || mutations.Release == nil {
+		return ShellResult{}, errors.New("shell lifecycle operations are not configured")
+	}
+	terminal := options.ShellTerminal
+	if terminal == nil {
+		terminal = NewNativeShellTerminal(ShellTerminalOptions{})
+	}
+	service := NewShellService(ShellOptions{
+		Acquire: func(ctx context.Context, request AcquireInput) (AcquireResult, error) {
+			return mutations.Acquire(ctx, input.Repository, request)
+		},
+		Terminal: terminal,
+		Release: func(ctx context.Context, assignmentID string) error {
+			_, err := mutations.Release(ctx, ReleaseInput{Repository: input.Repository, AssignmentID: assignmentID})
+			return err
+		},
+	})
+	result, err := service.Shell(ctx, ShellInput{
+		Branch: input.Branch, From: input.From, Fetch: input.Fetch, TTL: input.TTL,
+		Owner: input.Owner, Ports: append([]string(nil), input.Ports...), Now: input.Now,
+		Environment: runtimeEnvironmentMap(os.Environ()),
+		Stdin:       input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
+	})
+	if err != nil {
+		return result, err
+	}
+	if input.Stderr != nil {
+		if _, err := fmt.Fprintf(input.Stderr, "Released %s\n", result.Path); err != nil {
+			return result, fmt.Errorf("write shell release: %w", err)
+		}
+	}
+	return result, nil
+}
+
+func runtimeEnvironmentMap(environment []string) map[string]string {
+	result := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && name != "" {
+			result[name] = value
+		}
+	}
+	return result
 }
 
 func runtimeState(repository git.Repository, now func() time.Time, newID func() string) (*state.Store, *lock.DirectoryLocker, *lifecycle.Service, error) {
