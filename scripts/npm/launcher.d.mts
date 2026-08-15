@@ -15,6 +15,10 @@ export declare function platformTarget(
   libc?: string,
 ): { packageName: string; target: string };
 
+export declare function installerFromEnvironment(
+  environment?: Record<string, string | undefined>,
+): "bun" | "npm" | "pnpm" | "yarn";
+
 export declare function windowsCommandDestination(
   root: string,
   environment?: Record<string, string | undefined>,
@@ -32,4 +36,5 @@ export declare function installNativeLauncher(options?: {
   target: string;
   destination: string;
   sha256: string;
+  installer: "bun" | "npm" | "pnpm" | "yarn";
 }>;

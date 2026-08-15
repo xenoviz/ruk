@@ -53,6 +53,14 @@ export function platformTarget(platform = process.platform, arch = process.arch,
   throw new Error(`Ruk npm package is not available for ${platform}/${arch}${libcSuffix}; reinstall with a supported platform package`);
 }
 
+export function installerFromEnvironment(environment = process.env) {
+  const executable = String(environment.npm_execpath ?? environment.npm_command ?? "").toLowerCase().replaceAll("\\", "/");
+  if (executable.includes("bun")) return "bun";
+  if (executable.includes("pnpm")) return "pnpm";
+  if (executable.includes("yarn")) return "yarn";
+  return "npm";
+}
+
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -162,7 +170,9 @@ export async function installNativeLauncher(options = {}) {
   }
   const configuredDestination = relativePath(root, rootManifest.ruk.binaryPath ?? "bin/ruk", "Ruk native destination");
   const destination = platform === "win32" ? `${configuredDestination}.exe` : configuredDestination;
-  const marker = path.join(path.dirname(destination), ".ruk-distribution");
+  const installer = installerFromEnvironment(options.environment);
+  const markerContents = `${JSON.stringify({ schemaVersion: 1, distribution: "package", installer })}\n`;
+  const marker = `${destination}.ruk-distribution`;
   const nativeRoot = packageDirectory(root, selected.packageName);
   const nativeManifestPath = path.join(nativeRoot, "package.json");
   try {
@@ -209,7 +219,8 @@ export async function installNativeLauncher(options = {}) {
       throw new Error("Ruk native command destination must be a Windows .exe path");
     }
     await atomicCopy(source, path.resolve(commandDestination), false);
+    await atomicWrite(`${path.resolve(commandDestination)}.ruk-distribution`, markerContents);
   }
-  await atomicWrite(marker, "package\n");
-  return { packageName: selected.packageName, target: selected.target, destination, sha256: actualDigest };
+  await atomicWrite(marker, markerContents);
+  return { packageName: selected.packageName, target: selected.target, destination, sha256: actualDigest, installer };
 }

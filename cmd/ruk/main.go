@@ -30,6 +30,10 @@ func runMain(args []string, stdout, stderr io.Writer) int {
 	options := defaults.Options()
 	options.Version = version
 	options.Distribution = updatepkg.Distribution(distribution)
+	options.Entrypoint = os.Args[0]
+	if executable, executableErr := os.Executable(); executableErr == nil {
+		options.Entrypoint = executable
+	}
 	options.Stdout = stdout
 	options.Stderr = stderr
 	application := cli.New(options)

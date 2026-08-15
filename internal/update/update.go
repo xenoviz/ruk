@@ -216,7 +216,10 @@ func (updater *Updater) Update(ctx context.Context, options Options) (Result, er
 					return Result{}, err
 				}
 			} else {
-				installer = InstallerFromPath(options.Entrypoint)
+				installer, err = DetectInstaller(options.Entrypoint)
+				if err != nil {
+					return Result{}, err
+				}
 			}
 		}
 		method = string(installer)
@@ -689,6 +692,31 @@ func InstallerFromPath(entrypoint string) Installer {
 	default:
 		return InstallerNPM
 	}
+}
+
+// DetectInstaller reads the durable marker written by the npm distribution.
+// Older package installations fall back to path detection for compatibility.
+func DetectInstaller(entrypoint string) (Installer, error) {
+	if strings.TrimSpace(entrypoint) == "" {
+		return InstallerNPM, nil
+	}
+	markerPath := entrypoint + ".ruk-distribution"
+	bytes, err := os.ReadFile(markerPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return InstallerFromPath(entrypoint), nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read package distribution marker: %w", err)
+	}
+	var marker struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		Distribution  string `json:"distribution"`
+		Installer     string `json:"installer"`
+	}
+	if json.Unmarshal(bytes, &marker) != nil || marker.SchemaVersion != 1 || marker.Distribution != string(DistributionPackage) {
+		return "", errors.New("package distribution marker is invalid")
+	}
+	return ParseInstaller(marker.Installer)
 }
 
 func ParseInstaller(value string) (Installer, error) {

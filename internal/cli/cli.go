@@ -46,6 +46,7 @@ Bun or pnpm command.
 type Options struct {
 	Version            string
 	Distribution       updatepkg.Distribution
+	Entrypoint         string
 	Stdout             io.Writer
 	Stderr             io.Writer
 	Stdin              io.Reader
@@ -157,6 +158,7 @@ type RepositoryDiscovery func(context.Context, string) (git.Repository, error)
 type Application struct {
 	version      string
 	distribution updatepkg.Distribution
+	entrypoint   string
 	stdout       io.Writer
 	stderr       io.Writer
 	stdin        io.Reader
@@ -226,6 +228,7 @@ func New(options Options) *Application {
 	return &Application{
 		version:      options.Version,
 		distribution: distribution,
+		entrypoint:   options.Entrypoint,
 		stdout:       stdout,
 		stderr:       stderr,
 		stdin:        stdin,
@@ -274,6 +277,7 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 			Distribution:   application.distribution,
 			CurrentVersion: application.version,
 			CheckOnly:      invocation.Check,
+			Entrypoint:     application.entrypoint,
 		})
 		if err != nil {
 			return 1, err
