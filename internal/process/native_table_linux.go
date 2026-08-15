@@ -23,7 +23,7 @@ func snapshotPlatform(ctx context.Context) ([]Entry, error) {
 			return nil, err
 		}
 		pid, err := strconv.Atoi(directory.Name())
-		if err != nil || pid <= 0 || !directory.IsDir() {
+		if err != nil || pid <= 0 {
 			continue
 		}
 		stat, err := os.ReadFile(filepath.Join("/proc", directory.Name(), "stat"))
