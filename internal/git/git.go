@@ -308,6 +308,47 @@ func (client Client) AddWorktree(ctx context.Context, cwd, destination, branch, 
 	return nil
 }
 
+// ReturnWorktree resets a managed checkout to detached, reusable capacity.
+// Without force, any tracked or untracked change blocks the operation. The
+// listed dependency projections are retained during Git's ignored-file clean.
+func (client Client) ReturnWorktree(ctx context.Context, cwd string, force bool, preservedProjections []string) error {
+	if !force {
+		result, err := client.run(ctx, cwd, []string{"status", "--porcelain"})
+		if err != nil {
+			return fmt.Errorf("inspect worktree status: %w", err)
+		}
+		if result.Stdout != "" {
+			return errors.New("Workspace has uncommitted changes. Commit them or retry release with --force.")
+		}
+	} else if _, err := client.run(ctx, cwd, []string{"reset", "--hard", "HEAD"}); err != nil {
+		return fmt.Errorf("reset worktree: %w", err)
+	}
+
+	cleanArgs := []string{"clean", "-ffdx"}
+	for _, projection := range preservedProjections {
+		normalized := strings.Trim(strings.ReplaceAll(projection, `\`, "/"), "/")
+		cleanArgs = append(cleanArgs, "-e", "/"+escapeCleanPattern(normalized)+"/")
+	}
+	if _, err := client.run(ctx, cwd, cleanArgs); err != nil {
+		return fmt.Errorf("clean worktree: %w", err)
+	}
+	if _, err := client.run(ctx, cwd, []string{"switch", "--detach"}); err != nil {
+		return fmt.Errorf("detach worktree: %w", err)
+	}
+	return nil
+}
+
+func escapeCleanPattern(value string) string {
+	var escaped strings.Builder
+	for _, character := range value {
+		if strings.ContainsRune(`\*?[]`, character) {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteRune(character)
+	}
+	return escaped.String()
+}
+
 func (client Client) remoteFromStartPoint(ctx context.Context, cwd, startPoint string) (string, bool, error) {
 	if startPoint == "" || strings.HasPrefix(startPoint, "-") {
 		return "", false, nil
