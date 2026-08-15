@@ -128,9 +128,11 @@ func TestExecuteRejectsAssignmentFenceChangeAfterSynchronization(t *testing.T) {
 		Lifecycle: lifecycleService, Reader: store, Runner: runner,
 		Synchronize: func(context.Context, string, string) error {
 			key, _ := state.TreeKey(path)
-			assignment := *store.current.Workspaces[key].Assignment
+			workspace := store.current.Workspaces[key]
+			assignment := *workspace.Assignment
 			assignment.ID = "new-owner"
-			store.current.Workspaces[key].Assignment = &assignment
+			workspace.Assignment = &assignment
+			store.current.Workspaces[key] = workspace
 			return nil
 		},
 	})
