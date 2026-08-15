@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xenoviz/ruk/internal/git"
+	"github.com/xenoviz/ruk/internal/state"
 	updatepkg "github.com/xenoviz/ruk/internal/update"
 )
 
@@ -47,6 +48,7 @@ type Options struct {
 	Stdout             io.Writer
 	Stderr             io.Writer
 	Update             UpdateOperation
+	Renew              RepositoryRenewOperation
 	CWD                string
 	DiscoverRepository RepositoryDiscovery
 	Queries            QueryDependencies
@@ -56,6 +58,10 @@ type Options struct {
 // UpdateOperation is injected so compatibility tests can exercise CLI output
 // without network access or executable replacement.
 type UpdateOperation func(context.Context, updatepkg.Options) (updatepkg.Result, error)
+
+// RepositoryRenewOperation performs one lifecycle renewal in the discovered
+// repository while keeping state composition out of compatibility tests.
+type RepositoryRenewOperation func(context.Context, git.Repository, string, time.Time) (state.WorkspaceRecord, error)
 
 // RepositoryDiscovery resolves the current checkout without coupling the
 // command router to Git subprocesses in compatibility tests.
@@ -68,6 +74,7 @@ type Application struct {
 	stdout       io.Writer
 	stderr       io.Writer
 	update       UpdateOperation
+	renew        RepositoryRenewOperation
 	cwd          string
 	discover     RepositoryDiscovery
 	queries      QueryDependencies
@@ -94,6 +101,10 @@ func New(options Options) *Application {
 			return updatepkg.Update(ctx, options, updatepkg.Hooks{})
 		}
 	}
+	renewOperation := options.Renew
+	if renewOperation == nil {
+		renewOperation = defaultRenewOperation
+	}
 	cwd := options.CWD
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -117,6 +128,7 @@ func New(options Options) *Application {
 		stdout:       stdout,
 		stderr:       stderr,
 		update:       updateOperation,
+		renew:        renewOperation,
 		cwd:          cwd,
 		discover:     discover,
 		queries:      mergeQueryDependencies(options.Queries, defaultQueryDependencies()),
@@ -162,6 +174,27 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 		}
 		if _, err := io.WriteString(application.stdout, formatUpdate(result)); err != nil {
 			return 1, fmt.Errorf("write update result: %w", err)
+		}
+		return 0, nil
+	}
+	if invocation.Name == "renew" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		result, err := Renew(ctx, RenewInput{
+			AssignmentID: invocation.AssignmentID,
+			TTL:          invocation.TTL,
+			JSON:         invocation.JSON,
+			Now:          application.now(),
+		}, func(ctx context.Context, assignmentID string, expiresAt time.Time) (state.WorkspaceRecord, error) {
+			return application.renew(ctx, repository, assignmentID, expiresAt)
+		})
+		if err != nil {
+			return 1, err
+		}
+		if _, err := io.WriteString(application.stdout, result.Output); err != nil {
+			return 1, fmt.Errorf("write renew result: %w", err)
 		}
 		return 0, nil
 	}
