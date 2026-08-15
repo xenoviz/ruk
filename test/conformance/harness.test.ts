@@ -28,6 +28,17 @@ test("conformance normalization removes repository-specific process values", () 
     canonicalJSON({ fingerprint: "ts", preparedFingerprint: "go", projectionFingerprint: "other" }, context),
     `{"fingerprint":"<fingerprint>","preparedFingerprint":"<fingerprint>","projectionFingerprint":"<fingerprint>"}`,
   );
+  assert.equal(
+    canonicalJSON(
+      {
+        repository: "/tmp/typescript",
+        typescriptWorkspace: "/tmp/typescript-ruk-a1b2c3d4",
+        goWorkspace: "/tmp/go-ruk-agent-lifecycle-e5f6a7b8",
+      },
+      context,
+    ),
+    `{"goWorkspace":"<workspace>","repository":"<repo>","typescriptWorkspace":"<workspace>"}`,
+  );
 });
 
 test("conformance JSON parsing distinguishes structured output from human output", () => {
