@@ -31,7 +31,7 @@ The product has two related layers:
    leases and immutable assignment IDs. The ID is a fencing token: delayed
    automation cannot renew or release a workspace after it has been reassigned.
    ([lifecycle design](../plans/2026-08-03-workspace-lifecycle-design.md#L3-L8),
-   [lifecycle tests](../../test/lifecycle.test.ts#L70-L102))
+   [lifecycle tests](https://github.com/xenoviz/ruk/blob/86e3ac6/test/lifecycle.test.ts#L70-L102))
 
 The current scope is deliberately local and narrow. Coordination is limited to
 one host; Ruk does not allocate ports or runtime namespaces, discover unrecorded
@@ -55,7 +55,7 @@ and a manifest-gated release process.
 | **Repository root** | The current worktree's top-level path, discovered with `git rev-parse --show-toplevel`. ([source](https://github.com/xenoviz/ruk/blob/86e3ac6/src/git.ts#L11-L20)) |
 | **Git common directory** | The shared Git administrative directory returned by `git rev-parse --git-common-dir`; Ruk stores cross-worktree state beneath it. ([source](https://github.com/xenoviz/ruk/blob/86e3ac6/src/git.ts#L11-L20), [state paths](https://github.com/xenoviz/ruk/blob/86e3ac6/src/state.ts#L15-L22)) |
 | **Dependency projection** | Workspace-local `node_modules` directories created by the package manager. Even shared mode shares package content, not writable workspace links or metadata. ([README](../../README.md#L129-L157), [projection discovery](https://github.com/xenoviz/ruk/blob/86e3ac6/src/dependencies.ts#L53-L73)) |
-| **Managed mode** | The fallback for npm, Yarn, and custom installers, or an explicit opt-out for Bun and pnpm. Ruk runs the repository's normal install layout and does not enable a global virtual store. ([configuration](https://github.com/xenoviz/ruk/blob/86e3ac6/src/config.ts), [test](../../test/dependencies.test.ts#L111-L128)) |
+| **Managed mode** | The fallback for npm, Yarn, and custom installers, or an explicit opt-out for Bun and pnpm. Ruk runs the repository's normal install layout and does not enable a global virtual store. ([configuration](https://github.com/xenoviz/ruk/blob/86e3ac6/src/config.ts), [test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/dependencies.test.ts#L111-L128)) |
 | **Shared mode** | An opt-in mode for Bun or pnpm that enables their global/virtual content store while retaining local projections. It requires Bun 1.3.14+ or pnpm 10.12.1+. ([implementation](https://github.com/xenoviz/ruk/blob/86e3ac6/src/dependencies.ts#L19-L51), [backend setup](https://github.com/xenoviz/ruk/blob/86e3ac6/src/dependencies.ts#L81-L118)) |
 | **Dependency fingerprint** | A SHA-256 identity over dependency-related files plus package-manager command/version/mode, runtime/ABI, OS, and architecture. ([source](https://github.com/xenoviz/ruk/blob/86e3ac6/src/fingerprint.ts#L9-L57)) |
 | **Preparation record / tree record** | Cached evidence that a path was successfully prepared for a fingerprint and has particular projection paths. It is an optimization, not the source of truth. ([types](https://github.com/xenoviz/ruk/blob/86e3ac6/src/types.ts#L34-L41), [architecture](../architecture.md#L75-L83)) |
@@ -128,24 +128,24 @@ preparation mode. The owner is retained in state but deliberately is not part of
 the documented acquire response.
 ([agent contract](../agent-interface.md#L21-L36),
 [CLI result](https://github.com/xenoviz/ruk/blob/86e3ac6/src/cli.ts#L251-L260),
-[CLI test](../../test/cli.test.ts#L84-L107))
+[CLI test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/cli.test.ts#L84-L107))
 
 ### Dependency preparation
 
 1. Configuration accepts only `dependencyMode` and `installCommand`; unknown
    keys and malformed commands fail. `RUK_DEPENDENCY_MODE` and a JSON-array
    `RUK_INSTALL_COMMAND` override the file for automation.
-   ([configuration](https://github.com/xenoviz/ruk/blob/86e3ac6/src/config.ts#L19-L67), [tests](../../test/config.test.ts#L23-L71))
+   ([configuration](https://github.com/xenoviz/ruk/blob/86e3ac6/src/config.ts#L19-L67), [tests](https://github.com/xenoviz/ruk/blob/86e3ac6/test/config.test.ts#L23-L71))
 2. Without a custom command, Ruk prefers `packageManager` from `package.json`,
    then infers Bun/pnpm/Yarn/npm from lockfiles, and finally defaults to npm. It
    requires the executable on `PATH` and chooses frozen/locked installs where
    supported (`npm ci` when `package-lock.json` exists). Supported Bun and pnpm
    versions use shared mode by default; other managers retain managed installs.
-   ([detection](https://github.com/xenoviz/ruk/blob/86e3ac6/src/config.ts#L69-L118), [tests](../../test/config.test.ts#L74-L116))
+   ([detection](https://github.com/xenoviz/ruk/blob/86e3ac6/src/config.ts#L69-L118), [tests](https://github.com/xenoviz/ruk/blob/86e3ac6/test/config.test.ts#L74-L116))
 3. Ruk acquires a per-workspace directory lock, computes the fingerprint, and
    validates the shared backend version when applicable. If recorded fingerprint
    and all recorded projections still match, it skips installation.
-   ([source](https://github.com/xenoviz/ruk/blob/86e3ac6/src/dependencies.ts#L134-L181), [concurrency test](../../test/dependencies.test.ts#L130-L143))
+   ([source](https://github.com/xenoviz/ruk/blob/86e3ac6/src/dependencies.ts#L134-L181), [concurrency test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/dependencies.test.ts#L130-L143))
 4. Otherwise it performs the install. Shared Bun sets
    `BUN_INSTALL_GLOBAL_STORE=1` and enforces the isolated linker; shared pnpm
    enables its global virtual store. Other managers fail in shared mode.
@@ -162,7 +162,7 @@ manager version/command/mode, Node and Bun runtime identity, native module ABI,
 OS, and CPU architecture. Ordinary source changes do not invalidate it.
 ([dependency file discovery](https://github.com/xenoviz/ruk/blob/86e3ac6/src/git.ts#L146-L178),
 [hash construction](https://github.com/xenoviz/ruk/blob/86e3ac6/src/fingerprint.ts#L16-L46),
-[behavior test](../../test/fingerprint.test.ts#L28-L58))
+[behavior test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/fingerprint.test.ts#L28-L58))
 
 ### Run and process ownership
 
@@ -173,7 +173,7 @@ uses the PID as a POSIX process-group ID. Registration happens while holding the
 workspace lock; if registration fails, the runner terminates the child.
 ([run path](https://github.com/xenoviz/ruk/blob/86e3ac6/src/cli.ts#L616-L662),
 [runner failure handling](https://github.com/xenoviz/ruk/blob/86e3ac6/src/process.ts#L79-L145),
-[process test](../../test/process.test.ts#L40-L65))
+[process test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/process.test.ts#L40-L65))
 
 Process-start identity prevents a recycled PID from being killed. POSIX cleanup
 signals the recorded process group; Windows uses `taskkill /T`. The Windows
@@ -181,7 +181,7 @@ runner resolves `.cmd`/`.bat` shims and passes arguments through environment JSO
 to a fixed PowerShell command rather than enabling a general shell.
 ([process identity and termination](https://github.com/xenoviz/ruk/blob/86e3ac6/src/process.ts#L148-L205),
 [Windows shim](https://github.com/xenoviz/ruk/blob/86e3ac6/src/process.ts#L22-L78),
-[injection test](../../test/process.test.ts#L26-L38))
+[injection test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/process.test.ts#L26-L38))
 
 ### Release, reuse, and collection
 
@@ -199,7 +199,7 @@ detach HEAD, removing untracked and ignored files before pooling. The lifecycle
 can become `available` only after tracked process records are empty.
 ([Git return](https://github.com/xenoviz/ruk/blob/86e3ac6/src/git.ts#L103-L112),
 [lifecycle finalizer](https://github.com/xenoviz/ruk/blob/86e3ac6/src/lifecycle.ts#L218-L235),
-[Git safety test](../../test/git.test.ts#L9-L34))
+[Git safety test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/git.test.ts#L9-L34))
 
 Garbage collection uses operation IDs to prevent a candidate from being
 reassigned or changed between planning and deletion. Safe collection unlocks
@@ -207,7 +207,7 @@ the pooled Git worktree, removes it forcibly, then deletes lifecycle and
 preparation records. Dry runs do not delete; the current worktree is skipped.
 ([collection fencing](https://github.com/xenoviz/ruk/blob/86e3ac6/src/lifecycle.ts#L367-L425),
 [collection implementation](https://github.com/xenoviz/ruk/blob/86e3ac6/src/cli.ts#L534-L597),
-[lifecycle test](../../test/lifecycle.test.ts#L155-L202))
+[lifecycle test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/lifecycle.test.ts#L155-L202))
 
 ## State, locking, Git, and process safety invariants
 
@@ -217,16 +217,16 @@ preparation records. Dry runs do not delete; the current worktree is skipped.
   preparation records (`trees`) from pooled lifecycle records (`workspaces`) and
   migrates v1 preparation-only state in memory before the next write.
   ([types](https://github.com/xenoviz/ruk/blob/86e3ac6/src/types.ts#L75-L86), [migration](https://github.com/xenoviz/ruk/blob/86e3ac6/src/state.ts#L134-L172),
-  [migration test](../../test/state.test.ts#L44-L69))
+  [migration test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/state.test.ts#L44-L69))
 - Every state read is structurally validated, including absolute managed paths,
   legal lifecycle/assignment combinations, unique assignment and operation IDs,
   timestamps, and process identities. Corruption fails visibly rather than being
   silently replaced.
-  ([validation](https://github.com/xenoviz/ruk/blob/86e3ac6/src/state.ts#L33-L173), [tests](../../test/state.test.ts#L33-L42))
+  ([validation](https://github.com/xenoviz/ruk/blob/86e3ac6/src/state.ts#L33-L173), [tests](https://github.com/xenoviz/ruk/blob/86e3ac6/test/state.test.ts#L33-L42))
 - State mutation is serialized by a common directory lock, validated again,
   written to a mode-`0600` temporary file, and atomically renamed over the state
   file. Parallel mutation is covered by a 12-workspace test.
-  ([atomic update](https://github.com/xenoviz/ruk/blob/86e3ac6/src/state.ts#L189-L202), [test](../../test/state.test.ts#L8-L31))
+  ([atomic update](https://github.com/xenoviz/ruk/blob/86e3ac6/src/state.ts#L189-L202), [test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/state.test.ts#L8-L31))
 - Locks are directories created atomically and contain mode-`0600` owner metadata
   with PID, hostname, UUID token, timestamp, and process-start identity when
   available. The owner token prevents one contender from removing another's
@@ -237,7 +237,7 @@ preparation records. Dry runs do not delete; the current worktree is skipped.
   are renamed to unique tombstones; concurrent recovery is tested to remain
   serialized.
   ([stale detection](https://github.com/xenoviz/ruk/blob/86e3ac6/src/lock.ts#L46-L69),
-  [race test](../../test/lock.test.ts#L64-L90))
+  [race test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/lock.test.ts#L64-L90))
 - The global state lock serializes short metadata mutations; a hashed
   per-workspace lock serializes dependency preparation, run registration,
   release, removal, and collection for one path.
@@ -297,7 +297,7 @@ GitHub releases, ignores drafts/prereleases and releases without a valid
 older ready one.
 ([update discovery](https://github.com/xenoviz/ruk/blob/86e3ac6/src/update.ts#L16-L18),
 [ready-release selection](https://github.com/xenoviz/ruk/blob/86e3ac6/src/update.ts#L146-L181),
-[fallback tests](../../test/update.test.ts#L142-L195))
+[fallback tests](https://github.com/xenoviz/ruk/blob/86e3ac6/test/update.test.ts#L142-L195))
 
 The readiness manifest must bind the repository, version, npm package, exact set
 of seven binary names, sizes, and SHA-256 digests. Standalone updates accept only
@@ -349,15 +349,15 @@ attestation.
 - Tests compile to JavaScript and run with Node's built-in test runner,
   sequentially, with minimum coverage thresholds of 85% lines, 90% functions,
   and 70% branches.
-  ([test runner](../../scripts/run-node-tests.ts#L5-L31))
+  ([test runner](https://github.com/xenoviz/ruk/blob/86e3ac6/scripts/run-node-tests.ts#L5-L31))
 - The suite includes real Git/CLI lifecycle coverage, stale-fence rejection,
   concurrent assignment reservation, concurrent state and preparation locking,
   dirty-worktree cleanup rules, process-tree cleanup, Windows shim injection
   resistance, update rollback, and exact release-manifest validation.
-  ([CLI integration](../../test/cli.test.ts#L13-L177),
-  [lifecycle concurrency](../../test/lifecycle.test.ts#L143-L202),
-  [lock recovery](../../test/lock.test.ts#L32-L90),
-  [update rollback](../../test/update.test.ts#L256-L316),
+  ([CLI integration](https://github.com/xenoviz/ruk/blob/86e3ac6/test/cli.test.ts#L13-L177),
+  [lifecycle concurrency](https://github.com/xenoviz/ruk/blob/86e3ac6/test/lifecycle.test.ts#L143-L202),
+  [lock recovery](https://github.com/xenoviz/ruk/blob/86e3ac6/test/lock.test.ts#L32-L90),
+  [update rollback](https://github.com/xenoviz/ruk/blob/86e3ac6/test/update.test.ts#L256-L316),
   [manifest tests](../../test/release-manifest.test.ts#L19-L38))
 - CI runs compiled Node-package checks on Node 22.14 and 24.14 across Ubuntu,
   Windows, and macOS; it separately exercises a native binary on each OS,
@@ -384,7 +384,7 @@ Ruk is small but not a sketch: the end-to-end CLI test creates, leases, renews,
 runs in, releases, reuses, expires, and collects real Git worktrees. The first
 public package release is available, and the public README describes it as an
 early release with a deliberately small surface.
-([CLI integration test](../../test/cli.test.ts#L13-L177),
+([CLI integration test](https://github.com/xenoviz/ruk/blob/86e3ac6/test/cli.test.ts#L13-L177),
 [CHANGELOG](../../CHANGELOG.md#L6-L22),
 [README status](../../README.md#L19-L34))
 
@@ -392,7 +392,7 @@ Validation observation on 2026-08-04: the prescribed repository checks and the
 46-test coverage suite passed in this workspace. The declared gates and coverage
 thresholds are the ones documented in the package scripts and Node test runner.
 ([package scripts](../../package.json#L9-L24),
-[coverage runner](../../scripts/run-node-tests.ts#L16-L31))
+[coverage runner](https://github.com/xenoviz/ruk/blob/86e3ac6/scripts/run-node-tests.ts#L16-L31))
 
 GitHub project-state observation on 2026-08-08: the repository is public and the
 first npm package and GitHub tag have been published. These are point-in-time

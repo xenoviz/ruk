@@ -240,7 +240,9 @@ content already present in the package manager store remains reusable.
 ```bash
 bun install --frozen-lockfile
 bun run check
-bun run test:coverage
+go test ./...
+go test -race ./...
+bun run test:conformance
 bun run binary:check
 bun run binary:cross-check
 bun run pack:check
