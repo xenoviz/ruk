@@ -5,7 +5,7 @@ import { validateScenarios } from "../../scripts/conformance/scenarios.js";
 import { compareGoldenScenario, compareGoldenStep, resolveStepArguments } from "../../scripts/conformance/harness.js";
 
 test("conformance normalization removes repository-specific process values", () => {
-  const context = { roots: ["C:\\temp\\typescript", "/tmp/go"] };
+  const context = { roots: ["C:\\temp\\typescript", "/tmp/typescript", "/tmp/go"] };
   assert.equal(
     normalizeText("C:\\temp\\typescript\\workspace\\550e8400-e29b-41d4-a716-446655440000 PID 42 at 2026-08-16T12:00:00.000Z\r\n", context),
     "<repo>/workspace/<uuid> process <pid> at <timestamp>\n",
@@ -138,7 +138,7 @@ test("frozen golden comparison checks only states captured in the schema", () =>
         { name: "second", exitCode: 0, stdout: { kind: "text", value: "" }, stderr: { kind: "text", value: "" }, state: '{"value":"same"}' },
       ],
     },
-    { ...result({ value: "different" }), steps: [result({ value: "ignored" }), result({ value: "same" })], finalState: { value: "ignored" } },
+    { ...result({ value: "different" }), steps: [result({ value: "ignored" }), result({ value: "different" })], finalState: { value: "ignored" } },
     [],
   );
   assert.deepEqual(differences, ["step 2 (second): state differs"]);
