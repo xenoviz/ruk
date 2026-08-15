@@ -8,13 +8,25 @@ import (
 	"github.com/xenoviz/ruk/internal/state"
 )
 
-// BeginWorkspaceReturn fences an assignment while cleanup runs.
-func (service *Service) BeginWorkspaceReturn(ctx context.Context, assignmentID string) (state.WorkspaceRecord, error) {
+// BeginWorkspaceReturn fences an assignment while cleanup runs. An active
+// acquisition marker must be supplied exactly when recovery intentionally
+// crosses that handoff; ordinary release is rejected until acquisition clears.
+func (service *Service) BeginWorkspaceReturn(ctx context.Context, assignmentID string, acquisitionOperationID ...string) (state.WorkspaceRecord, error) {
+	if len(acquisitionOperationID) > 1 {
+		return state.WorkspaceRecord{}, errors.New("acquisition operation may be supplied at most once")
+	}
 	var result state.WorkspaceRecord
 	err := service.store.Update(ctx, func(current *state.State) error {
 		key, workspace, err := assignedWorkspace(current, assignmentID)
 		if err != nil {
 			return err
+		}
+		if workspace.OperationID != nil {
+			if len(acquisitionOperationID) == 0 || *workspace.OperationID != acquisitionOperationID[0] {
+				return fmt.Errorf("Assignment %s acquisition is still in progress", assignmentID)
+			}
+		} else if len(acquisitionOperationID) != 0 {
+			return errors.New("Acquisition operation does not match")
 		}
 		workspace.Lifecycle = state.LifecycleReturning
 		workspace.UpdatedAt = timestamp(service.now())

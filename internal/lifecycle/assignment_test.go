@@ -255,7 +255,7 @@ func TestAcquisitionHandoffFencesAndRecoveryPreserveRenewal(t *testing.T) {
 	}
 
 	store := newMemoryStore()
-	workspacePath := addAvailableWorkspace(t, store, "renewed", "2026-01-01T00:00:00.000Z", nil, state.LifecycleAvailable)
+	addAvailableWorkspace(t, store, "renewed", "2026-01-01T00:00:00.000Z", nil, state.LifecycleAvailable)
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	identifiers := []string{assignmentID, acquisitionID}
 	service := lifecycle.New(store, lifecycle.Options{
