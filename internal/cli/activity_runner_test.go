@@ -198,12 +198,13 @@ func TestActivityRunnerJoinsCleanupFailureAsAssignmentActivityError(t *testing.T
 	ticker := &activityTicker{ticks: make(chan time.Time), stopped: make(chan struct{})}
 	cleanupErr := errors.New("state lock unavailable")
 	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, NewID: func() string { return activityKeeperID }, Ticker: func(time.Duration) cli.ActivityTicker { return ticker }})
-	if err := runner.Run(context.Background(), "assignment-1", func(context.Context) error {
+	err := runner.Run(context.Background(), "assignment-1", func(context.Context) error {
 		store.mu.Lock()
 		store.fail = cleanupErr
 		store.mu.Unlock()
 		return nil
-	}); !errors.Is(err, cleanupErr) {
+	})
+	if !errors.Is(err, cleanupErr) {
 		t.Fatalf("cleanup error = %v", err)
 	}
 	var activityErr *cli.AssignmentActivityError
