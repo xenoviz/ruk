@@ -180,6 +180,21 @@ func TestNativeProcessManagerDetachedLeaderlessGroupFailsClosed(t *testing.T) {
 	}
 }
 
+func TestNativeProcessManagerExistsRetainsLeaderlessDetachedGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX process groups are not used on Windows")
+	}
+	group := int64(42)
+	manager := processpkg.NewNativeProcessManager(processpkg.ReleaseManagerOptions{
+		Probe: &releaseProbe{states: []lock.ProcessState{{Alive: false}}},
+		Table: releaseTable{{PID: 43, ParentPID: 1, GroupID: 42}},
+	})
+	exists, err := manager.Exists(context.Background(), state.TrackedProcessRecord{PID: 42, GroupID: &group, StartedAt: "started"})
+	if err == nil || exists || !strings.Contains(err.Error(), "could not be identified") {
+		t.Fatalf("leaderless group Exists = %v, %v; want fail-closed retention", exists, err)
+	}
+}
+
 func TestNativeProcessManagerWindowsTreeSeamIsInjectable(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-only tree seam")
