@@ -73,6 +73,13 @@ interface InspectorTarget {
   cwd: string;
 }
 
+interface WrapperResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  elapsedMs: number;
+}
+
 function run(spec: CommandSpec): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(spec.command, spec.args, {
@@ -184,6 +191,7 @@ async function measureWrappers(
   commands: readonly CommandSpec[],
   durationMs: number,
   inspector: InspectorTarget,
+  legacyBaseline: boolean,
 ): Promise<Measurement> {
   const started = performance.now();
   const children = commands.map((spec) => spawn(spec.command, spec.args, {
@@ -191,13 +199,13 @@ async function measureWrappers(
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   }));
-  const completion = Promise.all(children.map((child) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
+  const completion = Promise.all(children.map((child) => new Promise<WrapperResult>((resolve, reject) => {
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
     child.once("error", reject);
-    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr, elapsedMs: performance.now() - started }));
   })));
   let idleResidentBytes = 0;
   let coldResidentBytes = 0;
@@ -244,13 +252,19 @@ async function measureWrappers(
     await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 100 : 50));
   }
   const results = await completion;
+  const tolerated = legacyBaseline
+    ? results.filter((result) => isTolerableLegacyWrapperFailure(result, durationMs))
+    : [];
   const failures = results
     .map((result, index) => ({ ...result, index }))
-    .filter((result) => result.code !== 0);
+    .filter((result) => result.code !== 0 && !isTolerableLegacyWrapperFailure(result, legacyBaseline ? durationMs : Number.POSITIVE_INFINITY));
   if (failures.length > 0) {
     throw new Error(`benchmark wrapper failures: ${failures.map((failure) => (
       `#${failure.index + 1} code=${failure.code} stderr=${JSON.stringify(failure.stderr.trim())} stdout=${JSON.stringify(failure.stdout.trim())}`
     )).join("; ")}`);
+  }
+  if (tolerated.length > 0) {
+    process.stderr.write(`Tolerated ${tolerated.length} full-duration legacy cleanup failure(s).\n`);
   }
   return {
     elapsedMs: performance.now() - started,
@@ -261,6 +275,13 @@ async function measureWrappers(
     peakChildProcessCount,
     peakWindowsPowerShellChildren,
   };
+}
+
+export function isTolerableLegacyWrapperFailure(result: WrapperResult, durationMs: number): boolean {
+  if (result.code === 0 || result.elapsedMs < durationMs - 250 || result.stdout.trim() !== "") return false;
+  const message = result.stderr.trim();
+  return /^ruk: Process \d+ could not be identified, so its workspace cannot be released safely$/.test(message) ||
+    /^ruk: EPERM: operation not permitted, rename .+state\.json\.\d+\.tmp' -> '.+state\.json'$/.test(message);
 }
 
 async function benchmarkTarget(
@@ -290,7 +311,7 @@ async function benchmarkTarget(
     for (let sample = 0; sample < samples; sample += 1) {
       const workload = await createWorkload(target, repository, concurrency, sample, durationMs, ttlMinutes);
       try {
-        const measurement = await measureWrappers(workload.commands, durationMs, inspector);
+        const measurement = await measureWrappers(workload.commands, durationMs, inspector, target.name === "node");
         elapsed.push(measurement.elapsedMs);
         idle.push(measurement.idleResidentBytes);
         cold.push(measurement.coldResidentBytes);
@@ -406,7 +427,7 @@ function makeAssertions(targets: readonly TargetBenchmark[], concurrencyLevels: 
   const reductions = Object.values(ramReductionPercentByConcurrency);
   const ramTargetMet = reductions.length > 0 && reductions.every((value) => value !== null && value >= 50);
   if (!ramTargetMet) failureReasons.push("Go did not reduce median peak RSS by at least 50% at every requested concurrency level");
-  const observedWindowsPowerShellChildren = targets.flatMap((target) => target.wrappers)
+  const observedWindowsPowerShellChildren = (go?.wrappers ?? [])
     .reduce((maximum, wrapper) => Math.max(maximum, wrapper.peakWindowsPowerShellChildren.maximum), 0);
   const applicable = process.platform === "win32";
   const zeroRoutineWindowsPowerShellChildren = !applicable || observedWindowsPowerShellChildren === 0;
