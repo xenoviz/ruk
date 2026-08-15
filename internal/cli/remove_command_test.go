@@ -108,6 +108,34 @@ func TestRemoveCommandSerializesGitAndTreeStateCleanup(t *testing.T) {
 	}
 }
 
+func TestRemoveCommandPreservesAbsoluteDestination(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	destination := filepath.Join(filepath.Dir(root), "created-workspace")
+	var canonicalized string
+	service := cli.RemoveCommand{
+		Canonicalize: func(value string) (string, error) {
+			canonicalized = value
+			return destination, nil
+		},
+		ReadState: func(context.Context, string) (state.State, error) {
+			return state.State{Version: state.CurrentVersion, Trees: map[string]state.TreeRecord{}, Workspaces: map[string]state.WorkspaceRecord{}, Metrics: state.EmptyMetrics()}, nil
+		},
+		WithLock:   func(_ context.Context, _ string, callback func() error) error { return callback() },
+		LockPath:   func(string, string) string { return "lock" },
+		Remove:     func(context.Context, string, string, bool) error { return nil },
+		DeleteTree: func(context.Context, string, string) error { return nil },
+	}
+	if err := service.Run(context.Background(), cli.RemoveInput{
+		Repository: git.Repository{Root: root, CommonDir: filepath.Join(root, ".git")},
+		CWD:        root, Path: destination,
+	}); err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+	if canonicalized != destination {
+		t.Fatalf("canonicalized path = %q, want absolute destination %q", canonicalized, destination)
+	}
+}
+
 func TestRemoveCommandStopsTreeStateDeletionAfterGitFailure(t *testing.T) {
 	want := errors.New("git remove failed")
 	deleted := false
