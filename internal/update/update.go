@@ -795,28 +795,30 @@ func isSHA256(value string) bool {
 	return err == nil
 }
 
-// WindowsReplacementPlan returns a conservative detached helper script.  It
-// waits for the old process, stages a backup, verifies the replacement, and
+// WindowsReplacementPlan returns a conservative detached helper script. It
+// waits for the running executable's file lock by retrying the replacement;
+// it never polls or signals a numeric PID, so PID reuse cannot authorize an
+// unrelated process. The helper stages a backup, verifies the replacement, and
 // restores the backup when verification fails.
 func WindowsReplacementPlan(executable, candidate, version string, pid int) (string, string, error) {
 	for _, value := range []string{executable, candidate, version} {
-		if strings.ContainsAny(value, "\"\r\n") {
+		if strings.ContainsAny(value, "\"\r\n&|<>^%!") {
 			return "", "", errors.New("Executable path cannot be safely updated")
 		}
 	}
 	helper := candidate + ".cmd"
-	backup := executable + ".ruk-backup-" + strconv.Itoa(pid)
+	backup := candidate + ".backup"
 	quote := func(value string) string { return `"` + value + `"` }
 	script := "@echo off\r\n" +
 		":wait\r\n" +
-		"tasklist /FI \"PID eq " + strconv.Itoa(pid) + "\" 2>NUL | find \"" + strconv.Itoa(pid) + "\" >NUL\r\n" +
-		"if not errorlevel 1 (ping 127.0.0.1 -n 2 >NUL & goto wait)\r\n" +
-		"copy /Y " + quote(executable) + " " + quote(backup) + " >NUL || goto fail\r\n" +
-		"move /Y " + quote(candidate) + " " + quote(executable) + " >NUL || goto rollback\r\n" +
+		"copy /Y " + quote(executable) + " " + quote(backup) + " >NUL 2>NUL\r\n" +
+		"if errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)\r\n" +
+		"move /Y " + quote(candidate) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
+		"if errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)\r\n" +
 		quote(executable) + " --version | findstr /X \"" + version + "\" >NUL || goto rollback\r\n" +
 		"del /Q " + quote(backup) + " >NUL 2>NUL\r\n" +
 		"del /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 0\r\n" +
-		":rollback\r\nmove /Y " + quote(backup) + " " + quote(executable) + " >NUL\r\n:fail\r\ndel /Q " + quote(candidate) + " >NUL 2>NUL\r\ndel /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 1\r\n"
+		":rollback\r\nmove /Y " + quote(backup) + " " + quote(executable) + " >NUL\r\n:fail\r\ndel /Q " + quote(candidate) + " >NUL 2>NUL\r\ndel /Q " + quote(backup) + " >NUL 2>NUL\r\ndel /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 1\r\n"
 	return helper, script, nil
 }
 
