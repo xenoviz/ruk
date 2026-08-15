@@ -121,6 +121,9 @@ func MutationWorkspaceLockPath(commonDir, workspacePath string) (string, error) 
 	if err := validateCommonDir(commonDir); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(workspacePath) == "" {
+		return "", errors.New("workspace path must not be empty")
+	}
 	key, err := state.TreeKey(workspacePath)
 	if err != nil {
 		return "", err
