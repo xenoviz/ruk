@@ -17,6 +17,7 @@ test("runtime benchmark summaries and result schema are deterministic", () => {
     architecture: "x64",
     sampleCount: 3,
     wrapperDurationMs: 1_500,
+    assignmentTTLMinutes: 0.5,
     concurrencyLevels: [1, 10, 20],
     targets: [],
     assertions: {
@@ -34,6 +35,7 @@ test("runtime benchmark summaries and result schema are deterministic", () => {
     platform: { os: "linux", architecture: "x64" },
     sampleCount: 3,
     wrapperDurationMs: 1_500,
+    assignmentTTLMinutes: 0.5,
     concurrencyLevels: [1, 10, 20],
     targets: [],
     assertions: {

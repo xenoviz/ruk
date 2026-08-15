@@ -52,6 +52,7 @@ interface ParsedArguments {
   binary: string;
   samples: number;
   durationMs: number;
+  ttlMinutes: number;
   concurrencyLevels: number[];
   assertTarget: boolean;
 }
@@ -112,18 +113,28 @@ function parseArguments(args: readonly string[], root: string): ParsedArguments 
   const nodeCli = path.resolve(value("--node") ?? path.join(root, "dist", "bin", "ruk.js"));
   const binary = path.resolve(value("--binary") ?? path.join(root, "artifacts", process.platform === "win32" ? "ruk.exe" : "ruk"));
   const samples = Number(value("--samples") ?? 3);
-  const durationMs = Number(value("--duration") ?? 5_000);
+  const durationMs = Number(value("--duration") ?? 12_000);
+  const ttlMinutes = Number(value("--ttl") ?? 0.5);
   const concurrencyLevels = (value("--concurrency") ?? "1,10,20").split(",").map(Number);
   const assertTarget = !args.includes("--no-assert");
   if (!Number.isSafeInteger(samples) || samples < 1) throw new Error("--samples must be a positive integer");
   if (!Number.isFinite(durationMs) || durationMs < 1_000) throw new Error("--duration must be at least 1000 milliseconds");
+  if (!Number.isFinite(ttlMinutes) || ttlMinutes <= 0) throw new Error("--ttl must be a positive number of minutes");
+  const heartbeatMs = ttlMinutes * 60_000 / 3;
+  const expiryMs = ttlMinutes * 60_000;
+  if (durationMs <= heartbeatMs) {
+    throw new Error("--duration must be longer than one activity heartbeat interval (--ttl / 3)");
+  }
+  if (durationMs >= expiryMs) {
+    throw new Error("--duration must finish before the benchmark assignment TTL expires");
+  }
   if (concurrencyLevels.length === 0 || concurrencyLevels.some((level) => !Number.isSafeInteger(level) || level < 1)) {
     throw new Error("--concurrency must be a comma-separated list of positive integers");
   }
-  return { nodeCli, binary, samples, durationMs, concurrencyLevels, assertTarget };
+  return { nodeCli, binary, samples, durationMs, ttlMinutes, concurrencyLevels, assertTarget };
 }
 
-async function makeRepository(root: string, node: Target): Promise<string> {
+async function makeRepository(root: string, node: Target, nodeExecutable: string): Promise<string> {
   const repository = path.join(root, "repository");
   const installer = path.join(root, "install.mjs");
   await fs.mkdir(repository, { recursive: true });
@@ -132,7 +143,7 @@ async function makeRepository(root: string, node: Target): Promise<string> {
   await fs.writeFile(path.join(repository, ".gitignore"), "node_modules/\n");
   await fs.writeFile(path.join(repository, ".rukrc.json"), `${JSON.stringify({
     dependencyMode: "managed",
-    installCommand: [process.execPath, installer],
+    installCommand: [nodeExecutable, installer],
   })}\n`);
   for (const args of [
     ["init", "-q"],
@@ -249,6 +260,7 @@ async function benchmarkTarget(
   inspector: InspectorTarget,
   samples: number,
   durationMs: number,
+  ttlMinutes: number,
   concurrencyLevels: readonly number[],
 ): Promise<TargetBenchmark> {
   const coldStartMs: number[] = [];
@@ -267,7 +279,7 @@ async function benchmarkTarget(
     const peakChildren: number[] = [];
     const powershellChildren: number[] = [];
     for (let sample = 0; sample < samples; sample += 1) {
-      const workload = await createWorkload(target, repository, concurrency, sample, durationMs);
+      const workload = await createWorkload(target, repository, concurrency, sample, durationMs, ttlMinutes);
       try {
         const measurement = await measureWrappers(workload.commands, durationMs, inspector);
         elapsed.push(measurement.elapsedMs);
@@ -307,13 +319,14 @@ async function createWorkload(
   concurrency: number,
   sample: number,
   durationMs: number,
+  ttlMinutes: number,
 ): Promise<Workload> {
   const assignments: Array<{ assignmentId: string; path: string }> = [];
   try {
     for (let index = 0; index < concurrency; index += 1) {
       const output = await requireSuccess({
         command: target.command,
-        args: [...target.prefix, "acquire", `benchmark/${target.name}/${sample}/${index}`, "--ttl", "2", "--json"],
+        args: [...target.prefix, "acquire", `benchmark/${target.name}/${sample}/${index}`, "--ttl", String(ttlMinutes), "--json"],
         cwd: repository,
       });
       const parsed = JSON.parse(output) as { assignmentId?: unknown; path?: unknown };
@@ -351,7 +364,7 @@ async function releaseAssignments(target: Target, repository: string, assignment
 function makeSummary(result: RuntimeBenchmarkResult): string {
   const lines = [
     `Ruk runtime benchmark (${result.platform.os}/${result.platform.architecture})`,
-    `samples=${result.sampleCount}, duration=${result.wrapperDurationMs}ms, concurrency=${result.concurrencyLevels.join(",")}`,
+    `samples=${result.sampleCount}, duration=${result.wrapperDurationMs}ms, ttl=${result.assignmentTTLMinutes}m, concurrency=${result.concurrencyLevels.join(",")}`,
   ];
   for (const target of result.targets) {
     lines.push(`${target.name}: binary=${target.binaryBytes}B, cold-median=${target.coldStartMs.median}ms`);
@@ -410,13 +423,13 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
   try {
     const inspectorPath = path.join(temporary, process.platform === "win32" ? "process-inspector.exe" : "process-inspector");
     await compileInspector(root, inspectorPath);
-    const nodeExecutable = process.env["RUK_BENCH_NODE"] ?? process.execPath;
+    const nodeExecutable = process.env["RUK_BENCH_NODE"] ?? "node";
     const nodeVersion = await requireSuccess({ command: nodeExecutable, args: ["--version"], cwd: root });
     const node: Target = {
       name: "node", version: nodeVersion, sizePath: path.join(root, "dist"), command: nodeExecutable,
       prefix: [parsed.nodeCli], childCommand: nodeExecutable, cwd: root,
     };
-    const repository = await makeRepository(temporary, node);
+    const repository = await makeRepository(temporary, node, nodeExecutable);
     const goVersion = await requireSuccess({ command: parsed.binary, args: ["--version"], cwd: root });
     const go: Target = {
       name: "go", version: goVersion, sizePath: parsed.binary, command: parsed.binary,
@@ -424,8 +437,8 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
     };
     const inspector = { command: inspectorPath, args: [], cwd: root };
     const targets = [
-      await benchmarkTarget(node, repository, inspector, parsed.samples, parsed.durationMs, parsed.concurrencyLevels),
-      await benchmarkTarget(go, repository, inspector, parsed.samples, parsed.durationMs, parsed.concurrencyLevels),
+      await benchmarkTarget(node, repository, inspector, parsed.samples, parsed.durationMs, parsed.ttlMinutes, parsed.concurrencyLevels),
+      await benchmarkTarget(go, repository, inspector, parsed.samples, parsed.durationMs, parsed.ttlMinutes, parsed.concurrencyLevels),
     ];
     const result = runtimeBenchmarkResult({
       generatedAt: new Date().toISOString(),
@@ -433,6 +446,7 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
       architecture: process.arch,
       sampleCount: parsed.samples,
       wrapperDurationMs: parsed.durationMs,
+      assignmentTTLMinutes: parsed.ttlMinutes,
       concurrencyLevels: [...parsed.concurrencyLevels],
       targets,
       assertions: makeAssertions(targets, parsed.concurrencyLevels),

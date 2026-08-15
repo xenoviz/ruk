@@ -29,6 +29,7 @@ export interface RuntimeBenchmarkResult {
   platform: { os: NodeJS.Platform; architecture: string };
   sampleCount: number;
   wrapperDurationMs: number;
+  assignmentTTLMinutes: number;
   concurrencyLevels: number[];
   targets: TargetBenchmark[];
   assertions: RuntimeBenchmarkAssertions;
@@ -66,6 +67,7 @@ export function runtimeBenchmarkResult(input: {
   architecture: string;
   sampleCount: number;
   wrapperDurationMs: number;
+  assignmentTTLMinutes: number;
   concurrencyLevels: number[];
   targets: TargetBenchmark[];
   assertions: RuntimeBenchmarkAssertions;
@@ -76,6 +78,7 @@ export function runtimeBenchmarkResult(input: {
     platform: { os: input.platform, architecture: input.architecture },
     sampleCount: input.sampleCount,
     wrapperDurationMs: input.wrapperDurationMs,
+    assignmentTTLMinutes: input.assignmentTTLMinutes,
     concurrencyLevels: [...input.concurrencyLevels],
     targets: input.targets,
     assertions: input.assertions,
