@@ -6,31 +6,42 @@ import { fileURLToPath } from "node:url";
 import { run } from "../src/process.js";
 
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const packageJSON = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as { version?: unknown };
+if (typeof packageJSON.version !== "string" || packageJSON.version.length === 0) {
+  throw new Error("package.json version must be a nonempty string");
+}
+const version = process.env["RUK_VERSION"] ?? packageJSON.version;
+const minimumBinarySize = 1_000_000;
 const targets = [
-  "bun-linux-x64-baseline",
-  "bun-linux-arm64",
-  "bun-linux-x64-musl-baseline",
-  "bun-darwin-x64",
-  "bun-darwin-arm64",
-  "bun-windows-x64-baseline",
-  "bun-windows-arm64",
+  { name: "bun-linux-x64-baseline", goos: "linux", goarch: "amd64", windows: false },
+  { name: "bun-linux-arm64", goos: "linux", goarch: "arm64", windows: false },
+  { name: "bun-linux-x64-musl-baseline", goos: "linux", goarch: "amd64", windows: false },
+  { name: "bun-darwin-x64", goos: "darwin", goarch: "amd64", windows: false },
+  { name: "bun-darwin-arm64", goos: "darwin", goarch: "arm64", windows: false },
+  { name: "bun-windows-x64-baseline", goos: "windows", goarch: "amd64", windows: true },
+  { name: "bun-windows-arm64", goos: "windows", goarch: "arm64", windows: true },
 ] as const;
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cross-binaries-"));
 
 try {
   for (const target of targets) {
-    const executable = path.join(temporary, target.includes("windows") ? `${target}.exe` : target);
+    const executable = path.join(temporary, target.windows ? `${target.name}.exe` : target.name);
     await run("bun", [path.join(root, "scripts", "build-binary.ts")], {
       cwd: root,
       env: {
         ...process.env,
-        RUK_BINARY_TARGET: target,
+        CGO_ENABLED: "0",
+        GOOS: target.goos,
+        GOARCH: target.goarch,
+        RUK_BINARY_TARGET: target.name,
         RUK_BINARY_OUTFILE: executable,
+        RUK_VERSION: version,
+        RUK_DISTRIBUTION: "standalone",
       },
       stdio: "inherit",
     });
     const stat = await fs.stat(executable);
-    assert.ok(stat.size > 1_000_000, `${target} did not produce a standalone runtime`);
+    assert.ok(stat.isFile() && stat.size > minimumBinarySize, `${target.name} did not produce a standalone runtime`);
     await fs.rm(executable);
   }
   process.stdout.write(`Verified ${targets.length} cross-compilation targets.\n`);

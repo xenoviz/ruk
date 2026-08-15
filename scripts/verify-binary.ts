@@ -8,16 +8,31 @@ import { run } from "../src/process.js";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-binary-"));
 const executable = path.join(temporary, process.platform === "win32" ? "ruk.exe" : "ruk");
+const packageJSON = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as { version?: unknown };
+if (typeof packageJSON.version !== "string" || packageJSON.version.length === 0) {
+  throw new Error("package.json version must be a nonempty string");
+}
+const expectedVersion = process.env["RUK_VERSION"] ?? packageJSON.version;
+const minimumBinarySize = 1_000_000;
 
 try {
   await run("bun", [path.join(root, "scripts", "build-binary.ts")], {
     cwd: root,
-    env: { ...process.env, RUK_BINARY_OUTFILE: executable },
+    env: {
+      ...process.env,
+      RUK_BINARY_OUTFILE: executable,
+      RUK_VERSION: expectedVersion,
+      RUK_DISTRIBUTION: "standalone",
+    },
     stdio: "inherit",
   });
 
-  const version = await run(executable, ["--version"], { cwd: temporary });
-  assert.match(version.stdout, /^0\.1\.2\n$/);
+  const stat = await fs.stat(executable);
+  assert.ok(stat.isFile() && stat.size > minimumBinarySize, `binary is too small: ${stat.size} bytes`);
+  if (process.platform !== "win32") assert.ok((stat.mode & 0o111) !== 0, "binary is not executable");
+
+  const versionResult = await run(executable, ["--version"], { cwd: temporary });
+  assert.equal(versionResult.stdout, `${expectedVersion}\n`);
   const help = await run(executable, ["--help"], { cwd: temporary });
   assert.match(help.stdout, /^Ruk —/);
 
