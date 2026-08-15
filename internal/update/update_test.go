@@ -100,6 +100,27 @@ func TestCurrentPrereleaseStaysOnPrereleaseChannel(t *testing.T) {
 	}
 }
 
+func TestPrereleasePackageUpdateDelegatesExactVersion(t *testing.T) {
+	var command string
+	var args []string
+	updater := New(Hooks{
+		Discover: func(context.Context) ([]Release, error) {
+			return []Release{testRelease("0.3.0-beta.1", []byte("beta"))}, nil
+		},
+		Run: func(_ context.Context, got string, gotArgs []string) (CommandResult, error) {
+			command, args = got, append([]string(nil), gotArgs...)
+			return CommandResult{}, nil
+		},
+	})
+	result, err := updater.Update(context.Background(), Options{Distribution: DistributionPackage, CurrentVersion: "0.2.0", AllowPrerelease: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusUpdated || command != "npm" || strings.Join(args, " ") != "install --global @xenoviz/ruk@0.3.0-beta.1" {
+		t.Fatalf("prerelease update = %+v command=%s args=%v", result, command, args)
+	}
+}
+
 func TestParseVersionRejectsInvalidPrereleaseCharacters(t *testing.T) {
 	for _, version := range []string{"0.3.0-beta/1", "0.3.0-beta_1", "0.3.0-β", "0.3.0-beta 1"} {
 		if _, err := ParseVersion(version); err == nil {
@@ -198,5 +219,33 @@ func TestPackageDelegation(t *testing.T) {
 	}
 	if result.Status != StatusUpdated || command != "pnpm" || strings.Join(args, " ") != "add --global @xenoviz/ruk@0.3.0" {
 		t.Fatalf("delegation = %+v %s %v", result, command, args)
+	}
+}
+
+func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
+	helper, script, err := WindowsReplacementPlan(`C:\\bin\\ruk.exe`, `C:\\bin\\.ruk.exe.new`, "0.3.0-beta.1", 4242)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if helper != `C:\\bin\\.ruk.exe.new.cmd` {
+		t.Fatalf("helper = %q", helper)
+	}
+	for _, forbidden := range []string{"tasklist", "taskkill", "powershell", "4242"} {
+		if strings.Contains(strings.ToLower(script), strings.ToLower(forbidden)) {
+			t.Fatalf("replacement script contains unsafe %q: %s", forbidden, script)
+		}
+	}
+	for _, required := range []string{"copy /Y", "move /Y", "timeout /t 1 /nobreak", "findstr /X"} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("replacement script lacks %q: %s", required, script)
+		}
+	}
+}
+
+func TestWindowsReplacementPlanRejectsBatchInjection(t *testing.T) {
+	for _, value := range []string{`C:\\bin\\ruk&evil.exe`, `C:\\bin\\ruk|evil.exe`, `C:\\bin\\ruk%PATH%.exe`, "0.3.0-beta.1\r\n"} {
+		if _, _, err := WindowsReplacementPlan(value, `C:\\bin\\candidate.exe`, "0.3.0", 1); err == nil {
+			t.Fatalf("unsafe replacement value %q was accepted", value)
+		}
 	}
 }
