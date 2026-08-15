@@ -282,6 +282,13 @@ var (
 func classifyMessage(message string) (ErrorCode, bool) {
 	lower := strings.ToLower(message)
 
+	// Package-manager discovery is part of dependency preparation. Preserve
+	// the TypeScript automation contract instead of reporting a generic
+	// operation failure when the repository's selected manager is absent.
+	if strings.Contains(lower, "is required but was not found on path") {
+		return DependencyPreparationCode, true
+	}
+
 	// Parse/configuration failures are intentionally checked before broad
 	// dependency and Git terms, as in the TypeScript classifier.
 	if strings.Contains(lower, ".rukrc.json") ||

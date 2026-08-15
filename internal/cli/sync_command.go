@@ -81,8 +81,8 @@ type SyncCommandResult struct {
 	Path            string `json:"path"`
 	Fingerprint     string `json:"fingerprint"`
 	Mode            string `json:"mode"`
-	Reused          bool   `json:"reused"`
-	AlreadyAttached bool   `json:"alreadyAttached"`
+	Reused          bool   `json:"-"`
+	AlreadyAttached bool   `json:"-"`
 }
 
 // Run resolves the manager, inventories repository files, checks the optional
