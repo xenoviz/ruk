@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { run } from "../../src/process.js";
+import { run } from "../lib/process.js";
+import type { GoldenScenario, GoldenStep, GoldenStream } from "./golden.js";
 import {
   canonicalJSON,
   normalizeRepositoryPath,
@@ -14,12 +15,10 @@ import type {
   BuiltCLI,
   ConformanceOptions,
   ConformanceScenario,
-  ConformanceStep,
   ProcessResult,
   RepositoryFixture,
   ObservedCLIResult,
   ObservedScenario,
-  ScenarioComparison,
 } from "./types.js";
 
 const FIXTURE_COMMIT_DATE = "2026-01-01T00:00:00.000Z";
@@ -92,101 +91,64 @@ async function observe(result: ProcessResult, repository: string): Promise<Obser
   return observed;
 }
 
-function comparisonPrefix(index: number, step: ConformanceStep): string {
-  return `step ${index + 1} (${step.name})`;
-}
-
-function verboseDifference(label: string, typescript: string, go: string): string {
+function verboseDifference(label: string, expected: string, actual: string): string {
   if (process.env["RUK_CONFORMANCE_VERBOSE"] !== "1") return label;
   const clip = (value: string): string => value.length <= 2_000 ? value : `${value.slice(0, 2_000)}...<truncated>`;
-  return `${label}\n  TypeScript: ${clip(typescript)}\n  Go: ${clip(go)}`;
+  return `${label}\n  Expected: ${clip(expected)}\n  Go: ${clip(actual)}`;
 }
 
-function streamDifference(
-  left: string,
-  leftJSON: unknown | null,
-  right: string,
-  rightJSON: unknown | null,
-  context: { roots: readonly string[] },
-): "text" | "json" | null {
-  if (leftJSON !== null || rightJSON !== null) {
-    return canonicalJSON(leftJSON, context) === canonicalJSON(rightJSON, context) ? null : "json";
-  }
-  return normalizeText(left, context) === normalizeText(right, context) ? null : "text";
+function stream(value: string, parsed: unknown | null, roots: readonly string[]): GoldenStream {
+  const context = { roots: roots.map(normalizeRepositoryPath) };
+  return parsed !== null
+    ? { kind: "json", value: canonicalJSON(parsed, context) }
+    : { kind: "text", value: normalizeText(value, context) };
 }
 
-export function compareStepOutput(
-  step: ConformanceStep,
-  typescript: ObservedCLIResult,
-  go: ObservedCLIResult,
+function compareStream(label: string, expected: GoldenStream, actual: GoldenStream): string[] {
+  if (expected.kind !== actual.kind) return [`${label} kind differs`];
+  if (expected.value === actual.value) return [];
+  return [verboseDifference(`${label}${expected.kind === "json" ? " JSON" : ""} differs`, expected.value, actual.value)];
+}
+
+export function compareGoldenStep(
+  expected: GoldenStep,
+  actual: ObservedCLIResult,
   roots: readonly string[],
   index = 0,
 ): string[] {
-  const context = { roots: roots.map(normalizeRepositoryPath) };
-  const prefix = comparisonPrefix(index, step);
+  const prefix = `step ${index + 1} (${expected.name})`;
   const differences: string[] = [];
-  if (typescript.exitCode !== go.exitCode) differences.push(`${prefix}: exit code differs`);
-  const stdoutDifference = streamDifference(typescript.stdout, typescript.stdoutJSON, go.stdout, go.stdoutJSON, context);
-  if (stdoutDifference) differences.push(verboseDifference(
-    `${prefix}: stdout${stdoutDifference === "json" ? " JSON" : ""} differs`,
-    stdoutDifference === "json" ? canonicalJSON(typescript.stdoutJSON, context) : normalizeText(typescript.stdout, context),
-    stdoutDifference === "json" ? canonicalJSON(go.stdoutJSON, context) : normalizeText(go.stdout, context),
-  ));
-  const stderrDifference = streamDifference(typescript.stderr, typescript.stderrJSON, go.stderr, go.stderrJSON, context);
-  if (stderrDifference) differences.push(verboseDifference(
-    `${prefix}: stderr${stderrDifference === "json" ? " JSON" : ""} differs`,
-    stderrDifference === "json" ? canonicalJSON(typescript.stderrJSON, context) : normalizeText(typescript.stderr, context),
-    stderrDifference === "json" ? canonicalJSON(go.stderrJSON, context) : normalizeText(go.stderr, context),
-  ));
-  const typescriptState = canonicalJSON(typescript.state, context);
-  const goState = canonicalJSON(go.state, context);
-  if (step.compareState !== false && typescriptState !== goState) {
-    differences.push(verboseDifference(`${prefix}: state differs`, typescriptState, goState));
+  if (expected.exitCode !== actual.exitCode) differences.push(`${prefix}: exit code differs`);
+  differences.push(...compareStream(`${prefix}: stdout`, expected.stdout, stream(actual.stdout, actual.stdoutJSON, roots)));
+  differences.push(...compareStream(`${prefix}: stderr`, expected.stderr, stream(actual.stderr, actual.stderrJSON, roots)));
+  if (expected.state !== undefined) {
+    const actualState = canonicalJSON(actual.state, { roots: roots.map(normalizeRepositoryPath) });
+    if (expected.state !== actualState) differences.push(verboseDifference(`${prefix}: state differs`, expected.state, actualState));
   }
   return differences;
 }
 
-export function compareOutput(
-  scenario: ConformanceScenario,
-  typescript: ObservedScenario,
-  go: ObservedScenario,
+export function compareGoldenScenario(
+  expected: GoldenScenario,
+  actual: ObservedScenario,
   roots: readonly string[],
 ): string[] {
-  const steps = scenarioSteps(scenario);
   const differences: string[] = [];
-  const typescriptSteps = typescript.steps;
-  const goSteps = go.steps;
-  if (typescriptSteps.length !== goSteps.length) {
-    differences.push(`step count differs: TypeScript ${typescriptSteps.length}, Go ${goSteps.length}`);
+  if (expected.steps.length !== actual.steps.length) {
+    differences.push(`step count differs: expected ${expected.steps.length}, Go ${actual.steps.length}`);
   }
-  for (let index = 0; index < Math.max(typescriptSteps.length, goSteps.length); index += 1) {
-    const step = steps[index] ?? {
-      name: `unexpected-${index + 1}`,
-      args: [],
-      compareState: false,
-    };
-    const typescriptStep = typescriptSteps[index];
-    const goStep = goSteps[index];
-    if (!typescriptStep || !goStep) {
-      differences.push(`${comparisonPrefix(index, step)}: missing result`);
+  for (let index = 0; index < Math.max(expected.steps.length, actual.steps.length); index += 1) {
+    const expectedStep = expected.steps[index];
+    const actualStep = actual.steps[index];
+    if (!expectedStep || !actualStep) {
+      differences.push(`step ${index + 1}: missing result`);
       continue;
     }
-    differences.push(...compareStepOutput(
-      scenario.compareState === false ? { ...step, compareState: false } : step,
-      typescriptStep,
-      goStep,
-      roots,
-      index,
-    ));
+    differences.push(...compareGoldenStep(expectedStep, actualStep, roots, index));
   }
-  const compareFinalState = scenario.compareFinalState ?? scenario.compareState !== false;
-  if (compareFinalState) {
-    const context = { roots: roots.map(normalizeRepositoryPath) };
-    const typescriptState = canonicalJSON(typescript.finalState, context);
-    const goState = canonicalJSON(go.finalState, context);
-    if (typescriptState !== goState) {
-      differences.push(verboseDifference("final state differs", typescriptState, goState));
-    }
+  if (expected.finalState !== undefined) {
+    const actualState = canonicalJSON(actual.finalState, { roots: roots.map(normalizeRepositoryPath) });
+    if (expected.finalState !== actualState) differences.push(verboseDifference("final state differs", expected.finalState, actualState));
   }
   return differences;
 }
@@ -230,25 +192,22 @@ export function resolveStepArguments(
 
 export class ConformanceHarness {
   readonly root: string;
-  readonly options: Required<Pick<ConformanceOptions, "typescriptEntry" | "goPackage">>;
+  readonly options: Required<Pick<ConformanceOptions, "goPackage">>;
   private readonly keepTemporary: boolean;
   private temporaryRoot: string | undefined;
 
   constructor(options: ConformanceOptions = {}) {
     this.root = path.resolve(options.root ?? fileURLToPath(new URL("../..", import.meta.url)));
     this.options = {
-      typescriptEntry: options.typescriptEntry ?? path.join(this.root, "bin", "ruk.ts"),
       goPackage: options.goPackage ?? "./cmd/ruk",
     };
     this.keepTemporary = options.keepTemporary ?? false;
   }
 
-  async build(): Promise<readonly BuiltCLI[]> {
+  async buildGo(): Promise<BuiltCLI> {
     const buildRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-conformance-build-"));
     this.temporaryRoot = buildRoot;
-    const typescriptOutput = path.join(buildRoot, "ruk-ts.js");
     const goOutput = path.join(buildRoot, process.platform === "win32" ? "ruk-go.exe" : "ruk-go");
-    await run("bun", ["build", this.options.typescriptEntry, "--target=node", "--outfile", typescriptOutput], { cwd: this.root });
     const packageJSON = JSON.parse(await fs.readFile(path.join(this.root, "package.json"), "utf8")) as { version?: unknown };
     if (typeof packageJSON.version !== "string" || packageJSON.version.length === 0) {
       throw new Error("package.json version is unavailable for conformance build");
@@ -261,10 +220,7 @@ export class ConformanceHarness {
       goOutput,
       this.options.goPackage,
     ], { cwd: this.root });
-    return [
-      { name: "typescript", command: "bun", args: [typescriptOutput] },
-      { name: "go", command: goOutput, args: [] },
-    ];
+    return { name: "go", command: goOutput, args: [] };
   }
 
   async runScenario(cli: BuiltCLI, scenario: ConformanceScenario, workspace: string): Promise<ObservedScenario> {
@@ -288,28 +244,33 @@ export class ConformanceHarness {
     return { ...final, steps: outputs, finalState: await readState(repository) };
   }
 
-  async compare(scenarios: readonly ConformanceScenario[]): Promise<ScenarioComparison[]> {
-    const clients = await this.build();
+  async compareGolden(scenarios: readonly ConformanceScenario[], golden: readonly GoldenScenario[]): Promise<string[]> {
+    const client = await this.buildGo();
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-conformance-"));
-    const comparisons: ScenarioComparison[] = [];
+    const differences: string[] = [];
     try {
-      for (const scenario of scenarios) {
+      for (let index = 0; index < scenarios.length; index += 1) {
+        const scenario = scenarios[index]!;
+        const expected = golden[index];
+        if (!expected) {
+          differences.push(`${scenario.name}: missing frozen golden result`);
+          continue;
+        }
+        if (expected.name !== scenario.name) {
+          differences.push(`scenario ${index + 1}: expected ${expected.name}, Go fixture is ${scenario.name}`);
+          continue;
+        }
+        const expectedStepNames = expected.steps.map((step) => step.name);
+        const actualStepNames = scenarioSteps(scenario).map((step) => step.name);
+        if (JSON.stringify(expectedStepNames) !== JSON.stringify(actualStepNames)) {
+          differences.push(`${scenario.name}: frozen step order differs`);
+          continue;
+        }
         const scenarioRoot = await fs.mkdtemp(path.join(temporary, `${scenario.name.replace(/[^a-z0-9-]/gi, "-")}-`));
-        const typescript = await this.runScenario(clients[0]!, scenario, scenarioRoot);
-        const go = await this.runScenario(clients[1]!, scenario, scenarioRoot);
-        comparisons.push({
-          scenario: scenario.name,
-          typescript,
-          go,
-          typescriptSteps: typescript.steps,
-          goSteps: go.steps,
-          differences: compareOutput(scenario, typescript, go, [
-            path.join(scenarioRoot, "typescript"),
-            path.join(scenarioRoot, "go"),
-          ]),
-        });
+        const go = await this.runScenario(client, scenario, scenarioRoot);
+        differences.push(...compareGoldenScenario(expected, go, [path.join(scenarioRoot, "go")]).map((difference) => `${scenario.name}: ${difference}`));
       }
-      return comparisons;
+      return differences;
     } finally {
       if (!this.keepTemporary) await fs.rm(temporary, { recursive: true, force: true });
       if (this.temporaryRoot && !this.keepTemporary) await fs.rm(this.temporaryRoot, { recursive: true, force: true });
@@ -317,8 +278,7 @@ export class ConformanceHarness {
   }
 }
 
-export function assertComparisons(comparisons: readonly ScenarioComparison[]): void {
-  const failures = comparisons.filter((comparison) => comparison.differences.length > 0);
-  if (failures.length === 0) return;
-  throw new Error(failures.map((failure) => `${failure.scenario}: ${failure.differences.join(", ")}`).join("\n"));
+export function assertGoldenComparisons(differences: readonly string[]): void {
+  if (differences.length === 0) return;
+  throw new Error(differences.join("\n"));
 }

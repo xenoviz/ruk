@@ -1,4 +1,4 @@
-import type { RunResult } from "../../src/process.js";
+import type { RunResult } from "../lib/process.js";
 
 export type ConformanceDomain = "core" | "lifecycle" | "dependencies" | "ports";
 
@@ -53,15 +53,6 @@ export interface ObservedCLIResult {
 export interface ObservedScenario extends ObservedCLIResult {
   steps: readonly ObservedCLIResult[];
   finalState: unknown | null;
-}
-
-export interface ScenarioComparison {
-  scenario: string;
-  typescript: ObservedScenario;
-  go: ObservedScenario;
-  typescriptSteps: readonly ObservedCLIResult[];
-  goSteps: readonly ObservedCLIResult[];
-  differences: readonly string[];
 }
 
 export type ProcessResult = Pick<RunResult, "code" | "stdout" | "stderr">;

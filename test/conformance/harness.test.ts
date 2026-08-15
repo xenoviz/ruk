@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { canonicalJSON, normalizeText, parseJSON } from "../../scripts/conformance/normalize.js";
 import { validateScenarios } from "../../scripts/conformance/scenarios.js";
-import { compareOutput, compareStepOutput, resolveStepArguments } from "../../scripts/conformance/harness.js";
+import { compareGoldenScenario, compareGoldenStep, resolveStepArguments } from "../../scripts/conformance/harness.js";
 
 test("conformance normalization removes repository-specific process values", () => {
   const context = { roots: ["C:\\temp\\typescript", "/tmp/go"] };
@@ -74,38 +74,40 @@ test("scenario format accepts ordered steps with per-step state comparison", () 
   assert.equal(scenarios[0]?.compareFinalState, false);
 });
 
-test("step comparison labels differences by order and name", () => {
-  const differences = compareStepOutput(
-    { name: "init", args: ["init", "--json"] },
+test("frozen golden comparison labels Go differences by order and name", () => {
+  const differences = compareGoldenStep(
     {
+      name: "init",
       exitCode: 0,
-      stdout: "{\"status\":\"prepared\"}\n",
-      stderr: "",
-      stdoutJSON: { status: "prepared" },
-      stderrJSON: null,
-      state: null,
+      stdout: { kind: "json", value: '{"status":"prepared"}' },
+      stderr: { kind: "text", value: "" },
+      state: "null",
     },
     {
       exitCode: 1,
-      stdout: "",
+      stdout: '{"status":"prepared"}\n',
       stderr: "failed\n",
-      stdoutJSON: null,
       stderrJSON: null,
+      stdoutJSON: { status: "prepared" },
       state: null,
     },
-    ["/tmp/typescript", "/tmp/go"],
+    ["/tmp/go"],
     2,
   );
   assert.deepEqual(differences, [
     "step 3 (init): exit code differs",
-    "step 3 (init): stdout JSON differs",
     "step 3 (init): stderr differs",
   ]);
 });
 
-test("JSON output is compared semantically instead of as raw text", () => {
-  const differences = compareStepOutput(
-    { name: "status", args: ["status", "--json"] },
+test("frozen golden JSON output uses normalized canonical values", () => {
+  const differences = compareGoldenStep(
+    {
+      name: "status",
+      exitCode: 0,
+      stdout: { kind: "json", value: '{"totalPreparationMs":"<duration>","updatedAt":"<timestamp>"}' },
+      stderr: { kind: "text", value: "" },
+    },
     {
       exitCode: 0,
       stdout: '{"updatedAt":"2026-08-16T12:00:00.000Z","totalPreparationMs":1}\n',
@@ -114,20 +116,12 @@ test("JSON output is compared semantically instead of as raw text", () => {
       stderrJSON: null,
       state: null,
     },
-    {
-      exitCode: 0,
-      stdout: '{"totalPreparationMs":99,"updatedAt":"2026-08-16T12:00:01.000Z"}\n',
-      stderr: "",
-      stdoutJSON: { totalPreparationMs: 99, updatedAt: "2026-08-16T12:00:01.000Z" },
-      stderrJSON: null,
-      state: null,
-    },
     [],
   );
   assert.deepEqual(differences, []);
 });
 
-test("step and scenario state opt-outs have independent final-state semantics", () => {
+test("frozen golden comparison checks only states captured in the schema", () => {
   const result = (state: unknown) => ({
     exitCode: 0,
     stdout: "",
@@ -136,36 +130,18 @@ test("step and scenario state opt-outs have independent final-state semantics", 
     stderrJSON: null,
     state,
   });
-  const scenario = {
-    name: "sequence",
-    steps: [
-      { name: "first", args: ["status"], compareState: false },
-      { name: "second", args: ["status"] },
-    ],
-  };
-  const differences = compareOutput(
-    scenario,
-    { ...result({ value: "ts-step" }), steps: [result({ value: "ts-step" }), result({ value: "same" })], finalState: { value: "ts-final" } },
-    { ...result({ value: "go-step" }), steps: [result({ value: "go-step" }), result({ value: "same" })], finalState: { value: "go-final" } },
+  const differences = compareGoldenScenario(
+    {
+      name: "sequence",
+      steps: [
+        { name: "first", exitCode: 0, stdout: { kind: "text", value: "" }, stderr: { kind: "text", value: "" } },
+        { name: "second", exitCode: 0, stdout: { kind: "text", value: "" }, stderr: { kind: "text", value: "" }, state: '{"value":"same"}' },
+      ],
+    },
+    { ...result({ value: "different" }), steps: [result({ value: "ignored" }), result({ value: "same" })], finalState: { value: "ignored" } },
     [],
   );
-  assert.deepEqual(differences, ["final state differs"]);
-
-  const finalOptOut = compareOutput(
-    { ...scenario, compareFinalState: false },
-    { ...result(null), steps: [result({ value: "same" }), result({ value: "same" })], finalState: { value: "ts-final" } },
-    { ...result(null), steps: [result({ value: "same" }), result({ value: "same" })], finalState: { value: "go-final" } },
-    [],
-  );
-  assert.deepEqual(finalOptOut, []);
-
-  const scenarioOptOut = compareOutput(
-    { ...scenario, compareState: false },
-    { ...result(null), steps: [result({ value: "ts" }), result({ value: "ts" })], finalState: { value: "ts-final" } },
-    { ...result(null), steps: [result({ value: "go" }), result({ value: "go" })], finalState: { value: "go-final" } },
-    [],
-  );
-  assert.deepEqual(scenarioOptOut, []);
+  assert.deepEqual(differences, ["step 2 (second): state differs"]);
 });
 
 test("step interpolation diagnostics preserve the source failure output", () => {
