@@ -113,11 +113,14 @@ func runtimeShell(ctx context.Context, input ShellRouteInput, now func() time.Ti
 		return ShellResult{}, errors.New("shell lifecycle operations are not configured")
 	}
 	terminal := options.ShellTerminal
+	stopShellSignals := func() {}
 	if terminal == nil {
 		_, _, lifecycleService, err := runtimeState(input.Repository, now, newID)
 		if err != nil {
 			return ShellResult{}, err
 		}
+		shellSignals, stopSignals := runtimeManagedSignals()
+		stopShellSignals = stopSignals
 		terminal = NewNativeShellTerminal(ShellTerminalOptions{
 			Register: func(ctx context.Context, assignmentID string, record state.TrackedProcessRecord) error {
 				_, err := lifecycleService.AddAssignmentProcess(ctx, assignmentID, record)
@@ -127,8 +130,10 @@ func runtimeShell(ctx context.Context, input ShellRouteInput, now func() time.Ti
 				_, err := lifecycleService.RemoveAssignmentProcess(ctx, assignmentID, record.PID, record.StartedAt)
 				return err
 			},
+			Signals: shellSignals,
 		})
 	}
+	defer stopShellSignals()
 	service := NewShellService(ShellOptions{
 		Acquire: func(ctx context.Context, request AcquireInput) (AcquireResult, error) {
 			return mutations.Acquire(ctx, input.Repository, request)
