@@ -17,6 +17,7 @@
     "test:node": "bun run build:test && bun scripts/run-node-tests.ts",
     "test:coverage": "bun run build:test && bun scripts/run-node-tests.ts --coverage",
     "test:conformance": "bun scripts/conformance/run.ts",
+    "conformance:capture": "bun scripts/conformance/capture-ts.ts",
     "binary:build": "bun scripts/build-binary.ts",
     "binary:check": "bun scripts/verify-binary.ts",
     "binary:cross-check": "bun scripts/verify-cross-binaries.ts",

@@ -126,6 +126,15 @@ jobs:
         env:
           RUK_CONFORMANCE_VERBOSE: "1"
         run: bun run test:conformance
+      - name: Capture frozen TypeScript conformance
+        run: bun run conformance:capture
+      - name: Upload frozen conformance candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: conformance-golden-${{ github.sha }}
+          path: test/conformance/golden.json
+          if-no-files-found: error
+          retention-days: 1
 
   npm-smoke:
     name: Native npm install (${{ matrix.os }})
