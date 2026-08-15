@@ -59,13 +59,13 @@ func TestInstallerPrepareTableDrivenContracts(t *testing.T) {
 				Name: "pnpm", Version: "10.12.1", Command: []string{"pnpm", "install"}, DependencyMode: "managed",
 			},
 			runnerResult: CommandResult{ExitCode: 7, Stderr: "lockfile mismatch\n"},
-			wantErr:      "Dependency installation failed: pnpm install failed with exit code 7: lockfile mismatch", wantStderr: "lockfile mismatch\n", wantInvocation: true,
+			wantArgs:     []string{"install"}, wantErr: "Dependency installation failed: pnpm install failed with exit code 7: lockfile mismatch", wantStderr: "lockfile mismatch\n", wantInvocation: true,
 		},
 		{
 			name:      "runner failure is wrapped and retains cause",
 			manager:   PackageManager{Name: "bun", Command: []string{"bun", "install"}, DependencyMode: "managed"},
 			runnerErr: spawnFailure,
-			wantErr:   "Dependency installation failed: spawn failed", wantCause: spawnFailure, wantInvocation: true,
+			wantArgs:  []string{"install"}, wantErr: "Dependency installation failed: spawn failed", wantCause: spawnFailure, wantInvocation: true,
 		},
 	}
 
