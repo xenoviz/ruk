@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+
+	"github.com/xenoviz/ruk/internal/state"
 )
 
 // NativePIDSignaler sends POSIX signals directly to one exact PID.
