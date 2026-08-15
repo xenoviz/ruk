@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -372,32 +371,8 @@ type netBoundListener struct{ listener net.Listener }
 func (listener netBoundListener) Port() int    { return listener.listener.Addr().(*net.TCPAddr).Port }
 func (listener netBoundListener) Close() error { return listener.listener.Close() }
 
-type defaultReleaseProcessesAdapter struct{ tracker processpkg.Tracker }
-
-func (adapter defaultReleaseProcessesAdapter) Exists(ctx context.Context, record state.TrackedProcessRecord) (bool, error) {
-	return adapter.tracker.Exists(ctx, record)
-}
-
-func (adapter defaultReleaseProcessesAdapter) Terminate(ctx context.Context, record state.TrackedProcessRecord, _ bool) (bool, error) {
-	if record.GroupID != nil {
-		return false, &processpkg.IdentityUnavailableError{PID: int(record.PID), Cause: errors.New("detached process termination adapter is unavailable")}
-	}
-	alive, err := adapter.tracker.Exists(ctx, record)
-	if err != nil || !alive {
-		return false, err
-	}
-	child, err := os.FindProcess(int(record.PID))
-	if err != nil {
-		return false, err
-	}
-	if err := child.Kill(); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 func defaultReleaseProcesses() lifecycle.ReleaseProcesser {
-	return defaultReleaseProcessesAdapter{tracker: processpkg.NewTracker()}
+	return processpkg.NewNativeProcessManager()
 }
 
 func defaultPoolPath(repositoryRoot, branch string) (string, error) {
