@@ -31,6 +31,16 @@ type Tracker struct {
 	DescendantsExist func(context.Context, int) (bool, error)
 }
 
+// NewTracker composes Ruk's native identity and descendant probes. On Windows
+// this path uses kernel APIs directly and never launches PowerShell.
+func NewTracker() Tracker {
+	descendants := DescendantInspector{Table: NativeTable{}}
+	return Tracker{
+		Probe:            Inspector{},
+		DescendantsExist: descendants.Exists,
+	}
+}
+
 // Exists reports whether record still owns a live process tree. Unknown
 // identity or descendant state returns IdentityUnavailableError instead of
 // incorrectly authorizing workspace release.
