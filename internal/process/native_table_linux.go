@@ -41,6 +41,27 @@ func snapshotPlatform(ctx context.Context) ([]Entry, error) {
 			entries = append(entries, entry)
 		}
 	}
+	currentPID := os.Getpid()
+	for _, entry := range entries {
+		if entry.PID == currentPID {
+			return entries, nil
+		}
+	}
+	// Some container runtimes expose a procfs mounted from an outer PID
+	// namespace. /proc/self remains authoritative for this process even when
+	// the numeric directory rows use the outer namespace identifiers.
+	stat, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		return nil, fmt.Errorf("read current Linux process: %w", err)
+	}
+	current, state, err := parseLinuxProcessEntry(string(stat))
+	if err != nil {
+		return nil, fmt.Errorf("read current Linux process: %w", err)
+	}
+	if state != "Z" {
+		current.PID = currentPID
+		entries = append(entries, current)
+	}
 	return entries, nil
 }
 
