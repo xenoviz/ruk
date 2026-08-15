@@ -85,6 +85,61 @@ func TestPrereleaseSelection(t *testing.T) {
 	}
 }
 
+func TestCurrentPrereleaseStaysOnPrereleaseChannel(t *testing.T) {
+	updater := New(Hooks{Discover: func(context.Context) ([]Release, error) {
+		return []Release{testRelease("0.3.0-beta.2", []byte("beta")), testRelease("0.2.9", []byte("stable"))}, nil
+	}})
+	result, err := updater.Update(context.Background(), Options{
+		Distribution: DistributionPackage, CurrentVersion: "0.3.0-beta.1", CheckOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.LatestVersion != "0.3.0-beta.2" || result.Status != StatusUpdateAvailable {
+		t.Fatalf("unexpected prerelease result: %+v", result)
+	}
+}
+
+func TestParseVersionRejectsInvalidPrereleaseCharacters(t *testing.T) {
+	for _, version := range []string{"0.3.0-beta/1", "0.3.0-beta_1", "0.3.0-β", "0.3.0-beta 1"} {
+		if _, err := ParseVersion(version); err == nil {
+			t.Fatalf("ParseVersion(%q) succeeded", version)
+		}
+	}
+}
+
+func TestCommandTailIsBounded(t *testing.T) {
+	buffer := newTailBuffer(8)
+	if written, err := buffer.Write([]byte("012345")); err != nil || written != 6 {
+		t.Fatalf("first write = %d, %v", written, err)
+	}
+	if written, err := buffer.Write([]byte("6789ABCDEF")); err != nil || written != 10 {
+		t.Fatalf("second write = %d, %v", written, err)
+	}
+	if got := buffer.String(); got != "89ABCDEF" {
+		t.Fatalf("tail = %q", got)
+	}
+}
+
+func TestOSFileSystemCopyDoesNotOverwrite(t *testing.T) {
+	directory := t.TempDir()
+	source := filepath.Join(directory, "source")
+	destination := filepath.Join(directory, "destination")
+	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (OSFileSystem{}).Copy(source, destination); err == nil {
+		t.Fatal("Copy succeeded over an existing backup")
+	}
+	contents, err := os.ReadFile(destination)
+	if err != nil || string(contents) != "keep" {
+		t.Fatalf("destination = %q, %v", contents, err)
+	}
+}
+
 func TestChecksumMismatch(t *testing.T) {
 	updater := New(Hooks{Discover: func(context.Context) ([]Release, error) {
 		release := testRelease("0.3.0", []byte("actual"))
