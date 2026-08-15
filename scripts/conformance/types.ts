@@ -30,12 +30,11 @@ export interface ConformanceScenario {
 export interface ConformanceOptions {
   root?: string;
   keepTemporary?: boolean;
-  typescriptEntry?: string;
   goPackage?: string;
 }
 
 export interface BuiltCLI {
-  name: "typescript" | "go";
+  name: "go";
   command: string;
   args: readonly string[];
   environment?: Readonly<Record<string, string>>;
