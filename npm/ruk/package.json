@@ -1,0 +1,30 @@
+{
+  "name": "@xenoviz/ruk",
+  "version": "0.1.2",
+  "description": "Dependency-aware Git workspaces for parallel coding agents",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "ruk": "bin/ruk"
+  },
+  "files": [
+    "bin/ruk",
+    "scripts/npm"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/npm/install.mjs"
+  },
+  "optionalDependencies": {
+    "@xenoviz/ruk-linux-x64": "0.1.2",
+    "@xenoviz/ruk-linux-arm64": "0.1.2",
+    "@xenoviz/ruk-linux-x64-musl": "0.1.2",
+    "@xenoviz/ruk-darwin-x64": "0.1.2",
+    "@xenoviz/ruk-darwin-arm64": "0.1.2",
+    "@xenoviz/ruk-windows-x64": "0.1.2",
+    "@xenoviz/ruk-windows-arm64": "0.1.2"
+  },
+  "ruk": {
+    "distribution": "package",
+    "binaryPath": "bin/ruk"
+  }
+}
