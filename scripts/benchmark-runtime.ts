@@ -188,12 +188,16 @@ async function measureWrappers(
   const started = performance.now();
   const children = commands.map((spec) => spawn(spec.command, spec.args, {
     cwd: spec.cwd,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   }));
-  const completion = Promise.all(children.map((child) => new Promise<number>((resolve, reject) => {
+  const completion = Promise.all(children.map((child) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
     child.once("error", reject);
-    child.once("close", (code) => resolve(code ?? 1));
+    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
   })));
   let idleResidentBytes = 0;
   let coldResidentBytes = 0;
@@ -239,9 +243,14 @@ async function measureWrappers(
     }
     await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 100 : 50));
   }
-  const codes = await completion;
-  if (codes.some((code) => code !== 0)) {
-    throw new Error(`benchmark wrapper exited nonzero: ${codes.join(", ")}`);
+  const results = await completion;
+  const failures = results
+    .map((result, index) => ({ ...result, index }))
+    .filter((result) => result.code !== 0);
+  if (failures.length > 0) {
+    throw new Error(`benchmark wrapper failures: ${failures.map((failure) => (
+      `#${failure.index + 1} code=${failure.code} stderr=${JSON.stringify(failure.stderr.trim())} stdout=${JSON.stringify(failure.stdout.trim())}`
+    )).join("; ")}`);
   }
   return {
     elapsedMs: performance.now() - started,
@@ -426,7 +435,7 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
     const nodeExecutable = process.env["RUK_BENCH_NODE"] ?? "node";
     const nodeVersion = await requireSuccess({ command: nodeExecutable, args: ["--version"], cwd: root });
     const node: Target = {
-      name: "node", version: nodeVersion, sizePath: path.join(root, "dist"), command: nodeExecutable,
+      name: "node", version: nodeVersion, sizePath: path.dirname(path.dirname(parsed.nodeCli)), command: nodeExecutable,
       prefix: [parsed.nodeCli], childCommand: nodeExecutable, cwd: root,
     };
     const repository = await makeRepository(temporary, node, nodeExecutable);
