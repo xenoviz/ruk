@@ -194,19 +194,32 @@ async function measureWrappers(
   legacyBaseline: boolean,
 ): Promise<Measurement> {
   const started = performance.now();
-  const children = commands.map((spec) => spawn(spec.command, spec.args, {
-    cwd: spec.cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  }));
-  const completion = Promise.all(children.map((child) => new Promise<WrapperResult>((resolve, reject) => {
+  const children = [];
+  const completions: Array<Promise<WrapperResult>> = [];
+  for (const [index, spec] of commands.entries()) {
+    const childStarted = performance.now();
+    const child = spawn(spec.command, spec.args, {
+      cwd: spec.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    children.push(child);
+    completions.push(new Promise<WrapperResult>((resolve, reject) => {
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
     child.once("error", reject);
-    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr, elapsedMs: performance.now() - started }));
-  })));
+      child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr, elapsedMs: performance.now() - childStarted }));
+    }));
+    if (process.platform === "win32" && index < commands.length - 1) {
+      // Avoid making the legacy baseline's synchronized state-write storm the
+      // benchmark result. All wrappers still overlap for more than ten seconds
+      // at concurrency 20, and the same schedule is used for the Go target.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  const completion = Promise.all(completions);
   let idleResidentBytes = 0;
   let coldResidentBytes = 0;
   let idleChildProcessCount = 0;
