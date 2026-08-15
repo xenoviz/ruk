@@ -89,7 +89,7 @@ func TestEnsureDependenciesPreparesAndPublishesProjectionMetadata(t *testing.T) 
 }
 
 func TestEnsureDependenciesUsesSharedModeContract(t *testing.T) {
-	input, _, root := newEnsureFixture(t)
+	input, _, _ := newEnsureFixture(t)
 	input.Manager = PackageManager{
 		Name: "bun", Version: "1.3.14", Command: []string{"bun", "install"}, DependencyMode: "shared",
 	}
