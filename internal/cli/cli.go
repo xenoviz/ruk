@@ -48,6 +48,7 @@ type Options struct {
 	Distribution       updatepkg.Distribution
 	Stdout             io.Writer
 	Stderr             io.Writer
+	Stdin              io.Reader
 	Update             UpdateOperation
 	Renew              RepositoryRenewOperation
 	Sync               SyncRouteOperation
@@ -59,6 +60,7 @@ type Options struct {
 	GC                 GCRouteOperation
 	Run                RunRouteOperation
 	Exec               ExecRouteOperation
+	Shell              ShellRouteOperation
 	CWD                string
 	DiscoverRepository RepositoryDiscovery
 	Queries            QueryDependencies
@@ -126,6 +128,27 @@ type ExecRouteInput struct {
 // ExecRouteOperation executes exec and returns the child exit code directly.
 type ExecRouteOperation func(context.Context, ExecRouteInput) (int, error)
 
+// ShellRouteInput contains the discovered repository, validated acquisition
+// options, and the application's interactive stdio streams.
+type ShellRouteInput struct {
+	Repository git.Repository
+	CWD        string
+	Branch     string
+	From       string
+	Fetch      bool
+	TTL        string
+	Owner      string
+	Ports      []string
+	Now        time.Time
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
+}
+
+// ShellRouteOperation executes one interactive managed shell and returns its
+// exact terminal/release result.
+type ShellRouteOperation func(context.Context, ShellRouteInput) (ShellResult, error)
+
 // RepositoryDiscovery resolves the current checkout without coupling the
 // command router to Git subprocesses in compatibility tests.
 type RepositoryDiscovery func(context.Context, string) (git.Repository, error)
@@ -136,6 +159,7 @@ type Application struct {
 	distribution updatepkg.Distribution
 	stdout       io.Writer
 	stderr       io.Writer
+	stdin        io.Reader
 	update       UpdateOperation
 	renew        RepositoryRenewOperation
 	sync         SyncRouteOperation
@@ -147,6 +171,7 @@ type Application struct {
 	gc           GCRouteOperation
 	run          RunRouteOperation
 	exec         ExecRouteOperation
+	shell        ShellRouteOperation
 	cwd          string
 	discover     RepositoryDiscovery
 	queries      QueryDependencies
@@ -162,6 +187,10 @@ func New(options Options) *Application {
 	stderr := options.Stderr
 	if stderr == nil {
 		stderr = io.Discard
+	}
+	stdin := options.Stdin
+	if stdin == nil {
+		stdin = os.Stdin
 	}
 	distribution := options.Distribution
 	if distribution == "" {
@@ -199,6 +228,7 @@ func New(options Options) *Application {
 		distribution: distribution,
 		stdout:       stdout,
 		stderr:       stderr,
+		stdin:        stdin,
 		update:       updateOperation,
 		renew:        renewOperation,
 		sync:         options.Sync,
@@ -210,6 +240,7 @@ func New(options Options) *Application {
 		gc:           options.GC,
 		run:          options.Run,
 		exec:         options.Exec,
+		shell:        options.Shell,
 		cwd:          cwd,
 		discover:     discover,
 		queries:      mergeQueryDependencies(options.Queries, defaultQueryDependencies()),
@@ -463,6 +494,33 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 			Now:                 now,
 		})
 		return exitCode, err
+	}
+	if invocation.Name == "shell" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.shell == nil {
+			return 1, errors.New("shell command is not configured")
+		}
+		result, err := application.shell(ctx, ShellRouteInput{
+			Repository: repository,
+			CWD:        application.cwd,
+			Branch:     invocation.Branch,
+			From:       invocation.From,
+			Fetch:      invocation.Fetch,
+			TTL:        invocation.TTL,
+			Owner:      invocation.Owner,
+			Ports:      append([]string(nil), invocation.Ports...),
+			Now:        application.now(),
+			Stdin:      application.stdin,
+			Stdout:     application.stdout,
+			Stderr:     application.stderr,
+		})
+		if err != nil {
+			return 1, err
+		}
+		return result.ExitCode, nil
 	}
 	if invocation.Name == "renew" {
 		repository, err := application.discover(ctx, application.cwd)
