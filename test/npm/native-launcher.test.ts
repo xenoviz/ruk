@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  installerFromEnvironment,
   installNativeLauncher,
   platformTarget,
   windowsCommandDestination,
@@ -108,7 +109,18 @@ test("installer validates and atomically places the exact native binary", async 
   const result = await installNativeLauncher({ root: value.root, platform: "linux", arch: "x64", libc: "glibc" });
   assert.equal(result.packageName, "@xenoviz/ruk-linux-x64");
   assert.deepEqual(await fs.readFile(path.join(value.root, "bin", "ruk")), value.contents);
-  assert.equal(await fs.readFile(path.join(value.root, "bin", ".ruk-distribution"), "utf8"), "package\n");
+  assert.deepEqual(
+    JSON.parse(await fs.readFile(`${path.join(value.root, "bin", "ruk")}.ruk-distribution`, "utf8")),
+    { schemaVersion: 1, distribution: "package", installer: "npm" },
+  );
+});
+
+test("installer ownership is derived from the package manager lifecycle", () => {
+  assert.equal(installerFromEnvironment({ npm_execpath: "/home/me/.bun/bin/bun" }), "bun");
+  assert.equal(installerFromEnvironment({ npm_execpath: "/pnpm/pnpm.cjs" }), "pnpm");
+  assert.equal(installerFromEnvironment({ npm_execpath: "/yarn/bin/yarn.js" }), "yarn");
+  assert.equal(installerFromEnvironment({ npm_execpath: "/npm/bin/npm-cli.js" }), "npm");
+  assert.equal(installerFromEnvironment({}), "npm");
 });
 
 test("Windows installation places an executable ahead of npm's Node shim", async (t) => {
@@ -143,11 +155,16 @@ test("Windows installation places an executable ahead of npm's Node shim", async
     platform: "win32",
     arch: "x64",
     commandDestination,
+    environment: { npm_execpath: "C:\\pnpm\\pnpm.cjs" },
   });
 
   assert.equal(result.destination, path.join(root, "bin", "ruk.exe"));
   assert.deepEqual(await fs.readFile(result.destination), contents);
   assert.deepEqual(await fs.readFile(commandDestination), contents);
+  assert.deepEqual(
+    JSON.parse(await fs.readFile(`${commandDestination}.ruk-distribution`, "utf8")),
+    { schemaVersion: 1, distribution: "package", installer: "pnpm" },
+  );
 });
 
 test("Windows command placement follows npm local and global prefixes", () => {
