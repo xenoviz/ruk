@@ -2,10 +2,26 @@ package process_test
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	processpkg "github.com/xenoviz/ruk/internal/process"
 )
+
+func TestNativeTableContainsCurrentProcess(t *testing.T) {
+	t.Parallel()
+
+	entries, err := (processpkg.NativeTable{}).Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot returned an error: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.PID == os.Getpid() {
+			return
+		}
+	}
+	t.Fatalf("current process %d was absent from native snapshot", os.Getpid())
+}
 
 type staticProcessTable []processpkg.Entry
 
