@@ -243,6 +243,24 @@ func TestDetectInstallerUsesDurablePackageMarker(t *testing.T) {
 	}
 }
 
+func TestDetectLinuxMuslUsesTheNativeLoader(t *testing.T) {
+	called := false
+	musl := detectMuslWith("linux", func(pattern string) ([]string, error) {
+		called = true
+		if pattern != "/lib/ld-musl-*.so.1" {
+			t.Fatalf("loader pattern = %q", pattern)
+		}
+		return []string{"/lib/ld-musl-x86_64.so.1"}, nil
+	})
+	if !called || !musl {
+		t.Fatalf("called=%v musl=%v, want native musl detection", called, musl)
+	}
+	called = false
+	if detectMuslWith("darwin", func(string) ([]string, error) { called = true; return nil, nil }) || called {
+		t.Fatal("non-Linux platform probed for a musl loader")
+	}
+}
+
 func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
 	helper, script, err := WindowsReplacementPlan(`C:\\bin\\ruk.exe`, `C:\\bin\\.ruk.exe.new`, "0.3.0-beta.1", 4242)
 	if err != nil {
