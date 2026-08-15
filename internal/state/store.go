@@ -138,7 +138,7 @@ func (store *Store) replace(encoded []byte) (result error) {
 	if err := os.Chmod(temporary, 0o600); err != nil {
 		return fmt.Errorf("secure temporary state %s: %w", temporary, err)
 	}
-	if err := os.Rename(temporary, store.paths.State); err != nil {
+	if err := replaceStateFile(temporary, store.paths.State); err != nil {
 		return fmt.Errorf("replace state %s: %w", store.paths.State, err)
 	}
 	committed = true
