@@ -256,8 +256,7 @@ jobs:
       - name: Publish native npm package with provenance
         env:
           NPM_TAG: ${{ contains(github.ref_name, '-') && 'beta' || 'latest' }}
-        run: |
-          npm publish --access public --provenance --tag "$NPM_TAG" --ignore-scripts ./platform-package
+        run: node scripts/npm/publish.mjs --directory platform-package --tag "$NPM_TAG"
 
   package:
     name: Publish verified metadata npm package
@@ -292,7 +291,7 @@ jobs:
       - name: Publish metadata package with npm provenance
         env:
           NPM_TAG: ${{ contains(github.ref_name, '-') && 'beta' || 'latest' }}
-        run: npm publish --access public --provenance --tag "$NPM_TAG" --ignore-scripts ./root-package
+        run: node scripts/npm/publish.mjs --directory root-package --tag "$NPM_TAG"
 
   finalize:
     name: Finalize ready release
