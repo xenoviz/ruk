@@ -112,6 +112,9 @@ func TestShellReleasesAfterDrainedTerminalAndPreservesStdioAndStatus(t *testing.
 	if terminal.request.Stdin != stdin || terminal.request.Stdout != stdout || terminal.request.Stderr != stderr {
 		t.Fatal("terminal did not receive the caller's stdio")
 	}
+	if stderr.String() != "Shell workspace: /workspaces/one\nAssignment: assignment-1\n" {
+		t.Fatalf("shell handoff diagnostic = %q", stderr.String())
+	}
 }
 
 func TestShellReturnsAcquireFailureWithoutStartingOrReleasing(t *testing.T) {
