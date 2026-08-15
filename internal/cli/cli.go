@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xenoviz/ruk/internal/git"
+	"github.com/xenoviz/ruk/internal/lifecycle"
 	"github.com/xenoviz/ruk/internal/state"
 	updatepkg "github.com/xenoviz/ruk/internal/update"
 )
@@ -54,6 +55,10 @@ type Options struct {
 	Acquire            AcquireRouteOperation
 	Release            ReleaseRouteOperation
 	Remove             RemoveRouteOperation
+	Warm               WarmRouteOperation
+	GC                 GCRouteOperation
+	Run                RunRouteOperation
+	Exec               ExecRouteOperation
 	CWD                string
 	DiscoverRepository RepositoryDiscovery
 	Queries            QueryDependencies
@@ -85,6 +90,42 @@ type ReleaseRouteOperation func(context.Context, ReleaseInput) (ReleaseResult, e
 // RemoveRouteOperation performs remove, which has no success output.
 type RemoveRouteOperation func(context.Context, RemoveInput) error
 
+// WarmRouteOperation executes warm after repository discovery. Warm validates
+// the public input before invoking this seam with a typed request.
+type WarmRouteOperation func(context.Context, git.Repository, WarmRequest) (lifecycle.WarmResult, error)
+
+// GCRouteOperation executes garbage collection after repository discovery. GC
+// validates options and computes its cutoff before invoking this seam.
+type GCRouteOperation func(context.Context, git.Repository, GCRequest) (lifecycle.GCResult, error)
+
+// RunRouteInput contains the discovered repository and validated run options.
+// The route returns the child exit code directly; it does not render success.
+type RunRouteInput struct {
+	Repository          git.Repository
+	CWD                 string
+	Command             []string
+	AllowSharedCheckout bool
+	Now                 time.Time
+}
+
+// RunRouteOperation executes run with one discovered repository.
+type RunRouteOperation func(context.Context, RunRouteInput) (int, error)
+
+// ExecRouteInput contains the discovered repository, acquisition options, and
+// command for exec. AcquireInput carries the validated lease/start-point
+// options and the application clock without reparsing CLI arguments.
+type ExecRouteInput struct {
+	Repository          git.Repository
+	CWD                 string
+	Acquire             AcquireInput
+	Command             []string
+	AllowSharedCheckout bool
+	Now                 time.Time
+}
+
+// ExecRouteOperation executes exec and returns the child exit code directly.
+type ExecRouteOperation func(context.Context, ExecRouteInput) (int, error)
+
 // RepositoryDiscovery resolves the current checkout without coupling the
 // command router to Git subprocesses in compatibility tests.
 type RepositoryDiscovery func(context.Context, string) (git.Repository, error)
@@ -102,6 +143,10 @@ type Application struct {
 	acquire      AcquireRouteOperation
 	release      ReleaseRouteOperation
 	remove       RemoveRouteOperation
+	warm         WarmRouteOperation
+	gc           GCRouteOperation
+	run          RunRouteOperation
+	exec         ExecRouteOperation
 	cwd          string
 	discover     RepositoryDiscovery
 	queries      QueryDependencies
@@ -161,6 +206,10 @@ func New(options Options) *Application {
 		acquire:      options.Acquire,
 		release:      options.Release,
 		remove:       options.Remove,
+		warm:         options.Warm,
+		gc:           options.GC,
+		run:          options.Run,
+		exec:         options.Exec,
 		cwd:          cwd,
 		discover:     discover,
 		queries:      mergeQueryDependencies(options.Queries, defaultQueryDependencies()),
@@ -319,6 +368,101 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 			return 1, err
 		}
 		return 0, nil
+	}
+	if invocation.Name == "warm" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.warm == nil {
+			return 1, errors.New("warm command is not configured")
+		}
+		result, err := Warm(ctx, WarmInput{
+			Count: invocation.Count,
+			From:  invocation.From,
+			Fetch: invocation.Fetch,
+			JSON:  invocation.JSON,
+		}, func(ctx context.Context, request WarmRequest) (lifecycle.WarmResult, error) {
+			return application.warm(ctx, repository, request)
+		})
+		if err != nil {
+			return 1, err
+		}
+		if _, err := io.WriteString(application.stdout, result.Output); err != nil {
+			return 1, fmt.Errorf("write warm result: %w", err)
+		}
+		return 0, nil
+	}
+	if invocation.Name == "gc" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.gc == nil {
+			return 1, errors.New("gc command is not configured")
+		}
+		result, err := GC(ctx, GCInput{
+			MaxAgeMinutes:        invocation.MaxAge,
+			Apply:                invocation.Apply,
+			ForceExpired:         invocation.ForceExpired,
+			JSON:                 invocation.JSON,
+			CurrentWorkspacePath: application.cwd,
+			Now:                  application.now(),
+		}, func(ctx context.Context, request GCRequest) (lifecycle.GCResult, error) {
+			return application.gc(ctx, repository, request)
+		})
+		if err != nil {
+			return 1, err
+		}
+		if _, err := io.WriteString(application.stdout, result.Output); err != nil {
+			return 1, fmt.Errorf("write gc result: %w", err)
+		}
+		return 0, nil
+	}
+	if invocation.Name == "run" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.run == nil {
+			return 1, errors.New("run command is not configured")
+		}
+		exitCode, err := application.run(ctx, RunRouteInput{
+			Repository:          repository,
+			CWD:                 application.cwd,
+			Command:             append([]string(nil), invocation.Command...),
+			AllowSharedCheckout: invocation.AllowSharedCheckout,
+			Now:                 application.now(),
+		})
+		return exitCode, err
+	}
+	if invocation.Name == "exec" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.exec == nil {
+			return 1, errors.New("exec command is not configured")
+		}
+		now := application.now()
+		exitCode, err := application.exec(ctx, ExecRouteInput{
+			Repository: repository,
+			CWD:        application.cwd,
+			Acquire: AcquireInput{
+				Branch: invocation.Branch,
+				From:   invocation.From,
+				Fetch:  invocation.Fetch,
+				TTL:    invocation.TTL,
+				Owner:  invocation.Owner,
+				Ports:  append([]string(nil), invocation.Ports...),
+				JSON:   invocation.JSON,
+				Now:    now,
+			},
+			Command:             append([]string(nil), invocation.Command...),
+			AllowSharedCheckout: invocation.AllowSharedCheckout,
+			Now:                 now,
+		})
+		return exitCode, err
 	}
 	if invocation.Name == "renew" {
 		repository, err := application.discover(ctx, application.cwd)
