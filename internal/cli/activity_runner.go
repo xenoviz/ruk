@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/xenoviz/ruk/internal/lifecycle"
-	"github.com/xenoviz/ruk/internal/state"
 )
 
 const maxActivityHeartbeatInterval = 5 * time.Minute
