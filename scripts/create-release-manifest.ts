@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createReleaseManifest } from "./release-manifest.js";
-import { VERSION } from "../src/version.js";
+import { readPackageVersion } from "./lib/package.js";
 
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const artifacts = path.join(root, "artifacts");
+const VERSION = await readPackageVersion(root);
 const releaseTag = process.env["RELEASE_TAG"];
 if (releaseTag !== `v${VERSION}` && releaseTag !== VERSION) {
   throw new Error(`Release tag ${String(releaseTag)} does not match ${VERSION}`);

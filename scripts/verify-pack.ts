@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { run } from "../src/process.js";
-import { isRecord } from "../src/types.js";
+import { run } from "./lib/process.js";
+import { isRecord } from "./lib/types.js";
 
 interface PackedFile {
   path: string;

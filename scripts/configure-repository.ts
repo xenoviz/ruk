@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "../src/types.js";
+import { isRecord } from "./lib/types.js";
 
 const apply = process.argv.includes("--apply");
 const repository = process.env["RUK_GITHUB_REPOSITORY"] ?? "xenoviz/ruk";

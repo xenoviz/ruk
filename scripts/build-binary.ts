@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { run } from "../src/process.js";
+import { readPackageVersion } from "./lib/package.js";
+import { run } from "./lib/process.js";
 
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const packageJSON = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as { version?: unknown };
-if (typeof packageJSON.version !== "string" || packageJSON.version.length === 0) {
-  throw new Error("package.json version must be a nonempty string");
-}
-const version = process.env["RUK_VERSION"] ?? packageJSON.version;
+const version = process.env["RUK_VERSION"] ?? await readPackageVersion(root);
 const distribution = process.env["RUK_DISTRIBUTION"] ?? "standalone";
 const targetName = process.env["RUK_BINARY_TARGET"];
 

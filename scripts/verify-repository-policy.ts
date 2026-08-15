@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "../src/types.js";
+import { isRecord } from "./lib/types.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 function requireDefaultBranchTarget(ruleset: Record<string, unknown>, label: string): void {
