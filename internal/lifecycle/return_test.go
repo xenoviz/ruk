@@ -174,6 +174,14 @@ func TestWorkspaceReturnFencesAreTableDriven(t *testing.T) {
 			},
 		},
 		{
+			name: "stale acquisition operation is rejected",
+			action: func(t *testing.T, _ *memoryStore, service *lifecycle.Service, _ *time.Time) error {
+				_, err := service.BeginWorkspaceReturnWithOptions(context.Background(), assignmentID, lifecycle.ReturnOptions{AcquisitionOperationID: "stale-operation"})
+				return err
+			},
+			want: "Assignment " + assignmentID + " acquisition operation does not match",
+		},
+		{
 			name: "empty cancellation reason is machine-readable",
 			action: func(t *testing.T, _ *memoryStore, service *lifecycle.Service, now *time.Time) error {
 				*now = now.Add(time.Hour)
