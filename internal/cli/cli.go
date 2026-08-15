@@ -49,6 +49,11 @@ type Options struct {
 	Stderr             io.Writer
 	Update             UpdateOperation
 	Renew              RepositoryRenewOperation
+	Sync               SyncRouteOperation
+	Create             CreateRouteOperation
+	Acquire            AcquireRouteOperation
+	Release            ReleaseRouteOperation
+	Remove             RemoveRouteOperation
 	CWD                string
 	DiscoverRepository RepositoryDiscovery
 	Queries            QueryDependencies
@@ -63,6 +68,23 @@ type UpdateOperation func(context.Context, updatepkg.Options) (updatepkg.Result,
 // repository while keeping state composition out of compatibility tests.
 type RepositoryRenewOperation func(context.Context, git.Repository, string, time.Time) (state.WorkspaceRecord, error)
 
+// SyncRouteOperation executes init/sync after repository discovery. The
+// operation owns rendering when SyncCommandInput.Emit is true.
+type SyncRouteOperation func(context.Context, SyncCommandInput) (SyncCommandResult, error)
+
+// CreateRouteOperation executes create with the discovered repository. The
+// input carries stdout so the service emits its result exactly once.
+type CreateRouteOperation func(context.Context, CreateCommandInput) (CreateCommandResult, error)
+
+// AcquireRouteOperation executes acquire against one discovered repository.
+type AcquireRouteOperation func(context.Context, git.Repository, AcquireInput) (AcquireResult, error)
+
+// ReleaseRouteOperation executes release and returns its rendered result.
+type ReleaseRouteOperation func(context.Context, ReleaseInput) (ReleaseResult, error)
+
+// RemoveRouteOperation performs remove, which has no success output.
+type RemoveRouteOperation func(context.Context, RemoveInput) error
+
 // RepositoryDiscovery resolves the current checkout without coupling the
 // command router to Git subprocesses in compatibility tests.
 type RepositoryDiscovery func(context.Context, string) (git.Repository, error)
@@ -75,6 +97,11 @@ type Application struct {
 	stderr       io.Writer
 	update       UpdateOperation
 	renew        RepositoryRenewOperation
+	sync         SyncRouteOperation
+	create       CreateRouteOperation
+	acquire      AcquireRouteOperation
+	release      ReleaseRouteOperation
+	remove       RemoveRouteOperation
 	cwd          string
 	discover     RepositoryDiscovery
 	queries      QueryDependencies
@@ -129,6 +156,11 @@ func New(options Options) *Application {
 		stderr:       stderr,
 		update:       updateOperation,
 		renew:        renewOperation,
+		sync:         options.Sync,
+		create:       options.Create,
+		acquire:      options.Acquire,
+		release:      options.Release,
+		remove:       options.Remove,
 		cwd:          cwd,
 		discover:     discover,
 		queries:      mergeQueryDependencies(options.Queries, defaultQueryDependencies()),
@@ -174,6 +206,117 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 		}
 		if _, err := io.WriteString(application.stdout, formatUpdate(result)); err != nil {
 			return 1, fmt.Errorf("write update result: %w", err)
+		}
+		return 0, nil
+	}
+	if invocation.Name == "init" || invocation.Name == "sync" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.sync == nil {
+			return 1, errors.New("sync command is not configured")
+		}
+		_, err = application.sync(ctx, SyncCommandInput{
+			Repository:          repository,
+			JSON:                invocation.JSON,
+			Emit:                true,
+			GuardSharedCheckout: invocation.Name == "sync",
+			AllowSharedCheckout: invocation.AllowSharedCheckout,
+			Output:              application.stdout,
+		})
+		if err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
+	if invocation.Name == "create" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.create == nil {
+			return 1, errors.New("create command is not configured")
+		}
+		_, err = application.create(ctx, CreateCommandInput{
+			Repository: repository,
+			CWD:        application.cwd,
+			Branch:     invocation.Branch,
+			Path:       invocation.Path,
+			From:       invocation.From,
+			Fetch:      invocation.Fetch,
+			Detach:     invocation.Detach,
+			JSON:       invocation.JSON,
+			Output:     application.stdout,
+		})
+		if err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
+	if invocation.Name == "acquire" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.acquire == nil {
+			return 1, errors.New("acquire command is not configured")
+		}
+		result, err := application.acquire(ctx, repository, AcquireInput{
+			Branch: invocation.Branch,
+			From:   invocation.From,
+			Fetch:  invocation.Fetch,
+			TTL:    invocation.TTL,
+			Owner:  invocation.Owner,
+			Ports:  invocation.Ports,
+			JSON:   invocation.JSON,
+			Now:    application.now(),
+		})
+		if err != nil {
+			return 1, err
+		}
+		if _, err := io.WriteString(application.stdout, result.Output); err != nil {
+			return 1, fmt.Errorf("write acquire result: %w", err)
+		}
+		return 0, nil
+	}
+	if invocation.Name == "release" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.release == nil {
+			return 1, errors.New("release command is not configured")
+		}
+		result, err := application.release(ctx, ReleaseInput{
+			Repository:   repository,
+			AssignmentID: invocation.AssignmentID,
+			Force:        invocation.Force,
+			JSON:         invocation.JSON,
+		})
+		if err != nil {
+			return 1, err
+		}
+		if _, err := io.WriteString(application.stdout, result.Output); err != nil {
+			return 1, fmt.Errorf("write release result: %w", err)
+		}
+		return 0, nil
+	}
+	if invocation.Name == "remove" {
+		repository, err := application.discover(ctx, application.cwd)
+		if err != nil {
+			return 1, err
+		}
+		if application.remove == nil {
+			return 1, errors.New("remove command is not configured")
+		}
+		if err := application.remove(ctx, RemoveInput{
+			Repository: repository,
+			CWD:        application.cwd,
+			Path:       invocation.Path,
+			Force:      invocation.Force,
+		}); err != nil {
+			return 1, err
 		}
 		return 0, nil
 	}
