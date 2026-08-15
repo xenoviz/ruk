@@ -3,12 +3,36 @@ package process_test
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/xenoviz/ruk/internal/lock"
 	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
 )
+
+func TestNativeTrackerRecognizesCurrentProcess(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	observed, err := (processpkg.Inspector{}).Inspect(ctx, os.Getpid())
+	if err != nil {
+		t.Fatalf("Inspect returned an error: %v", err)
+	}
+	if !observed.Alive || !observed.IdentityKnown {
+		t.Fatalf("current process state = %#v", observed)
+	}
+	exists, err := processpkg.NewTracker().Exists(ctx, state.TrackedProcessRecord{
+		PID:       int64(os.Getpid()),
+		StartedAt: observed.Identity,
+	})
+	if err != nil {
+		t.Fatalf("Exists returned an error: %v", err)
+	}
+	if !exists {
+		t.Fatal("current process was reported absent")
+	}
+}
 
 type identityProbe func(context.Context, int) (lock.ProcessState, error)
 
