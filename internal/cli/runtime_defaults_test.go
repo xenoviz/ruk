@@ -10,6 +10,7 @@ import (
 
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/lifecycle"
+	"github.com/xenoviz/ruk/internal/lock"
 	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
 )
@@ -128,6 +129,60 @@ func TestRuntimeRunExecutesAnUnmanagedWorkspaceAfterSynchronization(t *testing.T
 	}
 }
 
+func TestRuntimeRunSubscribesAndForwardsManagedSignals(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	key, err := state.TreeKey(repository.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(repository.CommonDir, lock.NewDirectoryLocker(lock.Config{}))
+	if err := store.Update(context.Background(), func(current *state.State) error {
+		current.Workspaces[key] = state.WorkspaceRecord{
+			Path: repository.Root, Managed: true, Lifecycle: state.LifecycleAssigned,
+			Assignment: &state.AssignmentRecord{
+				ID: "assignment-1", Owner: "owner", Hostname: "host",
+				AssignedAt: "2026-08-16T10:00:00.000Z", RenewedAt: "2026-08-16T10:00:00.000Z",
+				ExpiresAt: "2026-08-16T18:00:00.000Z", LeaseDurationMinutes: 480,
+				LastActivityAt: "2026-08-16T10:00:00.000Z", LeaseKeepers: []state.LeaseKeeperRecord{}, Ports: map[string]int64{},
+			},
+			Processes: []state.TrackedProcessRecord{}, CreatedAt: "2026-08-16T10:00:00.000Z", UpdatedAt: "2026-08-16T10:00:00.000Z",
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	group := int64(42)
+	forwarder := &runtimeDefaultsForwarder{}
+	runner := processpkg.Runner{
+		Spawner:   runtimeDefaultsSpawner{called: new(bool), child: &runtimeDefaultsChild{status: processpkg.ExitStatus{Code: 0}}},
+		Describer: runtimeDefaultsDescriber{record: state.TrackedProcessRecord{PID: 42, GroupID: &group, StartedAt: "identity-42"}},
+		Forwarder: forwarder,
+	}
+	signals := make(chan os.Signal, 1)
+	signals <- os.Interrupt
+	stopped := false
+	defaults, err := NewRuntimeDefaults(RuntimeDefaultsOptions{
+		ExecuteRunner: runner,
+		ExecuteSignals: func() (<-chan os.Signal, func()) {
+			return signals, func() { stopped = true }
+		},
+		ExecuteActivity: func(ctx context.Context, _ string, operation func(context.Context) error) error {
+			return operation(ctx)
+		},
+		Mutations: MutationAdapterOptions{Sync: func(context.Context, SyncCommandInput) (SyncCommandResult, error) {
+			return SyncCommandResult{Status: "prepared"}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := defaults.Run(context.Background(), RunRouteInput{Repository: repository, CWD: repository.Root, Command: []string{"tool"}})
+	if err != nil || code != 0 || !stopped || len(forwarder.signals) != 1 || forwarder.signals[0] != os.Interrupt {
+		t.Fatalf("run code=%d error=%v stopped=%v signals=%v", code, err, stopped, forwarder.signals)
+	}
+}
+
 type runtimeDefaultsSpawner struct {
 	called *bool
 	child  processpkg.Child
@@ -147,8 +202,18 @@ func (*runtimeDefaultsChild) PID() int                          { return 42 }
 func (child *runtimeDefaultsChild) Wait() processpkg.ExitStatus { return child.status }
 func (*runtimeDefaultsChild) Signal(os.Signal) error            { return nil }
 
-type runtimeDefaultsDescriber struct{}
+type runtimeDefaultsDescriber struct{ record state.TrackedProcessRecord }
 
-func (runtimeDefaultsDescriber) Describe(context.Context, int, processpkg.ProcessMode, []string) (state.TrackedProcessRecord, error) {
+func (describer runtimeDefaultsDescriber) Describe(context.Context, int, processpkg.ProcessMode, []string) (state.TrackedProcessRecord, error) {
+	if describer.record.PID != 0 {
+		return describer.record, nil
+	}
 	return state.TrackedProcessRecord{PID: 42, StartedAt: "identity-42"}, nil
+}
+
+type runtimeDefaultsForwarder struct{ signals []os.Signal }
+
+func (forwarder *runtimeDefaultsForwarder) Forward(_ context.Context, _ state.TrackedProcessRecord, signal os.Signal) error {
+	forwarder.signals = append(forwarder.signals, signal)
+	return nil
 }
