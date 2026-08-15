@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // DependencyMode controls how dependencies are prepared for a workspace.
@@ -40,6 +42,91 @@ type Config struct {
 	InstallCommand       []string             `json:"installCommand"`
 	DependencyMode       *DependencyMode      `json:"dependencyMode"`
 	SharedCheckoutPolicy SharedCheckoutPolicy `json:"sharedCheckoutPolicy"`
+}
+
+// PackageManager is the selected installer and its effective dependency mode.
+type PackageManager struct {
+	Name           string
+	Command        []string
+	DependencyMode DependencyMode
+}
+
+// CommandExists is the small operating-system seam used by automatic manager
+// detection. Tests and callers can inject a PATH policy without launching a
+// process.
+type CommandExists func(name string) bool
+
+// DetectPackageManager selects an installer from config, package.json, and
+// lockfiles. An optional command-existence function replaces PATH probing.
+func DetectPackageManager(root string, config Config, exists ...CommandExists) (PackageManager, error) {
+	if config.InstallCommand != nil {
+		if len(config.InstallCommand) == 0 {
+			return PackageManager{}, errors.New("installCommand cannot be empty")
+		}
+		executable := config.InstallCommand[0]
+		if executable == "" {
+			return PackageManager{}, errors.New("installCommand cannot be empty")
+		}
+		mode := Managed
+		if config.DependencyMode != nil {
+			mode = *config.DependencyMode
+		}
+		name := filepath.Base(executable)
+		if len(name) >= len(".exe") && strings.EqualFold(name[len(name)-len(".exe"):], ".exe") {
+			name = name[:len(name)-len(".exe")]
+		}
+		return PackageManager{Name: name, Command: append([]string(nil), config.InstallCommand...), DependencyMode: mode}, nil
+	}
+
+	name, err := packageManagerFromPackageJSON(root)
+	if err != nil {
+		return PackageManager{}, err
+	}
+	if name == "" {
+		lockfile := firstExistingLockfile(root)
+		switch lockfile {
+		case "bun.lock", "bun.lockb":
+			name = "bun"
+		case "pnpm-lock.yaml":
+			name = "pnpm"
+		case "yarn.lock":
+			name = "yarn"
+		default:
+			name = "npm"
+		}
+	}
+
+	commandExists := defaultCommandExists
+	if len(exists) > 0 && exists[0] != nil {
+		commandExists = exists[0]
+	}
+	if !commandExists(name) {
+		return PackageManager{}, fmt.Errorf("%s is required but was not found on PATH", name)
+	}
+
+	var command []string
+	switch name {
+	case "bun", "pnpm":
+		command = []string{name, "install", "--frozen-lockfile"}
+	case "yarn":
+		command = []string{name, "install", "--frozen-lockfile"}
+	default:
+		if firstExisting(root, []string{"package-lock.json"}) != "" {
+			command = []string{name, "ci"}
+		} else {
+			command = []string{name, "install"}
+		}
+	}
+
+	mode := config.DependencyMode
+	if mode == nil {
+		selected := Managed
+		if name == "bun" || name == "pnpm" {
+			selected = Shared
+		}
+		mode = &selected
+	}
+	return PackageManager{Name: name, Command: command, DependencyMode: *mode}, nil
 }
 
 // Load reads .rukrc.json from root and applies the Ruk environment overrides.
@@ -147,6 +234,52 @@ func readFileConfig(file string) (map[string]json.RawMessage, bool, error) {
 		return nil, false, fmt.Errorf("Cannot read %s: %w", file, err)
 	}
 	return object, true, nil
+}
+
+func packageManagerFromPackageJSON(root string) (string, error) {
+	file := filepath.Join(root, "package.json")
+	contents, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("Cannot read %s: %w", file, err)
+	}
+	var value any
+	if err := json.Unmarshal(contents, &value); err != nil {
+		return "", fmt.Errorf("Cannot read %s: %w", file, err)
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return "", nil
+	}
+	packageManager, ok := object["packageManager"].(string)
+	if !ok {
+		return "", nil
+	}
+	separator := strings.LastIndex(packageManager, "@")
+	if separator > 0 {
+		return packageManager[:separator], nil
+	}
+	return packageManager, nil
+}
+
+func firstExistingLockfile(root string) string {
+	return firstExisting(root, []string{"bun.lock", "bun.lockb", "pnpm-lock.yaml", "yarn.lock", "package-lock.json"})
+}
+
+func firstExisting(root string, names []string) string {
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+			return name
+		}
+	}
+	return ""
+}
+
+func defaultCommandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 func unknownKeys(object map[string]json.RawMessage) []string {
