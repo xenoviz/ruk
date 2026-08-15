@@ -66,6 +66,26 @@ func TestWorkspaceServiceCreateUsesGitAddWithinManagedRoot(t *testing.T) {
 	}
 }
 
+func TestWorkspaceServiceAssignUsesExistingManagedWorktree(t *testing.T) {
+	runner := &fakeRunner{results: map[string]rukgit.CommandResult{
+		"show-ref --verify --quiet refs/heads/agent/task": {},
+		"switch agent/task": {},
+	}}
+	service, _, managedRoot := newWorkspaceService(t, runner)
+	destination := filepath.Join(managedRoot, "task")
+
+	if err := service.Assign(context.Background(), destination, "agent/task", "origin/main"); err != nil {
+		t.Fatalf("Assign returned an error: %v", err)
+	}
+	want := [][]string{
+		{"show-ref", "--verify", "--quiet", "refs/heads/agent/task"},
+		{"switch", "agent/task"},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestWorkspaceServiceAcceptsNewChildBelowCanonicalPool(t *testing.T) {
 	runner := &fakeRunner{results: map[string]rukgit.CommandResult{}}
 	service, _, managedRoot := newWorkspaceService(t, runner)

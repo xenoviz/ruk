@@ -284,9 +284,11 @@ func releaseRepository(ctx context.Context, repository git.Repository, assignmen
 	if err != nil {
 		return RepositoryReleaseResult{}, err
 	}
-	processes := options.ReleaseProcesses
-	if processes == nil {
+	var processes lifecycle.ReleaseProcesser
+	if options.ReleaseProcesses == nil {
 		processes = defaultReleaseProcesses()
+	} else {
+		processes = options.ReleaseProcesses()
 	}
 	if processes == nil {
 		return RepositoryReleaseResult{}, errors.New("native release process adapter is unavailable")

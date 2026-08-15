@@ -108,6 +108,18 @@ func (service *WorkspaceService) Add(ctx context.Context, destination, branch, s
 	return service.Create(ctx, destination, branch, startPoint, detach)
 }
 
+// Assign attaches an existing pooled worktree to the requested branch. The
+// destination is authorized against ManagedRoot before Git sees it.
+func (service *WorkspaceService) Assign(ctx context.Context, destination, branch, startPoint string) error {
+	if err := service.validateDestination(destination); err != nil {
+		return err
+	}
+	if err := service.configured(); err != nil {
+		return err
+	}
+	return service.git.AssignWorktree(ctx, service.repositoryRoot, destination, branch, startPoint)
+}
+
 // Return resets and cleans a managed worktree, then detaches it for reuse.
 // Non-forced returns refuse dirty worktrees; forced returns hard-reset tracked
 // changes before removing ignored and untracked files.
