@@ -50,7 +50,7 @@ export function platformTarget(platform = process.platform, arch = process.arch,
     return { packageName: "@xenoviz/ruk-windows-arm64", target: "bun-windows-arm64" };
   }
   const libcSuffix = platform === "linux" ? `/${libc ?? "unknown"}` : "";
-  throw new Error(`Ruk npm package has no native binary for ${platform}/${arch}${libcSuffix}; reinstall with a supported platform package`);
+  throw new Error(`Ruk npm package is not available for ${platform}/${arch}${libcSuffix}; reinstall with a supported platform package`);
 }
 
 function isObject(value) {
