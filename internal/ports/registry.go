@@ -578,7 +578,7 @@ func validateRegistry(value hostPortRegistry) error {
 func randomRegistryToken() string {
 	var data [16]byte
 	if _, err := rand.Read(data[:]); err != nil {
-		return strconv.FormatInt(os.Getpid(), 10)
+		return strconv.FormatInt(int64(os.Getpid()), 10)
 	}
 	return hex.EncodeToString(data[:])
 }

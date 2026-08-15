@@ -140,8 +140,8 @@ func TestRunnerTableDrivenContracts(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("Run returned an error: %v", err)
 			}
-			if registered != (test.registerErr == nil) {
-				t.Fatalf("registered = %v", registered)
+			if !registered {
+				t.Fatal("registration callback was not invoked")
 			}
 			if cleaner.calls != boolInt(test.wantCleanup) {
 				t.Fatalf("cleanup calls = %d, want %d", cleaner.calls, boolInt(test.wantCleanup))
