@@ -1,0 +1,29 @@
+[
+  {
+    "name": "managed-dependencies-ready",
+    "domains": ["dependencies"],
+    "fixture": {
+      "files": {
+        "package.json":"{\"name\":\"conformance-dependencies\",\"version\":\"1.0.0\"}\n",
+        ".rukrc.json":"{\"installCommand\":[\"node\",\"-e\",\"process.exit(0)\"],\"dependencyMode\":\"managed\"}\n"
+      }
+    },
+    "steps": [
+      {"name":"init","args":["init","--json"]},
+      {"name":"sync","args":["sync","--json"]},
+      {"name":"status","args":["status","--json"]}
+    ]
+  },
+  {
+    "name": "unsupported-shared-dependencies",
+    "domains": ["dependencies"],
+    "fixture": {
+      "files": {
+        ".rukrc.json":"{\"installCommand\":[\"node\",\"-e\",\"process.exit(0)\"],\"dependencyMode\":\"shared\"}\n"
+      }
+    },
+    "steps": [
+      {"name":"init","args":["init","--json"],"compareState":false}
+    ]
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "unknown-config-option",
+    "domains": ["core", "dependencies"],
+    "fixture": {
+      "files": {".rukrc.json":"{\"unknownOption\":true}\n"}
+    },
+    "steps": [
+      {"name":"status","args":["status","--json"],"compareState":false}
+    ]
+  },
+  {
+    "name": "invalid-config-command",
+    "domains": ["core", "dependencies"],
+    "fixture": {
+      "files": {".rukrc.json":"{\"installCommand\":[]}\n"}
+    },
+    "steps": [
+      {"name":"init","args":["init","--json"],"compareState":false}
+    ]
+  },
+  {
+    "name": "invalid-environment-command",
+    "domains": ["core", "dependencies"],
+    "fixture": {
+      "env": {"RUK_INSTALL_COMMAND":"not-json"}
+    },
+    "steps": [
+      {"name":"status","args":["status","--json"],"compareState":false}
+    ]
+  }
+]

@@ -1,0 +1,50 @@
+[
+  {
+    "name": "state-v1-load",
+    "domains": ["core"],
+    "fixture": {
+      "files": {".rukrc.json":"{\"installCommand\":[\"node\",\"-e\",\"process.exit(0)\"]}\n"},
+      "state": {"version":1,"trees":{}}
+    },
+    "steps": [
+      {"name":"status","args":["status","--json"]},
+      {"name":"stats","args":["stats","--json"]}
+    ]
+  },
+  {
+    "name": "state-v2-load",
+    "domains": ["core"],
+    "fixture": {
+      "files": {".rukrc.json":"{\"installCommand\":[\"node\",\"-e\",\"process.exit(0)\"]}\n"},
+      "state": {"version":2,"trees":{},"workspaces":{}}
+    },
+    "steps": [
+      {"name":"status","args":["status","--json"]},
+      {"name":"stats","args":["stats","--json"]}
+    ]
+  },
+  {
+    "name": "state-v3-load",
+    "domains": ["core"],
+    "fixture": {
+      "files": {".rukrc.json":"{\"installCommand\":[\"node\",\"-e\",\"process.exit(0)\"]}\n"},
+      "state": {"version":3,"trees":{},"workspaces":{},"metrics":{"acquisitions":0,"workspaceReuses":0,"preparations":0,"preparationSkips":0,"preparationFailures":0,"totalPreparationMs":0,"lastPreparationMs":null}}
+    },
+    "steps": [
+      {"name":"status","args":["status","--json"]},
+      {"name":"stats","args":["stats","--json"]}
+    ]
+  },
+  {
+    "name": "state-v4-load",
+    "domains": ["core"],
+    "fixture": {
+      "files": {".rukrc.json":"{\"installCommand\":[\"node\",\"-e\",\"process.exit(0)\"]}\n"},
+      "state": {"version":4,"trees":{},"workspaces":{},"metrics":{"acquisitions":0,"workspaceReuses":0,"preparations":0,"preparationSkips":0,"preparationFailures":0,"totalPreparationMs":0,"lastPreparationMs":null}}
+    },
+    "steps": [
+      {"name":"status","args":["status","--json"]},
+      {"name":"stats","args":["stats","--json"]}
+    ]
+  }
+]

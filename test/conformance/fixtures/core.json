@@ -2,6 +2,8 @@
   {"name":"help","args":["--help"],"domains":["core"],"compareState":false},
   {"name":"version","args":["--version"],"domains":["core"],"compareState":false},
   {"name":"invalid-command","args":["unknown","--json"],"domains":["core"],"compareState":false},
+  {"name":"missing-branch","args":["create","--json"],"domains":["core"],"compareState":false},
+  {"name":"unknown-option","args":["status","--unknown","--json"],"domains":["core"],"compareState":false},
   {"name":"init-json","args":["init","--json"],"domains":["core"]},
   {"name":"status-json","args":["status","--json"],"domains":["core"]},
   {"name":"list-json","args":["list","--json"],"domains":["core"]},

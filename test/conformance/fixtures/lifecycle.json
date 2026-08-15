@@ -1,0 +1,25 @@
+[
+  {
+    "name": "lifecycle-sequence",
+    "domains": ["lifecycle", "dependencies", "ports"],
+    "fixture": {
+      "files": {
+        "package.json": "{\"name\":\"conformance-fixture\",\"version\":\"1.0.0\"}\n",
+        ".rukrc.json": "{\"installCommand\":[\"node\",\"-e\",\"process.exit(0)\"]}\n"
+      }
+    },
+    "steps": [
+      {"name":"init","args":["init","--json"]},
+      {"name":"status","args":["status","--json"]},
+      {"name":"list","args":["list","--json"]},
+      {"name":"stats","args":["stats","--json"]},
+      {"name":"acquire","args":["acquire","agent/conformance","--owner","fixture","--ttl","60","--port","http","--json"]},
+      {"name":"renew","args":["renew","${acquire.assignmentId}","--ttl","60","--json"]},
+      {"name":"release","args":["release","${acquire.assignmentId}","--json"]},
+      {"name":"warm","args":["warm","--count","1","--json"]},
+      {"name":"gc","args":["gc","--max-age","0","--apply","--json"]},
+      {"name":"create","args":["create","agent/created","--detach","--json"]},
+      {"name":"remove","args":["remove","${create.path}"]}
+    ]
+  }
+]
