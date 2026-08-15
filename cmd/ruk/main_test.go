@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os/exec"
 	"testing"
 
 	"github.com/xenoviz/ruk/internal/cli"
@@ -29,6 +30,25 @@ func TestRunMainPreservesVersionAndErrorBoundary(t *testing.T) {
 	}
 	if stdout.String() != "" || stderr.String() != "ruk: Unknown command unknown. Run ruk --help.\n" {
 		t.Fatalf("error stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunMainUsesProductionRuntimeDefaults(t *testing.T) {
+	repository := t.TempDir()
+	command := exec.Command("git", "init", "-q")
+	command.Dir = repository
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	t.Chdir(repository)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runMain([]string{"gc", "--max-age", "0", "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("gc exit code = %d, stderr=%q", code, stderr.String())
+	}
+	if stdout.String() != "{\"status\":\"planned\",\"removed\":[],\"expired\":[]}\n" || stderr.String() != "" {
+		t.Fatalf("gc stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
