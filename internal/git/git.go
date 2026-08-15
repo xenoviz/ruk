@@ -368,6 +368,79 @@ func (client Client) ReturnWorktree(ctx context.Context, cwd string, force bool,
 	return nil
 }
 
+// AssignWorktree attaches a pooled detached checkout to branch, creating that
+// branch from startPoint only when it does not already exist locally.
+func (client Client) AssignWorktree(ctx context.Context, repository, workspace, branch, startPoint string) error {
+	if branch == "" {
+		return errors.New("worktree branch must not be empty")
+	}
+	if startPoint == "" {
+		startPoint = "HEAD"
+	}
+	exists, err := client.LocalBranchExists(ctx, repository, branch)
+	if err != nil {
+		return fmt.Errorf("inspect worktree branch %s: %w", branch, err)
+	}
+	args := []string{"switch", branch}
+	if !exists {
+		args = []string{"switch", "-c", branch, startPoint}
+	}
+	if _, err := client.run(ctx, workspace, args); err != nil {
+		return fmt.Errorf("assign worktree %s: %w", workspace, err)
+	}
+	return nil
+}
+
+// LockWorktree protects pooled capacity from ordinary Git maintenance.
+func (client Client) LockWorktree(ctx context.Context, cwd, destination string) error {
+	if destination == "" {
+		return errors.New("worktree destination must not be empty")
+	}
+	if _, err := client.run(ctx, cwd, []string{"worktree", "lock", "--reason", "ruk pool", destination}); err != nil {
+		return fmt.Errorf("lock worktree %s: %w", destination, err)
+	}
+	return nil
+}
+
+// UnlockWorktree permits cleanup of pooled capacity. Git's already-unlocked
+// result is idempotent; all other failures remain visible.
+func (client Client) UnlockWorktree(ctx context.Context, cwd, destination string) error {
+	if destination == "" {
+		return errors.New("worktree destination must not be empty")
+	}
+	result, err := client.runAllowFailure(ctx, cwd, []string{"worktree", "unlock", destination})
+	if err != nil {
+		return fmt.Errorf("unlock worktree %s: %w", destination, err)
+	}
+	if result.ExitCode == 0 {
+		return nil
+	}
+	detail := strings.TrimSpace(result.Stderr + "\n" + result.Stdout)
+	if strings.Contains(strings.ToLower(detail), "not locked") {
+		return nil
+	}
+	if detail == "" {
+		detail = fmt.Sprintf("exit code %d", result.ExitCode)
+	}
+	return fmt.Errorf("could not unlock worktree %s: %s", destination, detail)
+}
+
+// RemoveWorktree removes a linked checkout from the repository.
+func (client Client) RemoveWorktree(ctx context.Context, cwd, destination string, force bool) error {
+	if destination == "" {
+		return errors.New("worktree destination must not be empty")
+	}
+	args := []string{"worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, destination)
+	if _, err := client.run(ctx, cwd, args); err != nil {
+		return fmt.Errorf("remove worktree %s: %w", destination, err)
+	}
+	return nil
+}
+
 func escapeCleanPattern(value string) string {
 	var escaped strings.Builder
 	for _, character := range value {
