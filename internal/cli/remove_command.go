@@ -43,7 +43,11 @@ func (command RemoveCommand) Run(ctx context.Context, input RemoveInput) error {
 	if cwd == "" {
 		cwd = input.Repository.Root
 	}
-	destination, err := command.Canonicalize(filepath.Join(cwd, input.Path))
+	destinationInput := input.Path
+	if !filepath.IsAbs(destinationInput) {
+		destinationInput = filepath.Join(cwd, destinationInput)
+	}
+	destination, err := command.Canonicalize(destinationInput)
 	if err != nil {
 		return err
 	}
