@@ -109,7 +109,13 @@ func TestActivityRunnerRefreshesAndCleansKeeper(t *testing.T) {
 			return nil
 		})
 	}()
-	<-operationStarted
+	select {
+	case <-operationStarted:
+	case err := <-result:
+		t.Fatalf("activity runner returned before starting the operation: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("activity operation did not start")
+	}
 	ticker.ticks <- now.Add(time.Minute)
 	deadline := time.After(time.Second)
 	for {
