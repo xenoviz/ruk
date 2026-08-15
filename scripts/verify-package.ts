@@ -13,13 +13,13 @@ const expectedDevelopmentDependencies = {
   vue: "3.5.40",
 };
 const nativePackages = {
-  "ruk-linux-x64": { name: "@xenoviz/ruk-linux-x64", target: "bun-linux-x64-baseline", binary: "native/ruk" },
-  "ruk-linux-arm64": { name: "@xenoviz/ruk-linux-arm64", target: "bun-linux-arm64", binary: "native/ruk" },
-  "ruk-linux-x64-musl": { name: "@xenoviz/ruk-linux-x64-musl", target: "bun-linux-x64-musl-baseline", binary: "native/ruk" },
-  "ruk-darwin-x64": { name: "@xenoviz/ruk-darwin-x64", target: "bun-darwin-x64", binary: "native/ruk" },
-  "ruk-darwin-arm64": { name: "@xenoviz/ruk-darwin-arm64", target: "bun-darwin-arm64", binary: "native/ruk" },
-  "ruk-windows-x64": { name: "@xenoviz/ruk-windows-x64", target: "bun-windows-x64-baseline", binary: "native/ruk.exe" },
-  "ruk-windows-arm64": { name: "@xenoviz/ruk-windows-arm64", target: "bun-windows-arm64", binary: "native/ruk.exe" },
+  "ruk-linux-x64": { name: "@xenoviz/ruk-linux-x64", target: "linux-x64", binary: "native/ruk" },
+  "ruk-linux-arm64": { name: "@xenoviz/ruk-linux-arm64", target: "linux-arm64", binary: "native/ruk" },
+  "ruk-linux-x64-musl": { name: "@xenoviz/ruk-linux-x64-musl", target: "linux-x64-musl", binary: "native/ruk" },
+  "ruk-darwin-x64": { name: "@xenoviz/ruk-darwin-x64", target: "darwin-x64", binary: "native/ruk" },
+  "ruk-darwin-arm64": { name: "@xenoviz/ruk-darwin-arm64", target: "darwin-arm64", binary: "native/ruk" },
+  "ruk-windows-x64": { name: "@xenoviz/ruk-windows-x64", target: "windows-x64", binary: "native/ruk.exe" },
+  "ruk-windows-arm64": { name: "@xenoviz/ruk-windows-arm64", target: "windows-arm64", binary: "native/ruk.exe" },
 } as const;
 
 if (pkg["name"] !== "@xenoviz/ruk" || pkg["license"] !== "MIT" || pkg["type"] !== "module") {

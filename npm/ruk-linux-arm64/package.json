@@ -9,7 +9,7 @@
   "files": ["native"],
   "ruk": {
     "distribution": "package",
-    "target": "bun-linux-arm64",
+    "target": "linux-arm64",
     "binary": "native/ruk",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   }

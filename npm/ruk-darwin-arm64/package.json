@@ -8,7 +8,7 @@
   "files": ["native"],
   "ruk": {
     "distribution": "package",
-    "target": "bun-darwin-arm64",
+    "target": "darwin-arm64",
     "binary": "native/ruk",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   }

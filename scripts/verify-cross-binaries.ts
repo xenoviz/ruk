@@ -10,13 +10,13 @@ const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const version = process.env["RUK_VERSION"] ?? await readPackageVersion(root);
 const minimumBinarySize = 1_000_000;
 const targets = [
-  { name: "bun-linux-x64-baseline", goos: "linux", goarch: "amd64", windows: false },
-  { name: "bun-linux-arm64", goos: "linux", goarch: "arm64", windows: false },
-  { name: "bun-linux-x64-musl-baseline", goos: "linux", goarch: "amd64", windows: false },
-  { name: "bun-darwin-x64", goos: "darwin", goarch: "amd64", windows: false },
-  { name: "bun-darwin-arm64", goos: "darwin", goarch: "arm64", windows: false },
-  { name: "bun-windows-x64-baseline", goos: "windows", goarch: "amd64", windows: true },
-  { name: "bun-windows-arm64", goos: "windows", goarch: "arm64", windows: true },
+  { name: "linux-x64", goos: "linux", goarch: "amd64", windows: false },
+  { name: "linux-arm64", goos: "linux", goarch: "arm64", windows: false },
+  { name: "linux-x64-musl", goos: "linux", goarch: "amd64", windows: false },
+  { name: "darwin-x64", goos: "darwin", goarch: "amd64", windows: false },
+  { name: "darwin-arm64", goos: "darwin", goarch: "arm64", windows: false },
+  { name: "windows-x64", goos: "windows", goarch: "amd64", windows: true },
+  { name: "windows-arm64", goos: "windows", goarch: "arm64", windows: true },
 ] as const;
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-cross-binaries-"));
 

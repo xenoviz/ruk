@@ -8,13 +8,13 @@ const PACKAGE_SCOPE = "@xenoviz";
 const ROOT_PACKAGE = "@xenoviz/ruk";
 
 export const NATIVE_TARGETS = Object.freeze({
-  "bun-linux-x64-baseline": Object.freeze({ packageName: "@xenoviz/ruk-linux-x64", platform: "linux", arch: "x64", libc: "glibc" }),
-  "bun-linux-arm64": Object.freeze({ packageName: "@xenoviz/ruk-linux-arm64", platform: "linux", arch: "arm64", libc: "glibc" }),
-  "bun-linux-x64-musl-baseline": Object.freeze({ packageName: "@xenoviz/ruk-linux-x64-musl", platform: "linux", arch: "x64", libc: "musl" }),
-  "bun-darwin-x64": Object.freeze({ packageName: "@xenoviz/ruk-darwin-x64", platform: "darwin", arch: "x64" }),
-  "bun-darwin-arm64": Object.freeze({ packageName: "@xenoviz/ruk-darwin-arm64", platform: "darwin", arch: "arm64" }),
-  "bun-windows-x64-baseline": Object.freeze({ packageName: "@xenoviz/ruk-windows-x64", platform: "win32", arch: "x64" }),
-  "bun-windows-arm64": Object.freeze({ packageName: "@xenoviz/ruk-windows-arm64", platform: "win32", arch: "arm64" }),
+  "linux-x64": Object.freeze({ packageName: "@xenoviz/ruk-linux-x64", platform: "linux", arch: "x64", libc: "glibc" }),
+  "linux-arm64": Object.freeze({ packageName: "@xenoviz/ruk-linux-arm64", platform: "linux", arch: "arm64", libc: "glibc" }),
+  "linux-x64-musl": Object.freeze({ packageName: "@xenoviz/ruk-linux-x64-musl", platform: "linux", arch: "x64", libc: "musl" }),
+  "darwin-x64": Object.freeze({ packageName: "@xenoviz/ruk-darwin-x64", platform: "darwin", arch: "x64" }),
+  "darwin-arm64": Object.freeze({ packageName: "@xenoviz/ruk-darwin-arm64", platform: "darwin", arch: "arm64" }),
+  "windows-x64": Object.freeze({ packageName: "@xenoviz/ruk-windows-x64", platform: "win32", arch: "x64" }),
+  "windows-arm64": Object.freeze({ packageName: "@xenoviz/ruk-windows-arm64", platform: "win32", arch: "arm64" }),
 });
 
 export function detectLibc(platform = process.platform, report = process.report) {
@@ -30,25 +30,25 @@ export function detectLibc(platform = process.platform, report = process.report)
 
 export function platformTarget(platform = process.platform, arch = process.arch, libc = detectLibc(platform)) {
   if (platform === "linux" && arch === "x64" && libc === "glibc") {
-    return { packageName: "@xenoviz/ruk-linux-x64", target: "bun-linux-x64-baseline" };
+    return { packageName: "@xenoviz/ruk-linux-x64", target: "linux-x64" };
   }
   if (platform === "linux" && arch === "x64" && libc === "musl") {
-    return { packageName: "@xenoviz/ruk-linux-x64-musl", target: "bun-linux-x64-musl-baseline" };
+    return { packageName: "@xenoviz/ruk-linux-x64-musl", target: "linux-x64-musl" };
   }
   if (platform === "linux" && arch === "arm64" && libc === "glibc") {
-    return { packageName: "@xenoviz/ruk-linux-arm64", target: "bun-linux-arm64" };
+    return { packageName: "@xenoviz/ruk-linux-arm64", target: "linux-arm64" };
   }
   if (platform === "darwin" && arch === "x64") {
-    return { packageName: "@xenoviz/ruk-darwin-x64", target: "bun-darwin-x64" };
+    return { packageName: "@xenoviz/ruk-darwin-x64", target: "darwin-x64" };
   }
   if (platform === "darwin" && arch === "arm64") {
-    return { packageName: "@xenoviz/ruk-darwin-arm64", target: "bun-darwin-arm64" };
+    return { packageName: "@xenoviz/ruk-darwin-arm64", target: "darwin-arm64" };
   }
   if (platform === "win32" && arch === "x64") {
-    return { packageName: "@xenoviz/ruk-windows-x64", target: "bun-windows-x64-baseline" };
+    return { packageName: "@xenoviz/ruk-windows-x64", target: "windows-x64" };
   }
   if (platform === "win32" && arch === "arm64") {
-    return { packageName: "@xenoviz/ruk-windows-arm64", target: "bun-windows-arm64" };
+    return { packageName: "@xenoviz/ruk-windows-arm64", target: "windows-arm64" };
   }
   const libcSuffix = platform === "linux" ? `/${libc ?? "unknown"}` : "";
   throw new Error(`Ruk npm package is not available for ${platform}/${arch}${libcSuffix}; reinstall with a supported platform package`);

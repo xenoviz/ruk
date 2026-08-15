@@ -41,7 +41,7 @@ async function fixture() {
       cpu: ["x64"],
       ruk: {
         distribution: "package",
-        target: "bun-linux-x64-baseline",
+        target: "linux-x64",
         binary: "native/ruk",
         sha256,
       },
@@ -53,31 +53,31 @@ async function fixture() {
 test("platformTarget preserves the seven native package mappings", () => {
   assert.deepEqual(platformTarget("linux", "x64", "glibc"), {
     packageName: "@xenoviz/ruk-linux-x64",
-    target: "bun-linux-x64-baseline",
+    target: "linux-x64",
   });
   assert.deepEqual(platformTarget("linux", "x64", "musl"), {
     packageName: "@xenoviz/ruk-linux-x64-musl",
-    target: "bun-linux-x64-musl-baseline",
+    target: "linux-x64-musl",
   });
   assert.deepEqual(platformTarget("linux", "arm64", "glibc"), {
     packageName: "@xenoviz/ruk-linux-arm64",
-    target: "bun-linux-arm64",
+    target: "linux-arm64",
   });
   assert.deepEqual(platformTarget("darwin", "x64"), {
     packageName: "@xenoviz/ruk-darwin-x64",
-    target: "bun-darwin-x64",
+    target: "darwin-x64",
   });
   assert.deepEqual(platformTarget("darwin", "arm64"), {
     packageName: "@xenoviz/ruk-darwin-arm64",
-    target: "bun-darwin-arm64",
+    target: "darwin-arm64",
   });
   assert.deepEqual(platformTarget("win32", "x64"), {
     packageName: "@xenoviz/ruk-windows-x64",
-    target: "bun-windows-x64-baseline",
+    target: "windows-x64",
   });
   assert.deepEqual(platformTarget("win32", "arm64"), {
     packageName: "@xenoviz/ruk-windows-arm64",
-    target: "bun-windows-arm64",
+    target: "windows-arm64",
   });
   assert.throws(() => platformTarget("linux", "arm64", "musl"), /not available/);
 });
@@ -136,7 +136,7 @@ test("installer resolves a native package hoisted beside the root package", asyn
     version,
     ruk: {
       distribution: "package",
-      target: "bun-linux-x64-baseline",
+      target: "linux-x64",
       binary: "native/ruk",
       sha256: crypto.createHash("sha256").update(contents).digest("hex"),
     },
@@ -176,7 +176,7 @@ test("Windows installation places an executable ahead of npm's Node shim", async
     version,
     ruk: {
       distribution: "package",
-      target: "bun-windows-x64-baseline",
+      target: "windows-x64",
       binary: "native/ruk.exe",
       sha256,
     },
@@ -227,7 +227,7 @@ test("installer fails before replacing the destination on checksum or path viola
   await fs.writeFile(packageJSON, JSON.stringify({
     name: "@xenoviz/ruk-linux-x64",
     version,
-    ruk: { distribution: "package", target: "bun-linux-x64-baseline", binary: "native/ruk", sha256: "0".repeat(64) },
+    ruk: { distribution: "package", target: "linux-x64", binary: "native/ruk", sha256: "0".repeat(64) },
   }));
   await assert.rejects(
     installNativeLauncher({ root: value.root, platform: "linux", arch: "x64", libc: "glibc" }),
@@ -238,7 +238,7 @@ test("installer fails before replacing the destination on checksum or path viola
   await fs.writeFile(packageJSON, JSON.stringify({
     name: "@xenoviz/ruk-linux-x64",
     version,
-    ruk: { distribution: "package", target: "bun-linux-x64-baseline", binary: "../escape", sha256: "0".repeat(64) },
+    ruk: { distribution: "package", target: "linux-x64", binary: "../escape", sha256: "0".repeat(64) },
   }));
   await assert.rejects(
     installNativeLauncher({ root: value.root, platform: "linux", arch: "x64", libc: "glibc" }),

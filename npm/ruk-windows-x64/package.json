@@ -8,7 +8,7 @@
   "files": ["native"],
   "ruk": {
     "distribution": "package",
-    "target": "bun-windows-x64-baseline",
+    "target": "windows-x64",
     "binary": "native/ruk.exe",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   }

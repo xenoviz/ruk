@@ -16,13 +16,13 @@ type GoTarget = {
 };
 
 const targets: Readonly<Record<string, GoTarget>> = {
-  "bun-linux-x64-baseline": { goos: "linux", goarch: "amd64", windows: false },
-  "bun-linux-arm64": { goos: "linux", goarch: "arm64", windows: false },
-  "bun-linux-x64-musl-baseline": { goos: "linux", goarch: "amd64", windows: false },
-  "bun-darwin-x64": { goos: "darwin", goarch: "amd64", windows: false },
-  "bun-darwin-arm64": { goos: "darwin", goarch: "arm64", windows: false },
-  "bun-windows-x64-baseline": { goos: "windows", goarch: "amd64", windows: true },
-  "bun-windows-arm64": { goos: "windows", goarch: "arm64", windows: true },
+  "linux-x64": { goos: "linux", goarch: "amd64", windows: false },
+  "linux-arm64": { goos: "linux", goarch: "arm64", windows: false },
+  "linux-x64-musl": { goos: "linux", goarch: "amd64", windows: false },
+  "darwin-x64": { goos: "darwin", goarch: "amd64", windows: false },
+  "darwin-arm64": { goos: "darwin", goarch: "arm64", windows: false },
+  "windows-x64": { goos: "windows", goarch: "amd64", windows: true },
+  "windows-arm64": { goos: "windows", goarch: "arm64", windows: true },
 };
 
 if (version.trim() === "") throw new Error("RUK_VERSION must not be empty");
