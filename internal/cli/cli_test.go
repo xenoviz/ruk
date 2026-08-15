@@ -93,10 +93,11 @@ func TestUpdateCommandPreservesDistributionAndOutputContracts(t *testing.T) {
 			application := cli.New(cli.Options{
 				Version:      "0.2.0",
 				Distribution: test.distribution,
+				Entrypoint:   "/package/bin/ruk",
 				Stdout:       &stdout,
 				Update: func(_ context.Context, options updatepkg.Options) (updatepkg.Result, error) {
 					called = true
-					if options.Distribution != test.distribution || options.CurrentVersion != "0.2.0" || options.CheckOnly != (len(test.args) == 2) {
+					if options.Distribution != test.distribution || options.CurrentVersion != "0.2.0" || options.CheckOnly != (len(test.args) == 2) || options.Entrypoint != "/package/bin/ruk" {
 						t.Fatalf("update options = %#v", options)
 					}
 					return test.result, nil

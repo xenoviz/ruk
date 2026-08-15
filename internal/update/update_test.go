@@ -222,6 +222,27 @@ func TestPackageDelegation(t *testing.T) {
 	}
 }
 
+func TestDetectInstallerUsesDurablePackageMarker(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "ruk")
+	marker := executable + ".ruk-distribution"
+	if err := os.WriteFile(marker, []byte(`{"schemaVersion":1,"distribution":"package","installer":"pnpm"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installer, err := DetectInstaller(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installer != InstallerPNPM {
+		t.Fatalf("installer = %s, want pnpm", installer)
+	}
+	if err := os.WriteFile(marker, []byte(`{"schemaVersion":1,"distribution":"standalone","installer":"npm"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DetectInstaller(executable); err == nil {
+		t.Fatal("invalid package marker was accepted")
+	}
+}
+
 func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
 	helper, script, err := WindowsReplacementPlan(`C:\\bin\\ruk.exe`, `C:\\bin\\.ruk.exe.new`, "0.3.0-beta.1", 4242)
 	if err != nil {
