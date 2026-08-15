@@ -349,6 +349,17 @@ func (registry *Registry) With(ctx context.Context, callback func(*ReservationTr
 	})
 }
 
+// WithReservations adapts the concrete durable registry transaction to the
+// narrow interface used by AllocationService.
+func (registry *Registry) WithReservations(ctx context.Context, callback func(ReservationSession) error) error {
+	if callback == nil {
+		return errors.New("port reservation callback is required")
+	}
+	return registry.With(ctx, func(transaction *ReservationTransaction) error {
+		return callback(transaction)
+	})
+}
+
 // Release removes all ports owned by assignmentID through a fenced registry
 // transaction. It is safe to retry after a successful release.
 func (registry *Registry) Release(ctx context.Context, assignmentID string) error {
