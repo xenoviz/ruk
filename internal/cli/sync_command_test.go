@@ -126,12 +126,15 @@ func TestSyncCommandAllowSharedCheckoutBypassesGuardAndJSONSuppressesHumanProgre
 	if guardCalled {
 		t.Fatal("guard ran despite --allow-shared-checkout")
 	}
-	var decoded SyncCommandResult
+	var decoded map[string]any
 	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
 		t.Fatalf("JSON output = %q: %v", output.String(), err)
 	}
-	if decoded != result {
-		t.Fatalf("decoded result = %#v, returned %#v", decoded, result)
+	if output.String() != "{\"status\":\"prepared\",\"path\":\"/repo\",\"fingerprint\":\"fingerprint\",\"mode\":\"managed-install\"}\n" {
+		t.Fatalf("JSON output = %q, want stable public sync fields", output.String())
+	}
+	if result.Reused || result.AlreadyAttached {
+		t.Fatalf("returned result = %#v, want internal reuse metadata preserved", result)
 	}
 	if strings.Contains(output.String(), "Dependencies prepared") {
 		t.Fatalf("JSON output contains human progress: %q", output.String())

@@ -23,6 +23,7 @@ func TestClassifyErrorPreservesStableCategories(t *testing.T) {
 		{name: "invalid config", err: errors.New("Cannot read /repo/.rukrc.json: malformed JSON"), code: InvalidArgumentCode},
 		{name: "unknown option", err: errors.New("Unknown option --force"), code: InvalidArgumentCode},
 		{name: "dependency message", err: errors.New("Dependency installation failed"), code: DependencyPreparationCode, retryable: true},
+		{name: "missing package manager", err: errors.New("npm is required but was not found on PATH"), code: DependencyPreparationCode, retryable: true},
 		{name: "typed dependency", err: &dependencies.DependencyPreparationError{Cause: errors.New("installer exited")}, code: DependencyPreparationCode, retryable: true},
 		{name: "port", err: errors.New("Could not allocate an available port"), code: PortUnavailableCode, retryable: true},
 		{name: "assignment conflict", err: errors.New("Assignment a does not exist"), code: AssignmentConflictCode},
