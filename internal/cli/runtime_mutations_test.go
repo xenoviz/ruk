@@ -13,6 +13,7 @@ import (
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/lifecycle"
 	"github.com/xenoviz/ruk/internal/lock"
+	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
 )
 
@@ -21,6 +22,12 @@ type runtimeWorkspaceStub struct {
 	assigned  []string
 	returned  []string
 	returnErr error
+}
+
+func TestDefaultReleaseProcessesUsesNativeIdentityFencedManager(t *testing.T) {
+	if _, ok := defaultReleaseProcesses().(processpkg.NativeProcessManager); !ok {
+		t.Fatalf("default release process manager = %T, want process.NativeProcessManager", defaultReleaseProcesses())
+	}
 }
 
 func (stub *runtimeWorkspaceStub) Create(_ context.Context, path, branch, start string) error {
