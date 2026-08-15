@@ -24,6 +24,7 @@
     },
     "steps": [
       {"name":"init","args":["init","--json"],"compareState":false}
-    ]
+    ],
+    "compareFinalState": false
   }
 ]

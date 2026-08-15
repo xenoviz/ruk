@@ -3,6 +3,7 @@ import path from "node:path";
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const ISO_TIMESTAMP = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3,9})?Z\b/g;
 const PROCESS_IDENTITY = /\b(?:PID|process(?: ID)?)\s+\d+\b/gi;
+const GENERATED_WORKSPACE = /<repo>-[A-Za-z0-9._-]+/g;
 
 export interface NormalizationContext {
   roots?: readonly string[];
@@ -22,6 +23,7 @@ export function normalizeText(value: string, context: NormalizationContext = {})
   let result = value.replaceAll("\r\n", "\n");
   for (const root of context.roots ?? []) result = replaceRoot(result, root);
   result = result.replaceAll("\\", "/");
+  result = result.replace(GENERATED_WORKSPACE, "<workspace>");
   result = result.replace(UUID, "<uuid>");
   result = result.replace(ISO_TIMESTAMP, "<timestamp>");
   return result.replace(PROCESS_IDENTITY, "process <pid>");
