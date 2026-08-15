@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	ossignal "os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/xenoviz/ruk/internal/config"
@@ -57,6 +59,7 @@ type RuntimeDefaultsOptions struct {
 
 	ExecuteRunner   processpkg.Runner
 	ExecuteActivity ExecuteActivityRunner
+	ExecuteSignals  func() (<-chan os.Signal, func())
 	ShellTerminal   ShellTerminal
 }
 
@@ -525,6 +528,9 @@ func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, 
 	if runner.Spawner == nil {
 		runner = processpkg.NewRunner()
 	}
+	if runner.Forwarder == nil {
+		runner.Forwarder = processpkg.NewNativeSignalForwarder()
+	}
 	execute := NewExecuteService(ExecuteOptions{Lifecycle: service, Reader: store, Runner: runner, Synchronize: synchronize, Activity: activity, Release: release})
 	environment := os.Environ()
 	snapshot, err := store.Read(ctx)
@@ -544,8 +550,26 @@ func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, 
 			environment = append(environment, name+"="+value)
 		}
 	}
-	result, err := execute.Execute(ctx, ExecuteInput{AssignmentID: assignmentID, WorkspacePath: workspacePath, Command: command, Env: environment, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Mode: processpkg.Detached, Exec: execMode})
+	signalSource := options.ExecuteSignals
+	if signalSource == nil {
+		signalSource = runtimeManagedSignals
+	}
+	signals, stopSignals := signalSource()
+	if stopSignals == nil {
+		stopSignals = func() {}
+	}
+	defer stopSignals()
+	result, err := execute.Execute(ctx, ExecuteInput{AssignmentID: assignmentID, WorkspacePath: workspacePath, Command: command, Env: environment, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Mode: processpkg.Detached, Exec: execMode, Signals: signals})
 	return result.ExitCode, err
+}
+
+func runtimeManagedSignals() (<-chan os.Signal, func()) {
+	signals := make(chan os.Signal, 2)
+	ossignal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	return signals, func() {
+		ossignal.Stop(signals)
+		close(signals)
+	}
 }
 
 func verifyRuntimeAssignment(ctx context.Context, store *state.Store, assignmentID, path string) error {
