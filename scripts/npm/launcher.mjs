@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -93,10 +94,10 @@ function relativePath(base, value, description) {
   return resolved;
 }
 
-function packageDirectory(root, packageName) {
+function packageManifest(root, packageName) {
   const [scope, name] = packageName.split("/");
   if (scope !== PACKAGE_SCOPE || !name) throw new Error(`Invalid native package name ${packageName}`);
-  return path.join(root, "node_modules", scope, name);
+  return createRequire(path.join(root, "package.json")).resolve(`${packageName}/package.json`);
 }
 
 async function digest(filename) {
@@ -173,13 +174,14 @@ export async function installNativeLauncher(options = {}) {
   const installer = installerFromEnvironment(options.environment);
   const markerContents = `${JSON.stringify({ schemaVersion: 1, distribution: "package", installer })}\n`;
   const marker = `${destination}.ruk-distribution`;
-  const nativeRoot = packageDirectory(root, selected.packageName);
-  const nativeManifestPath = path.join(nativeRoot, "package.json");
+  let nativeManifestPath;
   try {
+    nativeManifestPath = packageManifest(root, selected.packageName);
     await fs.access(nativeManifestPath);
   } catch (error) {
     throw new Error(`Ruk optional native package ${selected.packageName} is missing; reinstall @xenoviz/ruk`, { cause: error });
   }
+  const nativeRoot = path.dirname(nativeManifestPath);
   const nativeManifest = await readJSON(nativeManifestPath, selected.packageName);
   if (!isObject(nativeManifest) || nativeManifest.name !== selected.packageName) {
     throw new Error(`Ruk optional native package metadata is not ${selected.packageName}`);
