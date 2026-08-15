@@ -231,7 +231,7 @@ func releaseAssignmentWorkspace(ctx context.Context, reader ReleaseStateReader, 
 		if workspace.Assignment == nil || workspace.Assignment.ID != assignmentID {
 			continue
 		}
-		result = workspace
+		result = cloneWorkspace(workspace)
 		count++
 	}
 	if count == 0 {

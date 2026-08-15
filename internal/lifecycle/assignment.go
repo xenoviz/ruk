@@ -157,7 +157,7 @@ func (service *Service) RetainAssignmentAfterAcquisitionFailure(ctx context.Cont
 		workspace.UpdatedAt = now
 		workspace.Failure = &failure
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
@@ -187,7 +187,7 @@ func (service *Service) RecordAcquisitionSuccess(ctx context.Context, assignment
 		if reused {
 			current.Metrics.WorkspaceReuses++
 		}
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {

@@ -133,7 +133,7 @@ func (service *Service) finishPreparation(ctx context.Context, workspacePath, op
 			workspace.Failure = &failure
 		}
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {

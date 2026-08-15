@@ -30,7 +30,7 @@ func (service *Service) BeginWorkspaceCollection(ctx context.Context, workspaceP
 			return fmt.Errorf("Workspace %s changed before collection", resolved)
 		}
 		if !abandonedPreparation && workspace.OperationID != nil {
-			result = workspace
+			result = cloneWorkspace(workspace)
 			return nil
 		}
 		if abandonedPreparation {
@@ -42,7 +42,7 @@ func (service *Service) BeginWorkspaceCollection(ctx context.Context, workspaceP
 		workspace.OperationID = &operationID
 		workspace.UpdatedAt = timestamp(service.now())
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
@@ -74,7 +74,7 @@ func (service *Service) CancelWorkspaceCollection(ctx context.Context, workspace
 			workspace.AvailableAt = &cancelledAt
 		}
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
@@ -105,7 +105,7 @@ func (service *Service) DeleteWorkspaceRecord(ctx context.Context, workspacePath
 			return errors.New("Collection operation does not match")
 		}
 		delete(current.Workspaces, key)
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {

@@ -21,7 +21,7 @@ func (service *Service) RenewAssignment(ctx context.Context, assignmentID string
 			return fmt.Errorf("Workspace %s is %s, expected assigned", workspace.Path, workspace.Lifecycle)
 		}
 		if expectedRenewedAt != nil && workspace.Assignment.RenewedAt != *expectedRenewedAt {
-			result = workspace
+			result = cloneWorkspace(workspace)
 			return nil
 		}
 
@@ -37,7 +37,7 @@ func (service *Service) RenewAssignment(ctx context.Context, assignmentID string
 		workspace.Assignment.LastActivityAt = renewedAt
 		workspace.UpdatedAt = renewedAt
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {

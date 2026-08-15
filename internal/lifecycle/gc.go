@@ -215,10 +215,11 @@ func cloneWorkspace(workspace state.WorkspaceRecord) state.WorkspaceRecord {
 		workspace.Assignment = &assignment
 	}
 	if workspace.Processes != nil {
-		workspace.Processes = append([]state.TrackedProcessRecord(nil), workspace.Processes...)
-		for index := range workspace.Processes {
-			workspace.Processes[index].Command = append([]string(nil), workspace.Processes[index].Command...)
+		processes := make([]state.TrackedProcessRecord, len(workspace.Processes))
+		for index, process := range workspace.Processes {
+			processes[index] = cloneProcessRecord(process)
 		}
+		workspace.Processes = processes
 	}
 	return workspace
 }

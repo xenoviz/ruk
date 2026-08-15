@@ -52,7 +52,7 @@ func (service *Service) BeginAssignmentActivity(ctx context.Context, assignmentI
 			return err
 		}
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
@@ -111,7 +111,7 @@ func (service *Service) RefreshAssignmentActivity(ctx context.Context, assignmen
 			return err
 		}
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
@@ -159,7 +159,7 @@ func (service *Service) FinishAssignmentActivity(ctx context.Context, assignment
 			return err
 		}
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {

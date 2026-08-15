@@ -30,7 +30,7 @@ func (service *Service) AddAssignmentProcess(ctx context.Context, assignmentID s
 		workspace.Processes = append(workspace.Processes, cloneProcessRecord(record))
 		workspace.UpdatedAt = timestamp(service.now())
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
@@ -65,7 +65,7 @@ func (service *Service) RemoveAssignmentProcess(ctx context.Context, assignmentI
 		workspace.Processes = append(workspace.Processes[:index], workspace.Processes[index+1:]...)
 		workspace.UpdatedAt = timestamp(service.now())
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {

@@ -40,7 +40,7 @@ func (service *Service) BeginWorkspaceReturnWithOptions(ctx context.Context, ass
 		// A retry after the return transition has already been published must
 		// not revalidate an old expiry/update fence or rewrite its timestamp.
 		if workspace.Lifecycle == state.LifecycleReturning {
-			result = workspace
+			result = cloneWorkspace(workspace)
 			return nil
 		}
 		if workspace.Lifecycle != state.LifecycleAssigned {
@@ -74,7 +74,7 @@ func (service *Service) BeginWorkspaceReturnWithOptions(ctx context.Context, ass
 		workspace.Failure = nil
 		workspace.UpdatedAt = timestamp(service.now())
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
@@ -105,7 +105,7 @@ func (service *Service) FinishWorkspaceReturn(ctx context.Context, assignmentID 
 		workspace.AvailableAt = &now
 		workspace.Failure = nil
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
@@ -138,7 +138,7 @@ func (service *Service) CancelWorkspaceReturn(ctx context.Context, assignmentID,
 		workspace.AvailableAt = nil
 		workspace.Failure = &failure
 		current.Workspaces[key] = workspace
-		result = workspace
+		result = cloneWorkspace(workspace)
 		return nil
 	})
 	if err != nil {
