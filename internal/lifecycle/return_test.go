@@ -2,6 +2,7 @@ package lifecycle_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,6 +72,135 @@ func TestCancelledReturnRestoresAssignmentAndFailure(t *testing.T) {
 	}
 	if restored.Failure == nil || *restored.Failure != "cleanup failed" {
 		t.Fatalf("Failure = %#v", restored.Failure)
+	}
+}
+
+func TestWorkspaceReturnFencesAreTableDriven(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name   string
+		action func(*testing.T, *memoryStore, *lifecycle.Service, *time.Time) error
+		want   string
+	}{
+		{
+			name: "success",
+			action: func(t *testing.T, _ *memoryStore, service *lifecycle.Service, now *time.Time) error {
+				*now = now.Add(time.Hour)
+				workspace, err := service.BeginWorkspaceReturn(context.Background(), assignmentID)
+				if err == nil && workspace.Lifecycle != state.LifecycleReturning {
+					t.Fatalf("workspace lifecycle = %q", workspace.Lifecycle)
+				}
+				return err
+			},
+		},
+		{
+			name: "returning retry is idempotent",
+			action: func(t *testing.T, _ *memoryStore, service *lifecycle.Service, now *time.Time) error {
+				*now = now.Add(time.Hour)
+				first, err := service.BeginWorkspaceReturn(context.Background(), assignmentID)
+				if err != nil {
+					return err
+				}
+				*now = now.Add(time.Minute)
+				second, err := service.BeginWorkspaceReturnWithOptions(context.Background(), assignmentID, lifecycle.ReturnOptions{
+					RequireExpiredBy: "not-a-timestamp", AcquisitionOperationID: "wrong-op", ExpectedUpdatedAt: "stale-update",
+				})
+				if err == nil && second.UpdatedAt != first.UpdatedAt {
+					t.Fatalf("idempotent retry changed timestamp from %q to %q", first.UpdatedAt, second.UpdatedAt)
+				}
+				return err
+			},
+		},
+		{
+			name: "concurrent renewal skips stale expiry snapshot",
+			action: func(t *testing.T, _ *memoryStore, service *lifecycle.Service, now *time.Time) error {
+				*now = now.Add(time.Hour)
+				if _, err := service.RenewAssignment(context.Background(), assignmentID, now.Add(12*time.Hour), nil); err != nil {
+					return err
+				}
+				workspace, err := service.BeginWorkspaceReturnWithOptions(context.Background(), assignmentID, lifecycle.ReturnOptions{RequireExpiredBy: "2026-01-01T08:00:00.000Z"})
+				if err == nil {
+					t.Fatalf("stale expiry unexpectedly entered return: %#v", workspace)
+				}
+				return err
+			},
+			want: "was renewed before collection",
+		},
+		{
+			name: "concurrent renewal skips stale update snapshot",
+			action: func(t *testing.T, _ *memoryStore, service *lifecycle.Service, now *time.Time) error {
+				stale := "2026-01-01T00:00:00.000Z"
+				*now = now.Add(time.Hour)
+				if _, err := service.RenewAssignment(context.Background(), assignmentID, now.Add(4*time.Hour), nil); err != nil {
+					return err
+				}
+				_, err := service.BeginWorkspaceReturnWithOptions(context.Background(), assignmentID, lifecycle.ReturnOptions{ExpectedUpdatedAt: stale})
+				return err
+			},
+			want: "changed before collection",
+		},
+		{
+			name: "acquisition handoff is fenced and restored on cancellation",
+			action: func(t *testing.T, store *memoryStore, service *lifecycle.Service, now *time.Time) error {
+				key, err := state.TreeKey(filepath.Join(t.TempDir(), "unused"))
+				if err != nil {
+					return err
+				}
+				// Use the only managed record rather than relying on its temporary path.
+				for candidateKey := range store.current.Workspaces {
+					key = candidateKey
+					break
+				}
+				operation := acquisitionID
+				workspace := store.current.Workspaces[key]
+				workspace.OperationID = &operation
+				store.current.Workspaces[key] = workspace
+				if _, err := service.BeginWorkspaceReturn(context.Background(), assignmentID); err == nil {
+					t.Fatal("ordinary release crossed acquisition marker")
+				}
+				if _, err := service.BeginWorkspaceReturn(context.Background(), assignmentID, acquisitionID); err != nil {
+					return err
+				}
+				*now = now.Add(time.Minute)
+				cancelled, err := service.CancelWorkspaceReturn(context.Background(), assignmentID, "handoff cleanup failed")
+				if err != nil {
+					return err
+				}
+				if cancelled.OperationID == nil || *cancelled.OperationID != acquisitionID {
+					return errors.New("cancelled recovery lost acquisition marker")
+				}
+				return nil
+			},
+		},
+		{
+			name: "empty cancellation reason is machine-readable",
+			action: func(t *testing.T, _ *memoryStore, service *lifecycle.Service, now *time.Time) error {
+				*now = now.Add(time.Hour)
+				if _, err := service.BeginWorkspaceReturn(context.Background(), assignmentID); err != nil {
+					return err
+				}
+				_, err := service.CancelWorkspaceReturn(context.Background(), assignmentID, "")
+				return err
+			},
+			want: "failure must not be empty",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store, service, _, now := assignedService(t)
+			err := testCase.action(t, store, service, now)
+			if testCase.want == "" {
+				if err != nil {
+					t.Fatalf("action returned an error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("error = %v, want machine-readable text containing %q", err, testCase.want)
+			}
+		})
 	}
 }
 
