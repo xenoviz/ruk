@@ -379,7 +379,7 @@ func (registry *Registry) read(file string) (hostPortRegistry, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return hostPortRegistry{}, fmt.Errorf("unsafe Ruk host port registry file %s", file)
 	}
-	if err := verifyRegistryFileOwner(info); err != nil {
+	if err := verifyRegistryFileOwner(info, file); err != nil {
 		return hostPortRegistry{}, fmt.Errorf("unsafe Ruk host port registry file %s: %w", file, err)
 	}
 	data, err := registry.files.ReadFile(file)
@@ -455,7 +455,7 @@ func ensureRegistryRoot(files RegistryFileSystem, root string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("Unsafe Ruk host port directory %s", root)
 	}
-	if err := verifyRegistryRootOwner(info); err != nil {
+	if err := verifyRegistryRootOwner(info, root); err != nil {
 		return fmt.Errorf("Unsafe Ruk host port directory %s: %w", root, err)
 	}
 	return nil
