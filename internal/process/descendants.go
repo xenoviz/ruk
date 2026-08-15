@@ -9,6 +9,7 @@ import (
 type Entry struct {
 	PID       int
 	ParentPID int
+	GroupID   int
 }
 
 // ProcessTable captures one bounded operating-system process snapshot.
@@ -35,6 +36,11 @@ func (inspector DescendantInspector) Exists(ctx context.Context, root int) (bool
 	entries, err := inspector.Table.Snapshot(ctx)
 	if err != nil {
 		return false, err
+	}
+	for _, entry := range entries {
+		if entry.PID > 0 && entry.PID != root && entry.GroupID == root {
+			return true, nil
+		}
 	}
 	ancestors := map[int]struct{}{root: {}}
 	for {
