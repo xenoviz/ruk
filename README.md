@@ -228,7 +228,7 @@ The fingerprint includes:
 - Bun, npm, pnpm, and Yarn lock/configuration files;
 - patch directories;
 - package-manager name, version, command, and dependency mode;
-- runtime identity (Node or Bun), version, and native module ABI;
+- the selected dependency manager's runtime identity, when one is supplied;
 - operating system and CPU architecture.
 
 Changing ordinary source code does not invalidate the dependency projection.
