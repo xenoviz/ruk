@@ -123,6 +123,8 @@ jobs:
       - name: Install conformance tooling
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Compare TypeScript and Go CLIs
+        env:
+          RUK_CONFORMANCE_VERBOSE: "1"
         run: bun run test:conformance
 
   npm-smoke:

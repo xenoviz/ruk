@@ -96,6 +96,12 @@ function comparisonPrefix(index: number, step: ConformanceStep): string {
   return `step ${index + 1} (${step.name})`;
 }
 
+function verboseDifference(label: string, typescript: string, go: string): string {
+  if (process.env["RUK_CONFORMANCE_VERBOSE"] !== "1") return label;
+  const clip = (value: string): string => value.length <= 2_000 ? value : `${value.slice(0, 2_000)}...<truncated>`;
+  return `${label}\n  TypeScript: ${clip(typescript)}\n  Go: ${clip(go)}`;
+}
+
 function streamDifference(
   left: string,
   leftJSON: unknown | null,
@@ -121,10 +127,22 @@ export function compareStepOutput(
   const differences: string[] = [];
   if (typescript.exitCode !== go.exitCode) differences.push(`${prefix}: exit code differs`);
   const stdoutDifference = streamDifference(typescript.stdout, typescript.stdoutJSON, go.stdout, go.stdoutJSON, context);
-  if (stdoutDifference) differences.push(`${prefix}: stdout${stdoutDifference === "json" ? " JSON" : ""} differs`);
+  if (stdoutDifference) differences.push(verboseDifference(
+    `${prefix}: stdout${stdoutDifference === "json" ? " JSON" : ""} differs`,
+    stdoutDifference === "json" ? canonicalJSON(typescript.stdoutJSON, context) : normalizeText(typescript.stdout, context),
+    stdoutDifference === "json" ? canonicalJSON(go.stdoutJSON, context) : normalizeText(go.stdout, context),
+  ));
   const stderrDifference = streamDifference(typescript.stderr, typescript.stderrJSON, go.stderr, go.stderrJSON, context);
-  if (stderrDifference) differences.push(`${prefix}: stderr${stderrDifference === "json" ? " JSON" : ""} differs`);
-  if (step.compareState !== false && canonicalJSON(typescript.state, context) !== canonicalJSON(go.state, context)) differences.push(`${prefix}: state differs`);
+  if (stderrDifference) differences.push(verboseDifference(
+    `${prefix}: stderr${stderrDifference === "json" ? " JSON" : ""} differs`,
+    stderrDifference === "json" ? canonicalJSON(typescript.stderrJSON, context) : normalizeText(typescript.stderr, context),
+    stderrDifference === "json" ? canonicalJSON(go.stderrJSON, context) : normalizeText(go.stderr, context),
+  ));
+  const typescriptState = canonicalJSON(typescript.state, context);
+  const goState = canonicalJSON(go.state, context);
+  if (step.compareState !== false && typescriptState !== goState) {
+    differences.push(verboseDifference(`${prefix}: state differs`, typescriptState, goState));
+  }
   return differences;
 }
 
@@ -164,8 +182,10 @@ export function compareOutput(
   const compareFinalState = scenario.compareFinalState ?? scenario.compareState !== false;
   if (compareFinalState) {
     const context = { roots: roots.map(normalizeRepositoryPath) };
-    if (canonicalJSON(typescript.finalState, context) !== canonicalJSON(go.finalState, context)) {
-      differences.push("final state differs");
+    const typescriptState = canonicalJSON(typescript.finalState, context);
+    const goState = canonicalJSON(go.finalState, context);
+    if (typescriptState !== goState) {
+      differences.push(verboseDifference("final state differs", typescriptState, goState));
     }
   }
   return differences;
