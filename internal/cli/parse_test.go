@@ -24,7 +24,9 @@ func TestParseInvocationCoversPublicCommands(t *testing.T) {
 		{name: "release", args: []string{"release", "assignment-1", "--force", "--json"}, want: cli.Invocation{Name: "release", AssignmentID: "assignment-1", Force: true, JSON: true}},
 		{name: "sync", args: []string{"sync", "--allow-shared-checkout", "--json"}, want: cli.Invocation{Name: "sync", AllowSharedCheckout: true, JSON: true}},
 		{name: "run", args: []string{"run", "--allow-shared-checkout", "--", "tool", "--flag"}, want: cli.Invocation{Name: "run", AllowSharedCheckout: true, Command: []string{"tool", "--flag"}}},
+		{name: "run without delimiter", args: []string{"run", "tool", "--flag"}, want: cli.Invocation{Name: "run", Command: []string{"tool", "--flag"}}},
 		{name: "exec", args: []string{"exec", "agent/api", "--from", "main", "--fetch", "--ttl", "30", "--owner", "codex", "--port", "api", "--", "tool", "--flag"}, want: cli.Invocation{Name: "exec", Branch: "agent/api", From: "main", Fetch: true, TTL: "30", Owner: "codex", Ports: []string{"api"}, Command: []string{"tool", "--flag"}}},
+		{name: "exec without delimiter", args: []string{"exec", "agent/api", "--ttl", "30", "tool", "--flag"}, want: cli.Invocation{Name: "exec", Branch: "agent/api", TTL: "30", Command: []string{"tool", "--flag"}}},
 		{name: "warm", args: []string{"warm", "--count", "3", "--from", "main", "--fetch", "--json"}, want: cli.Invocation{Name: "warm", Count: "3", From: "main", Fetch: true, JSON: true}},
 		{name: "shell", args: []string{"shell", "agent/api", "--ttl", "30", "--owner", "codex", "--port", "api"}, want: cli.Invocation{Name: "shell", Branch: "agent/api", TTL: "30", Owner: "codex", Ports: []string{"api"}}},
 		{name: "list", args: []string{"list", "--json"}, want: cli.Invocation{Name: "list", JSON: true}},
@@ -61,11 +63,10 @@ func TestParseInvocationRejectsInvalidContracts(t *testing.T) {
 		{name: "unknown option", args: []string{"list", "--force"}, want: "Unknown option --force"},
 		{name: "missing option value", args: []string{"acquire", "agent/api", "--ttl"}, want: "--ttl requires a value"},
 		{name: "option used as value", args: []string{"acquire", "agent/api", "--ttl", "--json"}, want: "--ttl requires a value"},
-		{name: "missing branch", args: []string{"acquire"}, want: "Usage: ruk acquire"},
-		{name: "extra positional", args: []string{"list", "extra"}, want: "Usage: ruk list"},
-		{name: "run missing delimiter", args: []string{"run", "tool"}, want: "Usage: ruk run"},
-		{name: "run missing command", args: []string{"run", "--"}, want: "Usage: ruk run"},
-		{name: "exec missing command", args: []string{"exec", "agent/api", "--"}, want: "Usage: ruk exec"},
+		{name: "missing branch", args: []string{"acquire"}, want: "acquire requires exactly one branch name"},
+		{name: "extra positional", args: []string{"list", "extra"}, want: "list does not accept positional arguments"},
+		{name: "run missing command", args: []string{"run", "--"}, want: "run requires a command"},
+		{name: "exec missing command", args: []string{"exec", "agent/api", "--"}, want: "exec requires a command"},
 	}
 
 	for _, test := range tests {
