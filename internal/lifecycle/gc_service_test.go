@@ -3,7 +3,6 @@ package lifecycle_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
