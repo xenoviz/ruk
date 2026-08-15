@@ -2,9 +2,10 @@ package cli_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +25,11 @@ type activityStore struct {
 func (store *activityStore) Read(context.Context) (*state.State, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return store.current, nil
+	encoded, err := json.Marshal(store.current)
+	if err != nil {
+		return nil, err
+	}
+	return state.Decode(encoded, "activity test state")
 }
 
 func (store *activityStore) Update(ctx context.Context, mutate func(*state.State) error) error {
@@ -44,6 +49,22 @@ type activityTicker struct {
 	stopped chan struct{}
 }
 
+type activityClock struct{ nanos atomic.Int64 }
+
+func newActivityClock(value time.Time) *activityClock {
+	clock := &activityClock{}
+	clock.nanos.Store(value.UnixNano())
+	return clock
+}
+
+func (clock *activityClock) Now() time.Time {
+	return time.Unix(0, clock.nanos.Load()).UTC()
+}
+
+func (clock *activityClock) Add(duration time.Duration) time.Time {
+	return time.Unix(0, clock.nanos.Add(int64(duration))).UTC()
+}
+
 func (ticker *activityTicker) C() <-chan time.Time { return ticker.ticks }
 func (ticker *activityTicker) Stop() {
 	select {
@@ -53,7 +74,7 @@ func (ticker *activityTicker) Stop() {
 	}
 }
 
-func activityFixture(t *testing.T, leaseMinutes float64) (*activityStore, *lifecycle.Service, string, string) {
+func activityFixture(t *testing.T, leaseMinutes float64) (*activityStore, *lifecycle.Service, string, string, *activityClock) {
 	t.Helper()
 	path := t.TempDir()
 	key, err := state.TreeKey(path)
@@ -66,17 +87,16 @@ func activityFixture(t *testing.T, leaseMinutes float64) (*activityStore, *lifec
 		Assignment: &state.AssignmentRecord{ID: "assignment-1", Owner: "owner", Hostname: "host", AssignedAt: "2026-01-01T00:00:00.000Z", RenewedAt: "2026-01-01T00:00:00.000Z", ExpiresAt: "2026-01-01T01:00:00.000Z", LeaseDurationMinutes: leaseMinutes, LastActivityAt: "2026-01-01T00:00:00.000Z", LeaseKeepers: []state.LeaseKeeperRecord{}, Ports: map[string]int64{}},
 		Processes:  []state.TrackedProcessRecord{}, CreatedAt: "2026-01-01T00:00:00.000Z", UpdatedAt: "2026-01-01T00:00:00.000Z",
 	}
-	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	service := lifecycle.New(store, lifecycle.Options{Now: func() time.Time { return now }, NewID: func() string { return "unused" }})
-	return store, service, path, key
+	clock := newActivityClock(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	service := lifecycle.New(store, lifecycle.Options{Now: clock.Now, NewID: func() string { return "unused" }})
+	return store, service, path, key, clock
 }
 
 func TestActivityRunnerRefreshesAndCleansKeeper(t *testing.T) {
-	store, lifecycleService, _, key := activityFixture(t, 60)
+	store, lifecycleService, _, key, now := activityFixture(t, 60)
 	ticker := &activityTicker{ticks: make(chan time.Time, 2), stopped: make(chan struct{})}
-	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{
-		Lifecycle: lifecycleService, Reader: store, Now: func() time.Time { return now }, NewID: func() string { return activityKeeperID },
+		Lifecycle: lifecycleService, Reader: store, Now: now.Now, NewID: func() string { return activityKeeperID },
 		Ticker: func(time.Duration) cli.ActivityTicker { return ticker },
 	})
 	operationStarted := make(chan struct{})
@@ -90,8 +110,7 @@ func TestActivityRunnerRefreshesAndCleansKeeper(t *testing.T) {
 		})
 	}()
 	<-operationStarted
-	now = now.Add(time.Minute)
-	ticker.ticks <- now
+	ticker.ticks <- now.Add(time.Minute)
 	deadline := time.After(time.Second)
 	for {
 		store.mu.Lock()
@@ -120,26 +139,27 @@ func TestActivityRunnerRefreshesAndCleansKeeper(t *testing.T) {
 }
 
 func TestActivityRunnerRefreshPreservesConcurrentExplicitRenewal(t *testing.T) {
-	store, lifecycleService, _, key := activityFixture(t, 60)
+	store, lifecycleService, _, key, now := activityFixture(t, 60)
 	ticker := &activityTicker{ticks: make(chan time.Time, 1), stopped: make(chan struct{})}
-	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, Now: func() time.Time { return now }, NewID: func() string { return activityKeeperID }, Ticker: func(time.Duration) cli.ActivityTicker { return ticker }})
+	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, Now: now.Now, NewID: func() string { return activityKeeperID }, Ticker: func(time.Duration) cli.ActivityTicker { return ticker }})
 	done := make(chan struct{})
 	result := make(chan error, 1)
 	go func() {
 		result <- runner.Run(context.Background(), "assignment-1", func(context.Context) error { <-done; return nil })
 	}()
-	now = now.Add(time.Minute)
-	if _, err := lifecycleService.RenewAssignment(context.Background(), "assignment-1", now.Add(10*time.Hour), nil); err != nil {
+	now.Add(time.Minute)
+	renewed, err := lifecycleService.RenewAssignment(context.Background(), "assignment-1", now.Now().Add(10*time.Hour), nil)
+	if err != nil {
 		t.Fatalf("RenewAssignment returned an error: %v", err)
 	}
-	ticker.ticks <- now
+	wantExpires := renewed.Assignment.ExpiresAt
+	ticker.ticks <- now.Now()
 	deadline := time.After(time.Second)
 	for {
 		store.mu.Lock()
 		expires := store.current.Workspaces[key].Assignment.ExpiresAt
 		store.mu.Unlock()
-		if strings.HasPrefix(expires, "2026-01-01T11:") {
+		if expires == wantExpires {
 			break
 		}
 		select {
@@ -156,7 +176,7 @@ func TestActivityRunnerRefreshPreservesConcurrentExplicitRenewal(t *testing.T) {
 }
 
 func TestActivityRunnerCancellationStopsOperationAndCleansKeeper(t *testing.T) {
-	store, lifecycleService, _, key := activityFixture(t, 60)
+	store, lifecycleService, _, key, _ := activityFixture(t, 60)
 	ticker := &activityTicker{ticks: make(chan time.Time), stopped: make(chan struct{})}
 	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, NewID: func() string { return activityKeeperID }, Ticker: func(time.Duration) cli.ActivityTicker { return ticker }})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -178,7 +198,7 @@ func TestActivityRunnerCancellationStopsOperationAndCleansKeeper(t *testing.T) {
 }
 
 func TestActivityRunnerOperationFailureIsPreserved(t *testing.T) {
-	store, lifecycleService, _, key := activityFixture(t, 60)
+	store, lifecycleService, _, key, _ := activityFixture(t, 60)
 	ticker := &activityTicker{ticks: make(chan time.Time), stopped: make(chan struct{})}
 	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, NewID: func() string { return activityKeeperID }, Ticker: func(time.Duration) cli.ActivityTicker { return ticker }})
 	operationErr := errors.New("command failed")
@@ -194,7 +214,7 @@ func TestActivityRunnerOperationFailureIsPreserved(t *testing.T) {
 }
 
 func TestActivityRunnerJoinsCleanupFailureAsAssignmentActivityError(t *testing.T) {
-	store, lifecycleService, _, _ := activityFixture(t, 60)
+	store, lifecycleService, _, _, _ := activityFixture(t, 60)
 	ticker := &activityTicker{ticks: make(chan time.Time), stopped: make(chan struct{})}
 	cleanupErr := errors.New("state lock unavailable")
 	runner := cli.NewActivityRunner(cli.ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, NewID: func() string { return activityKeeperID }, Ticker: func(time.Duration) cli.ActivityTicker { return ticker }})

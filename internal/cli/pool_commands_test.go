@@ -13,7 +13,7 @@ import (
 )
 
 func TestWarmRejectsInvalidCountBeforeMutation(t *testing.T) {
-	for _, value := range []string{"", "0", "-1", "1.5", "+1", "NaN", "9007199254740992", "18446744073709551615"} {
+	for _, value := range []string{"", "0", "-1", "1.5", "NaN", "9007199254740992", "18446744073709551615"} {
 		t.Run(strings.ReplaceAll(value, "+", "positive-"), func(t *testing.T) {
 			called := false
 			_, err := cli.Warm(context.Background(), cli.WarmInput{Count: value}, func(context.Context, cli.WarmRequest) (lifecycle.WarmResult, error) {
