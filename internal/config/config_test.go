@@ -158,3 +158,103 @@ func TestLoadEnvironmentCommandErrorsMatchContract(t *testing.T) {
 		t.Fatalf("empty mode error = %v, want .rukrc.json dependencyMode validation", err)
 	}
 }
+
+func TestDetectPackageManagerUsesCustomCommandBasenameAndManagedDefault(t *testing.T) {
+	t.Parallel()
+
+	manager, err := config.DetectPackageManager(t.TempDir(), config.Config{
+		InstallCommand: []string{filepath.Join("tools", "custom.EXE"), "install"},
+	})
+	if err != nil {
+		t.Fatalf("DetectPackageManager returned an error: %v", err)
+	}
+	if manager.Name != "custom" || manager.DependencyMode != config.Managed {
+		t.Fatalf("manager = %#v, want custom managed manager", manager)
+	}
+
+	_, err = config.DetectPackageManager(t.TempDir(), config.Config{InstallCommand: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "installCommand cannot be empty") {
+		t.Fatalf("empty custom command error = %v", err)
+	}
+}
+
+func TestDetectPackageManagerReadsPackageManagerAndUsesExistenceSeam(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"fixture","packageManager":"@pnpm/exe@9.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var lookedUp string
+	manager, err := config.DetectPackageManager(root, config.Config{}, func(name string) bool {
+		lookedUp = name
+		return true
+	})
+	if err != nil {
+		t.Fatalf("DetectPackageManager returned an error: %v", err)
+	}
+	if lookedUp != "@pnpm/exe" || manager.Name != "@pnpm/exe" {
+		t.Fatalf("lookup=%q manager=%#v, want package manager name", lookedUp, manager)
+	}
+	if strings.Join(manager.Command, " ") != "@pnpm/exe install" || manager.DependencyMode != config.Managed {
+		t.Fatalf("manager = %#v, want managed install command", manager)
+	}
+}
+
+func TestDetectPackageManagerUsesDeterministicLockfileCommandsAndModes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		files   []string
+		command string
+		mode    config.DependencyMode
+	}{
+		{name: "bun", files: []string{"bun.lock", "bun.lockb", "pnpm-lock.yaml", "yarn.lock", "package-lock.json"}, command: "bun install --frozen-lockfile", mode: config.Shared},
+		{name: "pnpm", files: []string{"pnpm-lock.yaml"}, command: "pnpm install --frozen-lockfile", mode: config.Shared},
+		{name: "yarn", files: []string{"yarn.lock"}, command: "yarn install --frozen-lockfile", mode: config.Managed},
+		{name: "npm ci", files: []string{"package-lock.json"}, command: "npm ci", mode: config.Managed},
+		{name: "npm install", files: nil, command: "npm install", mode: config.Managed},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, file := range testCase.files {
+				if err := os.WriteFile(filepath.Join(root, file), []byte(""), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manager, err := config.DetectPackageManager(root, config.Config{}, func(string) bool { return true })
+			if err != nil {
+				t.Fatalf("DetectPackageManager returned an error: %v", err)
+			}
+			if strings.Join(manager.Command, " ") != testCase.command || manager.DependencyMode != testCase.mode {
+				t.Fatalf("manager = %#v, want command %q mode %q", manager, testCase.command, testCase.mode)
+			}
+		})
+	}
+}
+
+func TestDetectPackageManagerReportsMissingCommandFromInjectedSeam(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.DetectPackageManager(t.TempDir(), config.Config{}, func(string) bool { return false })
+	if err == nil || !strings.Contains(err.Error(), "npm is required but was not found on PATH") {
+		t.Fatalf("missing command error = %v", err)
+	}
+}
+
+func TestDetectPackageManagerHonorsExplicitDependencyMode(t *testing.T) {
+	t.Parallel()
+
+	mode := config.Managed
+	manager, err := config.DetectPackageManager(t.TempDir(), config.Config{
+		DependencyMode: &mode,
+	}, func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("DetectPackageManager returned an error: %v", err)
+	}
+	if manager.Name != "npm" || manager.DependencyMode != config.Managed {
+		t.Fatalf("manager = %#v, want explicit managed mode", manager)
+	}
+}
