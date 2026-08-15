@@ -3,7 +3,13 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.3.0-beta.1 - 2026-08-16
+
+- Replace the shipped TypeScript/Node command with one dependency-free native
+  Go runtime while preserving the frozen CLI, JSON, state, and lifecycle
+  contract.
+- Publish native npm platform packages for Linux, macOS, and Windows on x64 and
+  ARM64, with glibc and musl Linux x64 variants.
 
 - Automatically renew assignments during managed commands and dependency sync,
   using concurrent fenced keepers and observable activity timestamps.
@@ -11,8 +17,8 @@ versioning.
   `deny`, `warn`, and `allow` policies plus a one-command override.
 - Expose activity, automatic-renewal, checkout, management, and active-assignment
   fields through status and list JSON.
-- Add a repeatable Node/Bun/Go runtime benchmark and a non-shipping Go
-  heartbeat supervisor experiment to inform, not pre-commit, a future rewrite.
+- Add a repeatable Node/Go runtime benchmark with Linux and Windows raw evidence,
+  RAM-reduction gating, child-process counts, and zero-PowerShell verification.
 - Allow repository administrators to bypass branch rules only through pull
   requests, preventing sole-maintainer deadlock without allowing direct pushes;
   keep required CI in a separate non-bypassable ruleset.

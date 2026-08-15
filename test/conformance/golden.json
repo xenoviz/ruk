@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "normalizerVersion": 1,
+  "normalizerVersion": 2,
   "oracle": {
     "runtime": "typescript",
     "commit": "969d5c3ff8dc3f43e9e878677ea8c75189a8c09c",
@@ -195,7 +195,7 @@
           "exitCode": 0,
           "stdout": {
             "kind": "text",
-            "value": "0.1.2\n"
+            "value": "<version>\n"
           },
           "stderr": {
             "kind": "text",

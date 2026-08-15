@@ -44,6 +44,7 @@ test("conformance normalization removes repository-specific process values", () 
 test("conformance JSON parsing distinguishes structured output from human output", () => {
   assert.deepEqual(parseJSON('{"status":"error"}\n'), { status: "error" });
   assert.equal(parseJSON("ruk: Unknown command\n"), null);
+  assert.equal(normalizeText("0.3.0-beta.1\n"), "<version>\n");
 });
 
 test("scenario format accepts core and future lifecycle/dependency/port domains", () => {
