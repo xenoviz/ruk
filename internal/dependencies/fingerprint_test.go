@@ -25,7 +25,7 @@ func TestDependencyFilesKeepsNestedRootsAndDependencyConfig(t *testing.T) {
 		"packages/api/.npmrc",
 		"packages/api/package.json",
 		"packages/api/pnpm-lock.yaml",
-		"packages/api/patches/theme.patch",
+		"packages/ui/patches/theme.patch",
 		"patches/fix.patch",
 	}
 	if got := DependencyFiles(paths); !reflect.DeepEqual(got, want) {
