@@ -33,12 +33,14 @@ func (lock acquisitionLockFake) With(_ context.Context, _ string, callback func(
 }
 
 type acquisitionWorktreeFake struct {
-	created  int
-	assigned int
+	created      int
+	createdPaths []string
+	assigned     int
 }
 
-func (worktree *acquisitionWorktreeFake) Create(context.Context, string, string, string) error {
+func (worktree *acquisitionWorktreeFake) Create(_ context.Context, path, _, _ string) error {
 	worktree.created++
+	worktree.createdPaths = append(worktree.createdPaths, path)
 	return nil
 }
 
@@ -55,7 +57,7 @@ func (ports acquisitionPortsFake) Allocate(context.Context, string, []string) (s
 	return state.WorkspaceRecord{}, ports.err
 }
 
-func acquisitionTestService(t *testing.T, store *memoryStore, ids []string, worktree *acquisitionWorktreeFake, prepare lifecycle.DependencyPreparer, ports lifecycle.PortAllocator, lock lifecycle.AcquisitionLocker, cleanup func(context.Context, string, bool) error) *lifecycle.AcquisitionService {
+func acquisitionTestService(t *testing.T, store *memoryStore, ids []string, worktree *acquisitionWorktreeFake, prepare lifecycle.DependencyPreparer, ports lifecycle.PortAllocator, lock lifecycle.AcquisitionLocker, cleanup func(context.Context, string, bool) error, freshPath ...func(context.Context, string) (string, error)) *lifecycle.AcquisitionService {
 	t.Helper()
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	service := lifecycle.New(store, lifecycle.Options{
@@ -66,7 +68,7 @@ func acquisitionTestService(t *testing.T, store *memoryStore, ids []string, work
 			return id
 		},
 	})
-	return lifecycle.NewAcquisitionService(lifecycle.AcquisitionOptions{
+	options := lifecycle.AcquisitionOptions{
 		Lifecycle: service,
 		Reader:    acquisitionStateReader{store: store},
 		Locker:    lock,
@@ -74,7 +76,11 @@ func acquisitionTestService(t *testing.T, store *memoryStore, ids []string, work
 		Prepare:   prepare,
 		Ports:     ports,
 		Cleanup:   cleanup,
-	})
+	}
+	if len(freshPath) > 0 {
+		options.WorkspacePath = freshPath[0]
+	}
+	return lifecycle.NewAcquisitionService(options)
 }
 
 func successfulDependencies(context.Context, string) (dependencies.EnsureResult, error) {
@@ -207,6 +213,7 @@ func TestAcquireRejectsConcurrentOwnershipChangeAndDoesNotTouchWorktree(t *testi
 	t.Parallel()
 	store := newMemoryStore()
 	path := addAvailableWorkspace(t, store, "concurrent", "2026-01-01T00:00:00.000Z", nil, state.LifecycleAvailable)
+	freshPath := filepath.Join(t.TempDir(), "fresh-after-race")
 	worktree := &acquisitionWorktreeFake{}
 	lock := acquisitionLockFake{enter: func() {
 		key, _ := state.TreeKey(path)
@@ -215,17 +222,19 @@ func TestAcquireRejectsConcurrentOwnershipChangeAndDoesNotTouchWorktree(t *testi
 		workspace.OperationID = &operation
 		store.current.Workspaces[key] = workspace
 	}}
-	service := acquisitionTestService(t, store, []string{assignmentID, acquisitionID}, worktree, successfulDependencies, acquisitionPortsFake{}, lock, nil)
+	service := acquisitionTestService(t, store, []string{preparationID, assignmentID, acquisitionID}, worktree, successfulDependencies, acquisitionPortsFake{}, lock, nil, func(context.Context, string) (string, error) {
+		return freshPath, nil
+	})
 
-	_, err := service.Acquire(context.Background(), lifecycle.AcquireInput{
+	result, err := service.Acquire(context.Background(), lifecycle.AcquireInput{
 		Assignment: lifecycle.AssignmentInput{Owner: "agent", Hostname: "host", ExpiresAt: time.Date(2026, time.January, 1, 8, 0, 0, 0, time.UTC)},
 		Branch:     "agent/concurrent",
 	})
-	if err == nil || !strings.Contains(err.Error(), "Acquisition operation does not match") {
-		t.Fatalf("Acquire error = %v", err)
+	if err != nil {
+		t.Fatalf("Acquire returned an error after skipping the changed candidate: %v", err)
 	}
-	if worktree.assigned != 0 {
-		t.Fatalf("worktree was touched after ownership changed: %#v", worktree)
+	if result.Path != freshPath || worktree.assigned != 0 || len(worktree.createdPaths) != 1 || worktree.createdPaths[0] != freshPath {
+		t.Fatalf("candidate race worktree/result = %#v / %#v", worktree, result)
 	}
 }
 
