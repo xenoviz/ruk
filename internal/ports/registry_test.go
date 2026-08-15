@@ -196,6 +196,29 @@ func TestRegistryRejectsSymlinkRoot(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsSymlinkAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires elevated Windows privileges")
+	}
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	linked := filepath.Join(parent, "linked")
+	root := filepath.Join(linked, "host")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, linked); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewRegistry(RegistryOptions{Root: root, Activity: registryTestActivity{active: map[string]bool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.With(context.Background(), func(*ReservationTransaction) error { return nil }); err == nil || !strings.Contains(err.Error(), "unsafe port registry path") {
+		t.Fatalf("symlink ancestor error = %v", err)
+	}
+}
+
 func TestOSRegistryFileSystemRenameReplacesExistingDestination(t *testing.T) {
 	root := t.TempDir()
 	oldPath := filepath.Join(root, "ports.tmp")

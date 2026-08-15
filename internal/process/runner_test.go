@@ -184,8 +184,15 @@ func TestNativeProcessDescriberRequiresExactIdentityAndDetachedGroup(t *testing.
 	if err != nil {
 		t.Fatalf("Describe returned an error: %v", err)
 	}
-	if record.PID != 42 || record.GroupID == nil || *record.GroupID != 42 || record.StartedAt != "started" {
+	if record.PID != 42 || record.StartedAt != "started" {
 		t.Fatalf("record = %#v", record)
+	}
+	if runtime.GOOS == "windows" {
+		if record.GroupID != nil {
+			t.Fatalf("Windows record group = %v, want nil because detached processes use a job boundary", *record.GroupID)
+		}
+	} else if record.GroupID == nil || *record.GroupID != 42 {
+		t.Fatalf("POSIX record group = %v, want 42", record.GroupID)
 	}
 	if !reflect.DeepEqual(record.Command, []string{"tool"}) {
 		t.Fatalf("command = %#v", record.Command)

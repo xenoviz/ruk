@@ -39,8 +39,10 @@ func (stub *createWorkspaceStub) Remove(_ context.Context, path string, force bo
 	return stub.remove
 }
 
-func createTestRepository() git.Repository {
-	return git.Repository{Root: filepath.Join("/tmp", "repo"), CommonDir: filepath.Join("/tmp", "repo", ".git")}
+func createTestRepository(t *testing.T) git.Repository {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "repo")
+	return git.Repository{Root: root, CommonDir: filepath.Join(root, ".git")}
 }
 
 func createTestCommand(workspace CreateWorkspace, sync CreateSyncOperation) *CreateCommand {
@@ -64,13 +66,14 @@ func TestCreateCommandPreservesOptionsDefaultPathAndHumanOutput(t *testing.T) {
 		return SyncCommandResult{Status: "prepared", Fingerprint: "0123456789abcdef", Mode: "managed-install"}, nil
 	})
 	var output bytes.Buffer
+	repository := createTestRepository(t)
 	result, err := command.Run(context.Background(), CreateCommandInput{
-		Repository: createTestRepository(), CWD: filepath.Join("/tmp", "caller"), Branch: "agent/ui/header", Output: &output,
+		Repository: repository, CWD: filepath.Join(filepath.Dir(repository.Root), "caller"), Branch: "agent/ui/header", Output: &output,
 	})
 	if err != nil {
 		t.Fatalf("Run returned an error: %v", err)
 	}
-	wantPath := filepath.Join("/tmp", "repo-agent-ui-header")
+	wantPath := filepath.Join(filepath.Dir(repository.Root), filepath.Base(repository.Root)+"-agent-ui-header")
 	if result.Path != wantPath || workspace.path != wantPath || workspace.branch != "agent/ui/header" || workspace.start != "HEAD" || workspace.detach {
 		t.Fatalf("result=%#v workspace=%#v, want default create contract", result, workspace)
 	}
@@ -96,9 +99,10 @@ func TestCreateCommandUsesRequestedPathStartPointFetchAndDetach(t *testing.T) {
 			return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
 		},
 	}
-	requested := filepath.Join("/tmp", "explicit-create")
+	repository := createTestRepository(t)
+	requested := filepath.Join(t.TempDir(), "explicit-create")
 	result, err := command.Run(context.Background(), CreateCommandInput{
-		Repository: createTestRepository(), CWD: filepath.Join("/tmp", "caller"), Branch: "release/v1",
+		Repository: repository, CWD: filepath.Join(t.TempDir(), "caller"), Branch: "release/v1",
 		Path: requested, From: "origin/main", Fetch: true, Detach: true,
 	})
 	if err != nil {
@@ -118,8 +122,9 @@ func TestCreateCommandJSONEmitsOneSyncRecordWithoutHumanDestination(t *testing.T
 		return SyncCommandResult{Status: "ready", Fingerprint: "fingerprint", Mode: "bun-global-store", Reused: true, AlreadyAttached: true}, nil
 	})
 	var output bytes.Buffer
+	repository := createTestRepository(t)
 	result, err := command.Run(context.Background(), CreateCommandInput{
-		Repository: createTestRepository(), Branch: "agent/json", JSON: true, Output: &output,
+		Repository: repository, Branch: "agent/json", JSON: true, Output: &output,
 	})
 	if err != nil {
 		t.Fatalf("Run returned an error: %v", err)
@@ -147,7 +152,7 @@ func TestCreateCommandCleansUpAfterPreparationFailureAndJoinsCleanupFailure(t *t
 		return SyncCommandResult{}, prepErr
 	})
 
-	_, err := command.Run(context.Background(), CreateCommandInput{Repository: createTestRepository(), Branch: "agent/fail"})
+	_, err := command.Run(context.Background(), CreateCommandInput{Repository: createTestRepository(t), Branch: "agent/fail"})
 	if !errors.Is(err, prepErr) || !errors.Is(err, cleanupErr) || !strings.Contains(err.Error(), "cleanup also failed") {
 		t.Fatalf("error=%v, want preparation and cleanup failures", err)
 	}
@@ -166,7 +171,7 @@ func TestCreateCommandLifecycleFenceWrapsCreationAndPreparation(t *testing.T) {
 		fenceCalled = path != "" && ctx != nil
 		return operation()
 	}
-	if _, err := command.Run(context.Background(), CreateCommandInput{Repository: createTestRepository(), Branch: "agent/fenced"}); err != nil {
+	if _, err := command.Run(context.Background(), CreateCommandInput{Repository: createTestRepository(t), Branch: "agent/fenced"}); err != nil {
 		t.Fatalf("Run returned an error: %v", err)
 	}
 	if !fenceCalled {

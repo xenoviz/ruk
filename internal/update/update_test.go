@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -177,21 +178,21 @@ func TestChecksumMismatch(t *testing.T) {
 }
 
 func TestStandaloneRollback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX replacement relies on rename-over-existing semantics")
+	}
 	temporary := t.TempDir()
 	executable := filepath.Join(temporary, "ruk")
 	if err := os.WriteFile(executable, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	updater := New(Hooks{
-		Discover: func(context.Context) ([]Release, error) { return []Release{testRelease("0.3.0", []byte("new"))}, nil },
-		Download: func(context.Context, Asset) ([]byte, error) { return []byte("new"), nil },
-		Run: func(context.Context, string, []string) (CommandResult, error) {
-			return CommandResult{Stdout: "9.9.9\n"}, nil
-		},
-	})
-	_, err := updater.Update(context.Background(), Options{
-		Distribution: DistributionStandalone, CurrentVersion: "0.2.0", Platform: Platform{OS: "linux", Architecture: "x64"}, Executable: executable,
-	})
+	candidate := filepath.Join(temporary, "ruk.new")
+	if err := os.WriteFile(candidate, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := replacePOSIX(OSFileSystem{}, func(context.Context, string, []string) (CommandResult, error) {
+		return CommandResult{Stdout: "9.9.9\n"}, nil
+	}, context.Background(), executable, candidate, "0.3.0")
 	if err == nil || !strings.Contains(err.Error(), "failed its version check") {
 		t.Fatalf("error = %v, want verification failure", err)
 	}
@@ -262,11 +263,11 @@ func TestDetectLinuxMuslUsesTheNativeLoader(t *testing.T) {
 }
 
 func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
-	helper, script, err := WindowsReplacementPlan(`C:\\bin\\ruk.exe`, `C:\\bin\\.ruk.exe.new`, "0.3.0-beta.1", 4242)
+	helper, script, err := WindowsReplacementPlan(`C:\bin\ruk.exe`, `C:\bin\.ruk.exe.new`, "0.3.0-beta.1", 4242)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if helper != `C:\\bin\\.ruk.exe.new.cmd` {
+	if helper != `C:\bin\.ruk.exe.new.cmd` {
 		t.Fatalf("helper = %q", helper)
 	}
 	for _, forbidden := range []string{"tasklist", "taskkill", "powershell", "4242"} {
@@ -282,8 +283,8 @@ func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
 }
 
 func TestWindowsReplacementPlanRejectsBatchInjection(t *testing.T) {
-	for _, value := range []string{`C:\\bin\\ruk&evil.exe`, `C:\\bin\\ruk|evil.exe`, `C:\\bin\\ruk%PATH%.exe`, "0.3.0-beta.1\r\n"} {
-		if _, _, err := WindowsReplacementPlan(value, `C:\\bin\\candidate.exe`, "0.3.0", 1); err == nil {
+	for _, value := range []string{`C:\bin\ruk&evil.exe`, `C:\bin\ruk|evil.exe`, `C:\bin\ruk%PATH%.exe`, "0.3.0-beta.1\r\n"} {
+		if _, _, err := WindowsReplacementPlan(value, `C:\bin\candidate.exe`, "0.3.0", 1); err == nil {
 			t.Fatalf("unsafe replacement value %q was accepted", value)
 		}
 	}

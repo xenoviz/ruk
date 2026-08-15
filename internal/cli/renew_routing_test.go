@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -50,8 +51,17 @@ func TestApplicationRoutesRenewThroughRepositoryLifecycle(t *testing.T) {
 	if called != 1 {
 		t.Fatalf("renew calls = %d", called)
 	}
-	want := `{"status":"renewed","assignmentId":"assignment-1","path":"` + filepath.ToSlash(filepath.Join(root, "slot")) + `","expiresAt":"2026-08-16T12:15:00.000Z"}` + "\n"
-	if got := filepath.ToSlash(stdout.String()); got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
+	var got cli.RenewRecord
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("stdout = %q is not a renew record: %v", stdout.String(), err)
+	}
+	want := cli.RenewRecord{
+		Status:       "renewed",
+		AssignmentID: "assignment-1",
+		Path:         filepath.Join(root, "slot"),
+		ExpiresAt:    "2026-08-16T12:15:00.000Z",
+	}
+	if got != want {
+		t.Fatalf("stdout record = %#v, want %#v", got, want)
 	}
 }

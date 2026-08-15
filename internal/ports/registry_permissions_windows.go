@@ -25,15 +25,15 @@ var registryGetNamedSecurityInfo = registryAdvapi32.NewProc("GetNamedSecurityInf
 // tested without loading Windows APIs. The production implementation below
 // uses only APIs from the Go standard library and Win32 system DLLs.
 type registrySecurityInspector struct {
-	isReparsePoint func(string) (bool, error)
-	objectOwnerSID func(string) ([]byte, error)
-	processUserSID func() ([]byte, error)
+	isReparsePoint  func(string) (bool, error)
+	objectOwnerSID  func(string) ([]byte, error)
+	processOwnerSID func() ([]byte, error)
 }
 
 var nativeRegistrySecurityInspector = registrySecurityInspector{
-	isReparsePoint: registryIsReparsePoint,
-	objectOwnerSID: registryObjectOwnerSID,
-	processUserSID: registryProcessUserSID,
+	isReparsePoint:  registryIsReparsePoint,
+	objectOwnerSID:  registryObjectOwnerSID,
+	processOwnerSID: registryProcessOwnerSID,
 }
 
 func verifyRegistryRootOwner(info os.FileInfo, path string) error {
@@ -42,6 +42,26 @@ func verifyRegistryRootOwner(info os.FileInfo, path string) error {
 
 func verifyRegistryFileOwner(info os.FileInfo, path string) error {
 	return verifyRegistryOwner(info, []string{path}, nativeRegistrySecurityInspector)
+}
+
+func verifyRegistryRootPathComponent(info os.FileInfo, path string) error {
+	if info == nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return os.ErrPermission
+	}
+	if path == "" || !filepath.IsAbs(path) {
+		return fmt.Errorf("object path is unavailable")
+	}
+	if nativeRegistrySecurityInspector.isReparsePoint == nil {
+		return fmt.Errorf("native reparse-point inspection is unavailable")
+	}
+	reparsePoint, err := nativeRegistrySecurityInspector.isReparsePoint(path)
+	if err != nil {
+		return fmt.Errorf("inspect reparse-point state: %w", err)
+	}
+	if reparsePoint {
+		return os.ErrPermission
+	}
+	return nil
 }
 
 func verifyRegistryOwner(info os.FileInfo, paths []string, inspector registrySecurityInspector) error {
@@ -54,7 +74,7 @@ func verifyRegistryOwner(info os.FileInfo, paths []string, inspector registrySec
 	if len(paths) != 1 || paths[0] == "" || !filepath.IsAbs(paths[0]) {
 		return fmt.Errorf("object path is unavailable")
 	}
-	if inspector.isReparsePoint == nil || inspector.objectOwnerSID == nil || inspector.processUserSID == nil {
+	if inspector.isReparsePoint == nil || inspector.objectOwnerSID == nil || inspector.processOwnerSID == nil {
 		return fmt.Errorf("native ownership inspection is unavailable")
 	}
 	reparsePoint, err := inspector.isReparsePoint(paths[0])
@@ -68,9 +88,9 @@ func verifyRegistryOwner(info os.FileInfo, paths []string, inspector registrySec
 	if err != nil {
 		return fmt.Errorf("inspect object owner: %w", err)
 	}
-	processSID, err := inspector.processUserSID()
+	processSID, err := inspector.processOwnerSID()
 	if err != nil {
-		return fmt.Errorf("inspect process user: %w", err)
+		return fmt.Errorf("inspect process token owner: %w", err)
 	}
 	if len(objectSID) == 0 || len(processSID) == 0 || !bytes.Equal(objectSID, processSID) {
 		return os.ErrPermission
@@ -138,9 +158,11 @@ func registryObjectOwnerSID(path string) (sid []byte, resultErr error) {
 	return sid, nil
 }
 
-// registryProcessUserSID obtains TokenUser for the current process. The
+// registryProcessOwnerSID obtains TokenOwner for the current process. Windows
+// may assign a newly created directory to the token owner (for example the
+// Administrators group) rather than the elevated token's TokenUser SID. The
 // access token is a native handle and is closed on every path after opening.
-func registryProcessUserSID() (sid []byte, resultErr error) {
+func registryProcessOwnerSID() (sid []byte, resultErr error) {
 	token, err := syscall.OpenCurrentProcessToken()
 	if err != nil {
 		return nil, err
@@ -153,29 +175,29 @@ func registryProcessUserSID() (sid []byte, resultErr error) {
 	}()
 
 	var required uint32
-	err = syscall.GetTokenInformation(token, syscall.TokenUser, nil, 0, &required)
+	err = syscall.GetTokenInformation(token, syscall.TokenOwner, nil, 0, &required)
 	if err != syscall.ERROR_INSUFFICIENT_BUFFER || required == 0 {
 		if err == nil {
-			return nil, fmt.Errorf("token user size query unexpectedly succeeded")
+			return nil, fmt.Errorf("token owner size query unexpectedly succeeded")
 		}
 		return nil, err
 	}
 	buffer := make([]byte, required)
-	if err := syscall.GetTokenInformation(token, syscall.TokenUser, &buffer[0], uint32(len(buffer)), &required); err != nil {
+	if err := syscall.GetTokenInformation(token, syscall.TokenOwner, &buffer[0], uint32(len(buffer)), &required); err != nil {
 		return nil, err
 	}
-	if required < uint32(unsafe.Sizeof(syscall.Tokenuser{})) {
-		return nil, fmt.Errorf("token user information is truncated")
+	if required < uint32(unsafe.Sizeof(syscall.SIDAndAttributes{})) {
+		return nil, fmt.Errorf("token owner information is truncated")
 	}
-	tokenUser := (*syscall.Tokenuser)(unsafe.Pointer(&buffer[0]))
-	if tokenUser.User.Sid == nil {
-		return nil, fmt.Errorf("token user information did not contain a SID")
+	tokenOwner := (*syscall.SIDAndAttributes)(unsafe.Pointer(&buffer[0]))
+	if tokenOwner.Sid == nil {
+		return nil, fmt.Errorf("token owner information did not contain a SID")
 	}
-	length := syscall.GetLengthSid(tokenUser.User.Sid)
+	length := syscall.GetLengthSid(tokenOwner.Sid)
 	if length == 0 {
-		return nil, fmt.Errorf("token user information contained an invalid SID")
+		return nil, fmt.Errorf("token owner information contained an invalid SID")
 	}
-	userBytes := unsafe.Slice((*byte)(unsafe.Pointer(tokenUser.User.Sid)), length)
-	sid = append([]byte(nil), userBytes...)
+	ownerBytes := unsafe.Slice((*byte)(unsafe.Pointer(tokenOwner.Sid)), length)
+	sid = append([]byte(nil), ownerBytes...)
 	return sid, nil
 }

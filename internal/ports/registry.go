@@ -445,8 +445,19 @@ func ensureRegistryRoot(files RegistryFileSystem, root string) error {
 	if strings.TrimSpace(root) == "" || !filepath.IsAbs(root) {
 		return errors.New("port registry root must be an absolute path")
 	}
+	// Validate every existing component before creating anything. MkdirAll
+	// follows an existing junction/symlink, so checking only the final path
+	// after creation would allow a registry to be placed beneath an attacker-
+	// controlled parent. The second pass below closes the same gap for newly
+	// created components and detects a reparse point introduced during setup.
+	if err := validateRegistryRootPath(files, root); err != nil {
+		return fmt.Errorf("Unsafe Ruk host port directory %s: %w", root, err)
+	}
 	if err := files.MkdirAll(root, 0o700); err != nil {
 		return fmt.Errorf("create port registry root %s: %w", root, err)
+	}
+	if err := validateRegistryRootPath(files, root); err != nil {
+		return fmt.Errorf("Unsafe Ruk host port directory %s: %w", root, err)
 	}
 	info, err := files.Lstat(root)
 	if err != nil {
@@ -459,6 +470,28 @@ func ensureRegistryRoot(files RegistryFileSystem, root string) error {
 		return fmt.Errorf("Unsafe Ruk host port directory %s: %w", root, err)
 	}
 	return nil
+}
+
+func validateRegistryRootPath(files RegistryFileSystem, root string) error {
+	cleanRoot := filepath.Clean(root)
+	for current := cleanRoot; ; current = filepath.Dir(current) {
+		info, err := files.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			if filepath.Dir(current) == current {
+				return nil
+			}
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect port registry path %s: %w", current, err)
+		}
+		if err := verifyRegistryRootPathComponent(info, current); err != nil {
+			return fmt.Errorf("unsafe port registry path %s: %w", current, err)
+		}
+		if filepath.Dir(current) == current {
+			return nil
+		}
+	}
 }
 
 func encodeRegistry(value hostPortRegistry) ([]byte, error) {

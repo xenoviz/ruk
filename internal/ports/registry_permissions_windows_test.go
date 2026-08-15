@@ -23,13 +23,13 @@ func (info registryPermissionTestInfo) Sys() any           { return nil }
 
 func matchingRegistrySecurityInspector() registrySecurityInspector {
 	return registrySecurityInspector{
-		isReparsePoint: func(string) (bool, error) { return false, nil },
-		objectOwnerSID: func(string) ([]byte, error) { return []byte{1, 2, 3}, nil },
-		processUserSID: func() ([]byte, error) { return []byte{1, 2, 3}, nil },
+		isReparsePoint:  func(string) (bool, error) { return false, nil },
+		objectOwnerSID:  func(string) ([]byte, error) { return []byte{1, 2, 3}, nil },
+		processOwnerSID: func() ([]byte, error) { return []byte{1, 2, 3}, nil },
 	}
 }
 
-func TestVerifyRegistryOwnerMatchesCurrentProcessUser(t *testing.T) {
+func TestVerifyRegistryOwnerMatchesCurrentTokenOwner(t *testing.T) {
 	info := registryPermissionTestInfo{name: "ports.json", mode: 0o600}
 	if err := verifyRegistryOwner(info, []string{"C:\\ruk\\ports.json"}, matchingRegistrySecurityInspector()); err != nil {
 		t.Fatalf("verifyRegistryOwner() error = %v", err)
@@ -38,7 +38,7 @@ func TestVerifyRegistryOwnerMatchesCurrentProcessUser(t *testing.T) {
 
 func TestVerifyRegistryOwnerRejectsMismatchedOwner(t *testing.T) {
 	inspector := matchingRegistrySecurityInspector()
-	inspector.processUserSID = func() ([]byte, error) { return []byte{9, 9, 9}, nil }
+	inspector.processOwnerSID = func() ([]byte, error) { return []byte{9, 9, 9}, nil }
 	info := registryPermissionTestInfo{name: "ports.json", mode: 0o600}
 	if err := verifyRegistryOwner(info, []string{"C:\\ruk\\ports.json"}, inspector); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("verifyRegistryOwner() error = %v, want permission error", err)
@@ -78,8 +78,8 @@ func TestVerifyRegistryOwnerFailsClosedOnOwnerOrProcessInspectionError(t *testin
 		t.Fatal("owner inspection unexpectedly succeeded")
 	}
 	inspector = matchingRegistrySecurityInspector()
-	inspector.processUserSID = func() ([]byte, error) { return nil, errors.New("token unavailable") }
+	inspector.processOwnerSID = func() ([]byte, error) { return nil, errors.New("token unavailable") }
 	if err := verifyRegistryOwner(info, []string{"C:\\ruk\\ports.json"}, inspector); err == nil {
-		t.Fatal("process-user inspection unexpectedly succeeded")
+		t.Fatal("process-token-owner inspection unexpectedly succeeded")
 	}
 }

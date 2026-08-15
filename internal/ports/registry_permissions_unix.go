@@ -23,3 +23,10 @@ func verifyRegistryFileOwner(info os.FileInfo, _ string) error {
 	}
 	return nil
 }
+
+func verifyRegistryRootPathComponent(info os.FileInfo, _ string) error {
+	if info == nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("path component is not a directory")
+	}
+	return nil
+}
