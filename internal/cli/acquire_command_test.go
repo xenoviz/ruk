@@ -97,13 +97,34 @@ func TestAcquireInvalidTTLDoesNotCallOperation(t *testing.T) {
 }
 
 func TestAcquireRejectsMalformedLifecycleResult(t *testing.T) {
-	_, err := cli.Acquire(context.Background(), cli.AcquireInput{
-		Branch: "agent/task", Owner: "owner", Hostname: "host",
-		Now: time.Date(2026, time.August, 16, 12, 0, 0, 0, time.UTC),
-	}, func(context.Context, cli.AcquireOperationInput) (lifecycle.AcquisitionResult, error) {
-		return lifecycle.AcquisitionResult{}, nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "without an assignment") {
-		t.Fatalf("Acquire error = %v", err)
+	for _, test := range []struct {
+		name   string
+		result lifecycle.AcquisitionResult
+		want   string
+	}{
+		{name: "missing assignment", result: lifecycle.AcquisitionResult{}, want: "without an assignment"},
+		{name: "unfinished lifecycle", result: func() lifecycle.AcquisitionResult {
+			value := acquireLifecycleResult()
+			value.Workspace.Lifecycle = state.LifecyclePreparing
+			return value
+		}(), want: "expected assigned"},
+		{name: "unfinished operation", result: func() lifecycle.AcquisitionResult {
+			value := acquireLifecycleResult()
+			operation := "handoff"
+			value.Workspace.OperationID = &operation
+			return value
+		}(), want: "operation is still in progress"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := cli.Acquire(context.Background(), cli.AcquireInput{
+				Branch: "agent/task", Owner: "owner", Hostname: "host",
+				Now: time.Date(2026, time.August, 16, 12, 0, 0, 0, time.UTC),
+			}, func(context.Context, cli.AcquireOperationInput) (lifecycle.AcquisitionResult, error) {
+				return test.result, nil
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Acquire error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
