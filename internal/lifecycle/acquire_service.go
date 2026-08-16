@@ -30,6 +30,7 @@ type AcquisitionStateReader interface {
 // invokes a subprocess directly.
 type AcquisitionWorktree interface {
 	Create(context.Context, string, string, string) error
+	Lock(context.Context, string) error
 	Assign(context.Context, string, string, string) error
 }
 
@@ -51,9 +52,13 @@ type AcquisitionOptions struct {
 	Lifecycle *Service
 	Reader    AcquisitionStateReader
 	Locker    AcquisitionLocker
-	Worktree  AcquisitionWorktree
-	Prepare   DependencyPreparer
-	Ports     PortAllocator
+	// PrimaryLocker fences assignment publication against deny-mode work in
+	// the repository's primary checkout. It is acquired before Locker.
+	PrimaryLocker   AcquisitionLocker
+	PrimaryLockPath string
+	Worktree        AcquisitionWorktree
+	Prepare         DependencyPreparer
+	Ports           PortAllocator
 
 	// WorkspacePath creates a destination when no reusable workspace exists.
 	// An explicit AcquisitionInput.WorkspacePath takes precedence.
@@ -75,6 +80,8 @@ type AcquisitionService struct {
 	lifecycle     *Service
 	reader        AcquisitionStateReader
 	locker        AcquisitionLocker
+	primaryLocker AcquisitionLocker
+	primaryPath   string
 	worktree      AcquisitionWorktree
 	prepare       DependencyPreparer
 	ports         PortAllocator
@@ -98,6 +105,8 @@ func NewAcquisitionService(options AcquisitionOptions) *AcquisitionService {
 		lifecycle:     options.Lifecycle,
 		reader:        options.Reader,
 		locker:        options.Locker,
+		primaryLocker: options.PrimaryLocker,
+		primaryPath:   options.PrimaryLockPath,
 		worktree:      options.Worktree,
 		prepare:       options.Prepare,
 		ports:         options.Ports,
@@ -172,6 +181,25 @@ func (service *AcquisitionService) Acquire(ctx context.Context, input AcquireInp
 		return AcquisitionResult{}, errors.New("port allocation is not configured")
 	}
 
+	if service.primaryLocker != nil && service.primaryPath == "" {
+		return AcquisitionResult{}, errors.New("primary checkout lock path is not configured")
+	}
+	// Selection is deliberately read-only. Publishing the assigned operation
+	// marker is done only after the repository fence and workspace handoff lock
+	// are held.
+	if service.primaryLocker != nil {
+		var result AcquisitionResult
+		var acquireErr error
+		acquireErr = service.primaryLocker.With(ctx, service.primaryPath, func() error {
+			result, acquireErr = service.acquireLoop(ctx, input)
+			return acquireErr
+		})
+		return result, acquireErr
+	}
+	return service.acquireLoop(ctx, input)
+}
+
+func (service *AcquisitionService) acquireLoop(ctx context.Context, input AcquireInput) (AcquisitionResult, error) {
 	// Selection is deliberately read-only. Publishing the assigned operation
 	// marker is done only after the selected workspace's handoff lock is held.
 	for attempt := 0; attempt < 8; attempt++ {
@@ -318,6 +346,9 @@ func (service *AcquisitionService) acquireFresh(ctx context.Context, input Acqui
 		}
 		if err := service.worktree.Create(ctx, path, input.Assignment.Branch, input.StartPoint); err != nil {
 			return service.failPreparation(ctx, path, preparationID, true, err)
+		}
+		if err := service.worktree.Lock(ctx, path); err != nil {
+			return service.failPreparation(ctx, path, preparationID, true, fmt.Errorf("lock fresh worktree %s: %w", path, err))
 		}
 		if err := service.worktree.Assign(ctx, path, input.Assignment.Branch, input.StartPoint); err != nil {
 			return service.failPreparation(ctx, path, preparationID, true, err)

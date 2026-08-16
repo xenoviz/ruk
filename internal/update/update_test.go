@@ -4,6 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -88,7 +92,12 @@ func TestPrereleaseSelection(t *testing.T) {
 
 func TestCurrentPrereleaseStaysOnPrereleaseChannel(t *testing.T) {
 	updater := New(Hooks{Discover: func(context.Context) ([]Release, error) {
-		return []Release{testRelease("0.3.0-beta.2", []byte("beta")), testRelease("0.2.9", []byte("stable"))}, nil
+		return []Release{
+			testRelease("0.4.0", []byte("stable")),
+			testRelease("0.4.0-alpha.1", []byte("alpha")),
+			testRelease("0.3.0-beta.2", []byte("beta")),
+			testRelease("0.2.9", []byte("stable")),
+		}, nil
 	}})
 	result, err := updater.Update(context.Background(), Options{
 		Distribution: DistributionPackage, CurrentVersion: "0.3.0-beta.1", CheckOnly: true,
@@ -98,6 +107,24 @@ func TestCurrentPrereleaseStaysOnPrereleaseChannel(t *testing.T) {
 	}
 	if result.LatestVersion != "0.3.0-beta.2" || result.Status != StatusUpdateAvailable {
 		t.Fatalf("unexpected prerelease result: %+v", result)
+	}
+}
+
+func TestExplicitPrereleaseOptInCanChangeChannel(t *testing.T) {
+	updater := New(Hooks{Discover: func(context.Context) ([]Release, error) {
+		return []Release{
+			testRelease("0.4.0-alpha.1", []byte("alpha")),
+			testRelease("0.3.0-beta.2", []byte("beta")),
+		}, nil
+	}})
+	result, err := updater.Update(context.Background(), Options{
+		Distribution: DistributionPackage, CurrentVersion: "0.3.0-beta.1", CheckOnly: true, AllowPrerelease: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.LatestVersion != "0.4.0-alpha.1" {
+		t.Fatalf("explicit prerelease result = %+v", result)
 	}
 }
 
@@ -220,6 +247,95 @@ func TestPackageDelegation(t *testing.T) {
 	}
 	if result.Status != StatusUpdated || command != "pnpm" || strings.Join(args, " ") != "add --global @xenoviz/ruk@0.3.0" {
 		t.Fatalf("delegation = %+v %s %v", result, command, args)
+	}
+}
+
+func TestBunInstallerCommandTrustsNativePostinstall(t *testing.T) {
+	command, args, err := InstallerCommand(InstallerBun, "0.3.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command != "bun" || strings.Join(args, " ") != "add --global --trust @xenoviz/ruk@0.3.0" {
+		t.Fatalf("bun update command = %s %v", command, args)
+	}
+}
+
+type updateRoundTripper func(*http.Request) (*http.Response, error)
+
+func (roundTripper updateRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTripper(request)
+}
+
+func readyManifestBytes(version string) []byte {
+	assetNames := []string{
+		"ruk-linux-x64", "ruk-linux-arm64", "ruk-linux-x64-musl", "ruk-macos-x64",
+		"ruk-macos-arm64", "ruk-windows-x64.exe", "ruk-windows-arm64.exe",
+	}
+	assets := make(map[string]Asset, len(assetNames))
+	for _, name := range assetNames {
+		assets[name] = Asset{Name: name, SHA256: strings.Repeat("a", 64), Size: 1}
+	}
+	manifest, err := json.Marshal(Manifest{
+		SchemaVersion: 1, Repository: Repository, Version: version,
+		Package: ManifestPackage{Name: PackageName, Version: version}, Assets: assets,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return manifest
+}
+
+func TestHTTPDiscoveryPagesUntilReadyRelease(t *testing.T) {
+	readyVersion := "0.3.0"
+	pageOne := make([]map[string]any, releasesPerPage)
+	for index := range pageOne {
+		pageOne[index] = map[string]any{"tag_name": fmt.Sprintf("not-a-version-%d", index)}
+	}
+	readyAssets := make([]map[string]string, 0, 8)
+	for _, name := range append([]string{"ruk-release.json"}, "ruk-linux-x64", "ruk-linux-arm64", "ruk-linux-x64-musl", "ruk-macos-x64", "ruk-macos-arm64", "ruk-windows-x64.exe", "ruk-windows-arm64.exe") {
+		readyAssets = append(readyAssets, map[string]string{
+			"name":                 name,
+			"browser_download_url": "https://github.com/xenoviz/ruk/releases/download/v" + readyVersion + "/" + name,
+		})
+	}
+	pageTwo := []map[string]any{{"tag_name": "v" + readyVersion, "assets": readyAssets}}
+	pageRequests := make([]int, 0, 2)
+	client := &http.Client{Transport: updateRoundTripper(func(request *http.Request) (*http.Response, error) {
+		var body []byte
+		switch request.URL.Query().Get("page") {
+		case "1":
+			pageRequests = append(pageRequests, 1)
+			body, _ = json.Marshal(pageOne)
+		case "2":
+			pageRequests = append(pageRequests, 2)
+			body, _ = json.Marshal(pageTwo)
+		default:
+			return nil, fmt.Errorf("unexpected page %q", request.URL.Query().Get("page"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	})}
+	updater := New(Hooks{HTTPClient: client, Download: func(context.Context, Asset) ([]byte, error) {
+		return readyManifestBytes(readyVersion), nil
+	}})
+	result, err := updater.discoverHTTP(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0].Version != readyVersion {
+		t.Fatalf("discovered releases = %+v", result)
+	}
+	if fmt.Sprint(pageRequests) != "[1 2]" {
+		t.Fatalf("pages requested = %v", pageRequests)
+	}
+}
+
+func TestHTTPDiscoveryRejectsMalformedReleasePage(t *testing.T) {
+	client := &http.Client{Transport: updateRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("{"))}, nil
+	})}
+	_, err := New(Hooks{HTTPClient: client}).discoverHTTP(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "invalid release list") {
+		t.Fatalf("malformed page error = %v", err)
 	}
 }
 

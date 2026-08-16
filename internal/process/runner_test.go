@@ -70,6 +70,15 @@ type runnerCleaner struct {
 	record state.TrackedProcessRecord
 }
 
+type runnerUnknownCleaner struct {
+	runnerCleaner
+	err error
+}
+
+func (cleaner *runnerUnknownCleaner) CleanupUnknown(context.Context, processpkg.Child, processpkg.ProcessMode, state.TrackedProcessRecord) (bool, error) {
+	return false, cleaner.err
+}
+
 func (cleaner *runnerCleaner) Cleanup(_ context.Context, child processpkg.Child, record state.TrackedProcessRecord) error {
 	cleaner.calls++
 	cleaner.record = record
@@ -77,6 +86,10 @@ func (cleaner *runnerCleaner) Cleanup(_ context.Context, child processpkg.Child,
 		_ = child.Signal(os.Kill)
 	}
 	return cleaner.err
+}
+
+func (cleaner *runnerCleaner) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	return false, nil
 }
 
 type runnerForwarder struct {
@@ -175,6 +188,49 @@ func TestRunnerBoundsDiagnosticTailAndPreservesWriter(t *testing.T) {
 	}
 }
 
+func TestRunnerCompletesHandoffBeforeWaitingForChild(t *testing.T) {
+	t.Parallel()
+	child := &runnerChild{pid: 77, status: processpkg.ExitStatus{Code: 0}}
+	runner := processpkg.Runner{
+		Spawner:   &runnerSpawner{child: child},
+		Describer: runnerDescriber{record: state.TrackedProcessRecord{PID: 77, StartedAt: "started"}},
+	}
+	handoffCalled := false
+	handoffSawWait := false
+	_, err := runner.Run(context.Background(), []string{"tool"}, processpkg.RunOptions{
+		Register: func(context.Context, state.TrackedProcessRecord) error { return nil },
+		HandoffComplete: func() {
+			handoffCalled = true
+			handoffSawWait = child.waited
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+	if !handoffCalled {
+		t.Fatal("handoff callback was not called")
+	}
+	if handoffSawWait {
+		t.Fatal("handoff callback ran after child wait")
+	}
+}
+
+func TestRunnerPropagatesForegroundTerminalBoundary(t *testing.T) {
+	t.Parallel()
+	child := &runnerChild{pid: 13, status: processpkg.ExitStatus{Code: 0}}
+	spawner := &runnerSpawner{child: child}
+	runner := processpkg.Runner{
+		Spawner:   spawner,
+		Describer: runnerDescriber{record: state.TrackedProcessRecord{PID: 13, StartedAt: "started", GroupID: int64Pointer(13)}},
+	}
+	if _, err := runner.Run(context.Background(), []string{"shell"}, processpkg.RunOptions{Mode: processpkg.Detached, ForegroundTerminal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !spawner.request.ForegroundTerminal || spawner.request.Mode != processpkg.Detached {
+		t.Fatalf("spawn boundary = %#v", spawner.request)
+	}
+}
+
 func TestNativeProcessDescriberRequiresExactIdentityAndDetachedGroup(t *testing.T) {
 	t.Parallel()
 	probe := staticProbe{state: lock.ProcessState{Alive: true, IdentityKnown: true, Identity: "started"}}
@@ -222,23 +278,28 @@ func TestRunnerPostSpawnDescriptionFailureCleanupIsIdentityFenced(t *testing.T) 
 		wantSetupErr bool
 	}{
 		{
-			name:         "exact attached record cleans up",
+			name:         "describer error does not trust returned attached record",
 			record:       state.TrackedProcessRecord{PID: 77, StartedAt: "started"},
-			wantCleanup:  true,
+			wantCleanup:  false,
 			wantSetupErr: true,
 		},
 		{
-			name:         "cleanup refusal is retained with both causes",
+			name:         "describer error retains returned record without cleanup",
 			record:       state.TrackedProcessRecord{PID: 77, StartedAt: "started"},
-			cleanupErr:   errors.New("identity changed"),
-			wantCleanup:  true,
+			wantCleanup:  false,
 			wantSetupErr: true,
 		},
 		{
 			name:         "unverified description retains pid only",
 			record:       state.TrackedProcessRecord{},
 			wantCleanup:  false,
-			wantSetupErr: false,
+			wantSetupErr: true,
+		},
+		{
+			name:         "unusable described record retains pid only",
+			record:       state.TrackedProcessRecord{PID: 77},
+			wantCleanup:  false,
+			wantSetupErr: true,
 		},
 	}
 	for _, test := range tests {
@@ -257,6 +318,15 @@ func TestRunnerPostSpawnDescriptionFailureCleanupIsIdentityFenced(t *testing.T) 
 			var setupErr *processpkg.ProcessSetupError
 			if errors.As(err, &setupErr) != test.wantSetupErr {
 				t.Fatalf("ProcessSetupError = %v, want %v (error %v)", setupErr != nil, test.wantSetupErr, err)
+			}
+			if test.wantSetupErr && !test.wantCleanup {
+				var unsafeErr *processpkg.ProcessCleanupUnsafeError
+				if !errors.As(err, &unsafeErr) {
+					t.Fatalf("error = %T %v, want ProcessCleanupUnsafeError", err, err)
+				}
+				if unsafeErr.PID != 77 || unsafeErr.Mode != processpkg.Attached {
+					t.Fatalf("unsafe cleanup error = %#v", unsafeErr)
+				}
 			}
 			if test.cleanupErr != nil && !errors.Is(err, test.cleanupErr) {
 				t.Fatalf("error = %v, want cleanup cause", err)
@@ -293,8 +363,66 @@ func TestRunnerValidationFailureDoesNotSignalUnverifiedDetachedGroup(t *testing.
 	if cleaner.calls != 0 {
 		t.Fatalf("cleanup calls = %d, want 0 for unverified group", cleaner.calls)
 	}
-	if result.PID != 88 || result.Record.StartedAt != "started" {
+	if result.PID != 88 || result.Record.StartedAt != "" {
 		t.Fatalf("retained result = %#v", result)
+	}
+}
+
+func TestRunnerPersistsUnverifiedDetachedSentinelBeforeUnsafeCleanup(t *testing.T) {
+	child := &runnerChild{pid: 91, status: processpkg.ExitStatus{Code: 0}}
+	cleaner := &runnerUnknownCleaner{err: errors.New("identity unavailable")}
+	runner := processpkg.Runner{
+		Spawner:   &runnerSpawner{child: child},
+		Describer: runnerDescriber{err: errors.New("identity probe failed")},
+		Cleaner:   cleaner,
+	}
+	var sentinel state.TrackedProcessRecord
+	_, err := runner.Run(context.Background(), []string{"tool", "--flag"}, processpkg.RunOptions{
+		Mode: processpkg.Detached,
+		Register: func(_ context.Context, record state.TrackedProcessRecord) error {
+			sentinel = record
+			return nil
+		},
+	})
+	if err == nil || sentinel.StartedAt != processpkg.UnverifiedIdentityMarker || sentinel.PID != 91 || sentinel.GroupID == nil || *sentinel.GroupID != 91 {
+		t.Fatalf("Run error = %v; sentinel = %#v", err, sentinel)
+	}
+	if !reflect.DeepEqual(sentinel.Command, []string{"tool", "--flag"}) {
+		t.Fatalf("sentinel command = %#v", sentinel.Command)
+	}
+}
+
+func TestRunnerPersistsUnverifiedAttachedSentinelWithoutGroup(t *testing.T) {
+	child := &runnerChild{pid: 92, status: processpkg.ExitStatus{Code: 0}}
+	cleaner := &runnerUnknownCleaner{err: errors.New("identity unavailable")}
+	runner := processpkg.Runner{
+		Spawner:   &runnerSpawner{child: child},
+		Describer: runnerDescriber{err: errors.New("identity probe failed")},
+		Cleaner:   cleaner,
+	}
+	var sentinel state.TrackedProcessRecord
+	_, err := runner.Run(context.Background(), []string{"tool"}, processpkg.RunOptions{
+		Mode: processpkg.Attached,
+		Register: func(_ context.Context, record state.TrackedProcessRecord) error {
+			sentinel = record
+			return nil
+		},
+	})
+	if err == nil || sentinel.StartedAt != processpkg.UnverifiedIdentityMarker || sentinel.PID != 92 || sentinel.GroupID != nil {
+		t.Fatalf("Run error = %v; sentinel = %#v, want attached sentinel without group", err, sentinel)
+	}
+}
+
+func TestNativeProcessCleanerAttachedRejectsIdentityChangeAtSecondFence(t *testing.T) {
+	probe := &releaseProbeForRunner{states: []lock.ProcessState{
+		{Alive: true, IdentityKnown: true, Identity: "started"},
+		{Alive: true, IdentityKnown: true, Identity: "replacement"},
+	}}
+	child := &runnerChild{pid: 93}
+	cleaner := processpkg.NativeProcessCleaner{Probe: probe}
+	err := cleaner.Cleanup(context.Background(), child, state.TrackedProcessRecord{PID: 93, StartedAt: "started"})
+	if err == nil || len(child.signals) != 0 || probe.index != 2 {
+		t.Fatalf("Cleanup = %v; signals = %#v; probe calls = %d", err, child.signals, probe.index)
 	}
 }
 
@@ -304,6 +432,23 @@ func boolInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+type releaseProbeForRunner struct {
+	states []lock.ProcessState
+	index  int
+}
+
+func (probe *releaseProbeForRunner) Inspect(context.Context, int) (lock.ProcessState, error) {
+	if len(probe.states) == 0 {
+		return lock.ProcessState{}, errors.New("probe exhausted")
+	}
+	state := probe.states[0]
+	if len(probe.states) > 1 {
+		probe.states = probe.states[1:]
+	}
+	probe.index++
+	return state, nil
 }
 
 type staticProbe struct{ state lock.ProcessState }

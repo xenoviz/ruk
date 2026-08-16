@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/xenoviz/ruk/internal/git"
-	"github.com/xenoviz/ruk/internal/lock"
 	"github.com/xenoviz/ruk/internal/state"
 )
 
@@ -57,12 +57,16 @@ type EnsureInput struct {
 	Files      []string
 	ListFiles  DependencyFileLister
 
-	Store         StateStore
-	Locker        DirectoryLocker
-	Installer     InstallerBackend
-	CurrentBranch CurrentBranchReader
-	BeforePrepare func() error
-	Now           func() time.Time
+	Store           StateStore
+	Locker          DirectoryLocker
+	Installer       InstallerBackend
+	CurrentBranch   CurrentBranchReader
+	BeforePrepare   func() error
+	Now             func() time.Time
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Stderr          io.Writer
+	MachineReadable bool
 }
 
 // EnsureDependenciesInput is retained as a descriptive alias for callers
@@ -110,14 +114,20 @@ func EnsureDependencies(ctx context.Context, input EnsureInput) (EnsureResult, e
 	store := input.Store
 	locker := input.Locker
 	if locker == nil {
-		locker = lock.NewDirectoryLocker(lock.Config{})
+		locker, err = newNativeDirectoryLocker(ctx)
+		if err != nil {
+			return EnsureResult{}, err
+		}
 	}
 	if store == nil {
 		store = state.NewStore(input.Repository.CommonDir, locker)
 	}
 	installer := input.Installer
 	if installer == nil {
-		installer = Installer{}
+		installer = Installer{
+			Stdin: input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
+			InheritStdio: !input.MachineReadable,
+		}
 	}
 	branch := input.CurrentBranch
 	if branch == nil {

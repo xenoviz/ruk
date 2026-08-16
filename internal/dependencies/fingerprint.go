@@ -18,7 +18,7 @@ import (
 	"strings"
 )
 
-const fingerprintVersion = "ruk-fingerprint-v2"
+const fingerprintVersion = "ruk-fingerprint-v3"
 
 // PackageManager describes the inputs supplied by the selected installer.
 // Command is copied before it is returned in FingerprintDetails, so callers

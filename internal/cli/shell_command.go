@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/xenoviz/ruk/internal/ports"
 )
 
 // ShellAcquirer is the acquire seam used by ShellService. It may delegate to
@@ -21,6 +23,7 @@ type ShellTerminalRequest struct {
 	AssignmentID  string
 	WorkspacePath string
 	Shell         string
+	Environment   map[string]string
 	Stdin         io.Reader
 	Stdout        io.Writer
 	Stderr        io.Writer
@@ -184,6 +187,10 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 	if acquired.AssignmentID == "" || acquired.Path == "" || acquired.ExpiresAt == "" {
 		return ShellResult{}, errors.New("shell acquire returned an incomplete assignment")
 	}
+	environment, err := ports.BuildEnvironment(acquired.Ports)
+	if err != nil {
+		return ShellResult{AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: acquired.ExpiresAt, Retained: true}, retainedShellError(acquired, fmt.Errorf("build shell port environment: %w", err))
+	}
 	base := ShellResult{Shell: shell, AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: acquired.ExpiresAt}
 	if input.Stderr != nil {
 		if _, err := fmt.Fprintf(input.Stderr, "Shell workspace: %s\nAssignment: %s\n", acquired.Path, acquired.AssignmentID); err != nil {
@@ -193,7 +200,8 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 	}
 	terminal, terminalErr := service.terminal.Run(ctx, ShellTerminalRequest{
 		AssignmentID: acquired.AssignmentID, WorkspacePath: acquired.Path, Shell: shell,
-		Stdin: input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
+		Environment: environment,
+		Stdin:       input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
 	})
 	base.ExitCode = terminal.ExitCode
 	base.Signal = terminal.Signal

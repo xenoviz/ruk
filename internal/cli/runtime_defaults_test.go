@@ -57,12 +57,14 @@ func TestRuntimeWarmComposesLifecycleAndInjectedPreparationSeams(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	worktree := &runtimeDefaultsWarmWorktree{}
 	prepared := false
+	syncJSON := false
 	defaults, err := NewRuntimeDefaults(RuntimeDefaultsOptions{
 		Now:   func() time.Time { return clock },
 		NewID: func() string { return "00000000-0000-4000-8000-000000000011" },
 		Mutations: MutationAdapterOptions{
 			Sync: func(_ context.Context, input SyncCommandInput) (SyncCommandResult, error) {
 				prepared = input.Repository.Root != repository.Root
+				syncJSON = input.JSON
 				return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
 			},
 		},
@@ -74,12 +76,12 @@ func TestRuntimeWarmComposesLifecycleAndInjectedPreparationSeams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := defaults.Warm(context.Background(), repository, WarmRequest{Count: 1, From: "HEAD"})
+	result, err := defaults.Warm(context.Background(), repository, WarmRequest{Count: 1, From: "HEAD", JSON: true})
 	if err != nil {
 		t.Fatalf("warm route returned an error: %v", err)
 	}
-	if result.Status != "warmed" || result.Requested != 1 || result.Available != 1 || len(result.Created) != 1 || !prepared || len(worktree.created) != 1 || len(worktree.locked) != 1 {
-		t.Fatalf("warm result=%#v prepared=%v created=%#v locked=%#v", result, prepared, worktree.created, worktree.locked)
+	if result.Status != "warmed" || result.Requested != 1 || result.Available != 1 || len(result.Created) != 1 || !prepared || !syncJSON || len(worktree.created) != 1 || len(worktree.locked) != 1 {
+		t.Fatalf("warm result=%#v prepared=%v syncJSON=%v created=%#v locked=%#v", result, prepared, syncJSON, worktree.created, worktree.locked)
 	}
 }
 

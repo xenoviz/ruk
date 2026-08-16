@@ -69,25 +69,40 @@ func (resolver ManagerResolver) Resolve(ctx context.Context, root string, cfg co
 		manager.DependencyMode = string(config.Managed)
 	}
 
-	// Only a shared supported backend needs a package-manager version. This is
-	// deliberately narrower than probing every configured command: install
-	// commands may be wrappers, scripts, or arbitrary user programs.
-	if manager.DependencyMode != string(config.Shared) {
-		return manager, nil
-	}
-	if manager.Name != "bun" && manager.Name != "pnpm" {
+	// Probe only standard package managers. Custom commands may be wrappers,
+	// scripts, or arbitrary user programs and must never be executed merely to
+	// fingerprint a projection.
+	if !isStandardManagerSelection(manager) {
+		if manager.DependencyMode != string(config.Shared) {
+			return manager, nil
+		}
 		return PackageManager{}, AssertSharedBackendSupported(manager.Name, manager.Version)
 	}
-
 	version, probeErr := resolver.probeVersion(ctx, root, manager.Name, manager.Command)
 	if probeErr != nil {
 		return PackageManager{}, probeErr
 	}
 	manager.Version = version
+	if manager.DependencyMode != string(config.Shared) {
+		return manager, nil
+	}
 	if err := AssertSharedBackendSupported(manager.Name, manager.Version); err != nil {
 		return PackageManager{}, err
 	}
 	return manager, nil
+}
+
+func isStandardPackageManager(name string) bool {
+	switch name {
+	case "bun", "npm", "pnpm", "yarn":
+		return true
+	default:
+		return false
+	}
+}
+
+func isStandardManagerSelection(manager PackageManager) bool {
+	return isStandardPackageManager(manager.Name) && len(manager.Command) > 0 && manager.Command[0] == manager.Name
 }
 
 func (resolver ManagerResolver) probeVersion(ctx context.Context, root, name string, command []string) (string, error) {

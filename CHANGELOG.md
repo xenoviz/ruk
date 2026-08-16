@@ -32,6 +32,15 @@ versioning.
 - Pin release builds to the triggering commit, require it to descend from
   protected `main`, and protect version tags from updates and deletion.
 - Restore a prominent link to private vulnerability-reporting instructions.
+- Fence primary-checkout work against concurrent assignment publication, keep
+  foreground shell descendants durably tracked, and fail closed when native
+  process identity or cleanup cannot be proven.
+- Include package-manager runtime and native ABI details in dependency
+  fingerprints, stream human installer output with bounded diagnostics, and
+  keep JSON-mode installers silent and memory-bounded.
+- Harden garbage collection against current-workspace subdirectories and
+  interrupted state removal, and keep prerelease updates on their current
+  channel while discovering every paginated GitHub release.
 
 ## 0.1.2 - 2026-08-08
 

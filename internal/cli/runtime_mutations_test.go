@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xenoviz/ruk/internal/dependencies"
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/lifecycle"
 	"github.com/xenoviz/ruk/internal/lock"
@@ -34,6 +35,8 @@ func (stub *runtimeWorkspaceStub) Create(_ context.Context, path, branch, start 
 	stub.created = append(stub.created, strings.Join([]string{path, branch, start}, "|"))
 	return nil
 }
+
+func (stub *runtimeWorkspaceStub) Lock(context.Context, string) error { return nil }
 
 func (stub *runtimeWorkspaceStub) Assign(_ context.Context, path, branch, start string) error {
 	stub.assigned = append(stub.assigned, strings.Join([]string{path, branch, start}, "|"))
@@ -74,11 +77,13 @@ func TestMutationWorkspaceLockPathMatchesStateLockLayout(t *testing.T) {
 
 func TestNewMutationAdaptersBuildsAllRoutesAndCreateOrchestratesFreshWorktree(t *testing.T) {
 	workspace := &runtimeWorkspaceStub{}
+	syncJSON := false
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	adapters, err := NewMutationAdapters(MutationAdapterOptions{
 		Now:   func() time.Time { return clock },
 		NewID: func() string { return "00000000-0000-4000-8000-000000000001" },
 		Sync: func(_ context.Context, input SyncCommandInput) (SyncCommandResult, error) {
+			syncJSON = input.JSON
 			if input.Repository.Root == "" {
 				return SyncCommandResult{}, errors.New("missing sync root")
 			}
@@ -111,6 +116,9 @@ func TestNewMutationAdaptersBuildsAllRoutesAndCreateOrchestratesFreshWorktree(t 
 	if !strings.Contains(workspace.created[0], "agent-fresh") || !strings.HasSuffix(workspace.created[0], "|HEAD") {
 		t.Fatalf("created workspace = %q, want branch slug", workspace.created[0])
 	}
+	if !syncJSON {
+		t.Fatal("JSON acquire did not propagate machine-readable sync policy")
+	}
 }
 
 func TestAcquirePreparationDoesNotReenterWorkspaceHandoffLock(t *testing.T) {
@@ -118,10 +126,12 @@ func TestAcquirePreparationDoesNotReenterWorkspaceHandoffLock(t *testing.T) {
 	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
 	workspace := &runtimeWorkspaceStub{}
 	preparationCalled := false
+	syncJSON := true
 	adapters, err := NewMutationAdapters(MutationAdapterOptions{
 		Now:   func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) },
 		NewID: func() string { return "00000000-0000-4000-8000-000000000020" },
 		Sync: func(ctx context.Context, input SyncCommandInput) (SyncCommandResult, error) {
+			syncJSON = input.JSON
 			if input.Ensure.Store == nil || input.Ensure.Locker == nil {
 				return SyncCommandResult{}, errors.New("acquire preparation did not receive its lock seams")
 			}
@@ -157,6 +167,9 @@ func TestAcquirePreparationDoesNotReenterWorkspaceHandoffLock(t *testing.T) {
 	}
 	if !preparationCalled {
 		t.Fatal("dependency preparation did not run while the acquisition handoff lock was held")
+	}
+	if syncJSON {
+		t.Fatal("human acquire marked sync preparation machine-readable")
 	}
 }
 
@@ -373,13 +386,20 @@ func seedAvailableWorkspace(t *testing.T, commonDir, path string) {
 }
 
 func TestAssignmentProjectionsReturnsAnOwnedCopy(t *testing.T) {
-	path := filepath.Join("pool", "workspace")
+	path := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(path, "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectionFingerprint, err := dependencies.ProjectionFingerprint(path, []string{"node_modules"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	key, err := state.TreeKey(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot := &state.State{
-		Trees: map[string]state.TreeRecord{key: {Projections: []string{"node_modules"}}},
+		Trees: map[string]state.TreeRecord{key: {Path: path, ProjectionFingerprint: projectionFingerprint, Projections: []string{"node_modules"}}},
 		Workspaces: map[string]state.WorkspaceRecord{key: {
 			Assignment: &state.AssignmentRecord{ID: "assignment-1"},
 		}},
@@ -391,6 +411,21 @@ func TestAssignmentProjectionsReturnsAnOwnedCopy(t *testing.T) {
 	got[0] = "changed"
 	if snapshot.Trees[key].Projections[0] != "node_modules" {
 		t.Fatal("assignmentProjections returned state-owned storage")
+	}
+}
+
+func TestAssignmentProjectionsDropsCorruptProjection(t *testing.T) {
+	path := t.TempDir()
+	key, err := state.TreeKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &state.State{
+		Trees:      map[string]state.TreeRecord{key: {Path: path, ProjectionFingerprint: "stale", Projections: []string{"node_modules"}}},
+		Workspaces: map[string]state.WorkspaceRecord{key: {Path: path, Assignment: &state.AssignmentRecord{ID: "assignment-1"}}},
+	}
+	if got := assignmentProjections(snapshot, "assignment-1"); got != nil {
+		t.Fatalf("assignmentProjections = %v, want nil for corrupt projection", got)
 	}
 }
 

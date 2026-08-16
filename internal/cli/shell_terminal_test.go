@@ -47,6 +47,7 @@ func shellTerminalRequest() cli.ShellTerminalRequest {
 		AssignmentID:  "assignment-1",
 		WorkspacePath: "/workspace/one",
 		Shell:         "/bin/sh",
+		Environment:   map[string]string{"RUK_PORT_HTTP": "4312"},
 		Stdin:         strings.NewReader("input"),
 		Stdout:        io.Discard,
 		Stderr:        io.Discard,
@@ -66,7 +67,7 @@ func shellTerminalOptions(runner cli.ShellProcessRunner, tracker cli.ShellProces
 	}
 }
 
-func TestNativeShellTerminalRunsAnIsolatedNativeProcessAndDrainsIt(t *testing.T) {
+func TestNativeShellTerminalRunsForegroundNativeProcessAndDrainsIt(t *testing.T) {
 	runner := &shellProcessRunnerStub{result: processpkg.RunResult{
 		ExitCode: 130,
 		Signal:   nativeShellSignal("interrupt"),
@@ -75,6 +76,7 @@ func TestNativeShellTerminalRunsAnIsolatedNativeProcessAndDrainsIt(t *testing.T)
 	tracker := &shellProcessTrackerStub{}
 	terminal := cli.NewNativeShellTerminal(shellTerminalOptions(runner, tracker))
 	request := shellTerminalRequest()
+	parentPort := os.Getenv("RUK_PORT_HTTP")
 
 	result, err := terminal.Run(context.Background(), request)
 	if err != nil {
@@ -86,8 +88,21 @@ func TestNativeShellTerminalRunsAnIsolatedNativeProcessAndDrainsIt(t *testing.T)
 	if len(runner.command) != 1 || runner.command[0] != "/bin/sh" {
 		t.Fatalf("command = %v", runner.command)
 	}
-	if runner.options.Dir != "/workspace/one" || runner.options.Mode != processpkg.Detached {
+	if runner.options.Dir != "/workspace/one" || runner.options.Mode != processpkg.Detached || !runner.options.ForegroundTerminal {
 		t.Fatalf("run options = %#v", runner.options)
+	}
+	portFound := false
+	for _, entry := range runner.options.Env {
+		if entry == "RUK_PORT_HTTP=4312" {
+			portFound = true
+			break
+		}
+	}
+	if !portFound {
+		t.Fatalf("run environment does not contain allocated port: %v", runner.options.Env)
+	}
+	if got := os.Getenv("RUK_PORT_HTTP"); got != parentPort {
+		t.Fatalf("parent port environment changed from %q to %q", parentPort, got)
 	}
 	if runner.options.Stdin != request.Stdin || runner.options.Stdout != request.Stdout || runner.options.Stderr != request.Stderr {
 		t.Fatal("native terminal did not preserve stdio")

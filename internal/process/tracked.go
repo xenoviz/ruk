@@ -16,6 +16,16 @@ type IdentityUnavailableError struct {
 	Cause error
 }
 
+// UnverifiedIdentityMarker is reserved for a durable sentinel written after a
+// spawned process could not be described. It is never an identity to match or
+// a basis for signaling; it only fences release until the PID/group boundary
+// is absent.
+const UnverifiedIdentityMarker = "ruk:unverified-process"
+
+func IsUnverifiedRecord(record state.TrackedProcessRecord) bool {
+	return record.StartedAt == UnverifiedIdentityMarker
+}
+
 func (err *IdentityUnavailableError) Error() string {
 	return fmt.Sprintf("process %d could not be identified, so its workspace cannot be released safely", err.PID)
 }
@@ -48,6 +58,26 @@ func (tracker Tracker) Exists(ctx context.Context, record state.TrackedProcessRe
 	pid := int(record.PID)
 	if record.PID <= 0 || int64(pid) != record.PID || record.StartedAt == "" {
 		return false, &IdentityUnavailableError{PID: pid, Cause: errors.New("invalid tracked process record")}
+	}
+	if IsUnverifiedRecord(record) {
+		if tracker.Probe == nil {
+			return false, &IdentityUnavailableError{PID: pid, Cause: errors.New("process identity probe is unavailable")}
+		}
+		observed, err := tracker.Probe.Inspect(ctx, pid)
+		if err != nil {
+			return false, &IdentityUnavailableError{PID: pid, Cause: err}
+		}
+		if observed.Alive {
+			return true, nil
+		}
+		if tracker.DescendantsExist == nil {
+			return false, &IdentityUnavailableError{PID: pid, Cause: errors.New("process descendant probe is unavailable")}
+		}
+		descendants, err := tracker.DescendantsExist(ctx, pid)
+		if err != nil {
+			return false, &IdentityUnavailableError{PID: pid, Cause: err}
+		}
+		return descendants, nil
 	}
 	if tracker.Probe == nil {
 		return false, &IdentityUnavailableError{PID: pid, Cause: errors.New("process identity probe is unavailable")}

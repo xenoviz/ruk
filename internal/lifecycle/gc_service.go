@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -234,7 +235,7 @@ func (service *GCService) applyCandidate(ctx context.Context, options GCOptions,
 		return false, err
 	}
 	var collected bool
-	err = service.options.Locker.With(ctx, lockPath+".acquire", func() error {
+	err = service.options.Locker.With(ctx, lockPath, func() error {
 		current, readErr := service.currentCandidate(ctx, options, candidate)
 		if readErr != nil {
 			return readErr
@@ -251,7 +252,7 @@ func (service *GCService) applyCandidate(ctx context.Context, options GCOptions,
 				return errors.New("lifecycle: GC release operation is not configured")
 			}
 			collectionTime := options.Now.UTC().Truncate(time.Millisecond).Format(time.RFC3339Nano)
-			released, releaseErr := service.options.Release.ReleaseAssignment(ctx, workspace.Assignment.ID, ReleaseOptions{Force: true, RequireExpiredBy: collectionTime, ExpectedUpdatedAt: workspace.UpdatedAt})
+			released, releaseErr := service.options.Release.ReleaseAssignment(ctx, workspace.Assignment.ID, ReleaseOptions{Force: true, RequireExpiredBy: collectionTime, ExpectedUpdatedAt: workspace.UpdatedAt, handoffLockHeld: true})
 			if releaseErr != nil {
 				if isStaleGCError(releaseErr) {
 					return nil
@@ -266,7 +267,7 @@ func (service *GCService) applyCandidate(ctx context.Context, options GCOptions,
 			if service.options.Release == nil {
 				return errors.New("lifecycle: GC release operation is not configured")
 			}
-			released, releaseErr := service.options.Release.ReleaseAssignment(ctx, workspace.Assignment.ID, ReleaseOptions{Force: true, AcquisitionOperationID: *workspace.OperationID, ExpectedUpdatedAt: workspace.UpdatedAt})
+			released, releaseErr := service.options.Release.ReleaseAssignment(ctx, workspace.Assignment.ID, ReleaseOptions{Force: true, AcquisitionOperationID: *workspace.OperationID, ExpectedUpdatedAt: workspace.UpdatedAt, handoffLockHeld: true})
 			if releaseErr != nil {
 				if isStaleGCError(releaseErr) {
 					return nil
@@ -335,13 +336,13 @@ func (service *GCService) collectWorkspace(ctx context.Context, workspace state.
 			return service.restoreCollection(ctx, collecting.Path, operationID, err, true)
 		}
 	}
-	// Once Git removal succeeds, leave the collection fence in place if state
-	// deletion fails. The interrupted collection remains retryable and cannot
-	// be mistaken for reusable capacity.
-	if _, err := service.options.Lifecycle.DeleteWorkspaceRecord(ctx, collecting.Path, operationID); err != nil {
+	// Delete the tree projection first. The workspace record remains fenced
+	// until both records are gone, so a projection failure or a later state
+	// persistence failure leaves an interrupted collection that GC can retry.
+	if err := service.options.TreeState.DeleteTreeState(ctx, collecting.Path); err != nil {
 		return err
 	}
-	if err := service.options.TreeState.DeleteTreeState(ctx, collecting.Path); err != nil {
+	if _, err := service.options.Lifecycle.DeleteWorkspaceRecord(ctx, collecting.Path, operationID); err != nil {
 		return err
 	}
 	_ = candidate
@@ -376,7 +377,7 @@ func (service *GCService) isCurrent(ctx context.Context, currentPath, candidateP
 	if candidateErr != nil {
 		return false, candidateErr
 	}
-	return samePath(current, candidate), nil
+	return pathContains(candidate, current), nil
 }
 
 func (service *GCService) maintenanceLockPaths() (string, string, error) {
@@ -415,9 +416,48 @@ func sameOptional(left, right *string) bool {
 }
 
 func samePath(left, right string) bool {
+	return samePathForPlatform(left, right, runtime.GOOS == "windows")
+}
+
+// pathContains reports whether child is the workspace itself or a path below
+// it. GC receives the process working directory as CurrentWorkspacePath; an
+// agent commonly runs from a subdirectory, so protecting only an exact path
+// could remove the workspace that owns the current process.
+func pathContains(parent, child string) bool {
+	return pathContainsForPlatform(parent, child, runtime.GOOS == "windows")
+}
+
+func samePathForPlatform(left, right string, caseInsensitive bool) bool {
 	leftAbs, leftErr := filepath.Abs(filepath.Clean(left))
 	rightAbs, rightErr := filepath.Abs(filepath.Clean(right))
-	return leftErr == nil && rightErr == nil && leftAbs == rightAbs
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	if caseInsensitive {
+		return strings.EqualFold(leftAbs, rightAbs)
+	}
+	return leftAbs == rightAbs
+}
+
+func pathContainsForPlatform(parent, child string, caseInsensitive bool) bool {
+	parentAbs, parentErr := filepath.Abs(filepath.Clean(parent))
+	childAbs, childErr := filepath.Abs(filepath.Clean(child))
+	if parentErr != nil || childErr != nil {
+		return false
+	}
+	if caseInsensitive {
+		parentAbs = strings.ToLower(parentAbs)
+		childAbs = strings.ToLower(childAbs)
+	}
+	if samePathForPlatform(parentAbs, childAbs, false) {
+		return true
+	}
+	relative, err := filepath.Rel(parentAbs, childAbs)
+	if err != nil || relative == "" || relative == ".." || filepath.IsAbs(relative) {
+		return false
+	}
+	separator := string(filepath.Separator)
+	return !strings.HasPrefix(relative, ".."+separator)
 }
 
 func isStaleGCError(err error) bool {

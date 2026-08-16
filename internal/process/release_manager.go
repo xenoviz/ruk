@@ -116,10 +116,45 @@ func (manager NativeProcessManager) Exists(ctx context.Context, record state.Tra
 	if manager.probe == nil || manager.tracker.Probe == nil {
 		return false, processUnavailable(int(record.PID), errors.New("process identity probe is unavailable"))
 	}
+	if IsUnverifiedRecord(record) {
+		return manager.unverifiedExists(ctx, record)
+	}
 	if record.GroupID != nil {
 		return manager.detachedGroupExists(ctx, record)
 	}
 	return manager.tracker.Exists(ctx, record)
+}
+
+func (manager NativeProcessManager) unverifiedExists(ctx context.Context, record state.TrackedProcessRecord) (bool, error) {
+	pid := int(record.PID)
+	if record.PID <= 0 || int64(pid) != record.PID || record.StartedAt != UnverifiedIdentityMarker {
+		return false, processUnavailable(pid, errors.New("invalid unverified process record"))
+	}
+	observed, err := manager.probe.Inspect(ctx, pid)
+	if err != nil {
+		return false, processUnavailable(pid, err)
+	}
+	if record.GroupID == nil {
+		if observed.Alive {
+			return true, nil
+		}
+		return manager.tracker.Exists(ctx, record)
+	}
+	groupID := int(*record.GroupID)
+	if *record.GroupID <= 0 || int64(groupID) != *record.GroupID || groupID != pid {
+		return false, processUnavailable(pid, errors.New("invalid unverified process group record"))
+	}
+	if manager.table == nil {
+		return false, processUnavailable(pid, errors.New("process group table is unavailable"))
+	}
+	entries, err := manager.table.Snapshot(ctx)
+	if err != nil {
+		return false, processUnavailable(pid, err)
+	}
+	if observed.Alive || groupHasMember(entries, groupID) {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (manager NativeProcessManager) detachedGroupExists(ctx context.Context, record state.TrackedProcessRecord) (bool, error) {
@@ -166,6 +201,16 @@ func (manager NativeProcessManager) Terminate(ctx context.Context, record state.
 	}
 	if record.PID <= 0 || int64(int(record.PID)) != record.PID || record.StartedAt == "" {
 		return false, processUnavailable(int(record.PID), errors.New("invalid tracked process record"))
+	}
+	if IsUnverifiedRecord(record) {
+		exists, err := manager.unverifiedExists(ctx, record)
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			return false, processUnavailable(int(record.PID), errors.New("unverified process boundary remains; refusing to signal it"))
+		}
+		return false, nil
 	}
 	return terminateNativeRecord(ctx, manager, record, force)
 }

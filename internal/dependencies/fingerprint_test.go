@@ -100,6 +100,39 @@ func TestDependencyFingerprintTracksOnlyDependencyInputs(t *testing.T) {
 	}
 }
 
+func TestDependencyFingerprintTracksManagerAndRuntimeIdentity(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "package.json"), `{"name":"fixture"}`)
+	base := SourceFingerprintInput{
+		Root: root, Files: []string{"package.json"},
+		Manager: PackageManager{Name: "npm", Version: "10.0.0", Command: []string{"npm", "install"}, DependencyMode: "managed"},
+		Runtime: RuntimeIdentity{Runtime: "node", Version: "22.0.0", NativeABI: "127"},
+	}
+	first, err := DependencyFingerprint(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managerChanged := base
+	managerChanged.Manager.Version = "11.0.0"
+	second, err := DependencyFingerprint(managerChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Fingerprint == second.Fingerprint {
+		t.Fatal("package-manager version did not change dependency fingerprint")
+	}
+	runtimeChanged := base
+	runtimeChanged.Runtime.NativeABI = "128"
+	third, err := DependencyFingerprint(runtimeChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Fingerprint == third.Fingerprint {
+		t.Fatal("runtime ABI did not change dependency fingerprint")
+	}
+}
+
 func TestProjectionFingerprintTracksNestedAndSymlinkTargetChanges(t *testing.T) {
 	root := t.TempDir()
 	projection := filepath.Join(root, "packages", "api", "node_modules")

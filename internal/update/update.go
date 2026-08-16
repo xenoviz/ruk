@@ -31,6 +31,8 @@ const (
 	Repository       = "xenoviz/ruk"
 	PackageName      = "@xenoviz/ruk"
 	ReleasesURL      = "https://api.github.com/repos/xenoviz/ruk/releases?per_page=10"
+	releasesPerPage  = 10
+	maxReleasePages  = 100
 	MaxBinaryBytes   = int64(250 * 1024 * 1024)
 	MaxCommandTail   = 64 * 1024
 	defaultUserAgent = "ruk-go"
@@ -198,10 +200,15 @@ func (updater *Updater) Update(ctx context.Context, options Options) (Result, er
 		return Result{}, err
 	}
 	// Once a caller is already on a prerelease channel, keep discovering newer
-	// prereleases without requiring a second, easy-to-forget flag. Stable
-	// installations still opt in explicitly.
+	// releases on that channel without requiring a second, easy-to-forget flag.
+	// Stable installations still opt in explicitly. An explicit prerelease
+	// request intentionally considers every prerelease channel.
 	allowPrerelease := options.AllowPrerelease || len(parsedCurrent.Prerelease) != 0
-	release, err := latestReady(candidates, allowPrerelease)
+	prereleaseChannel := ""
+	if !options.AllowPrerelease && len(parsedCurrent.Prerelease) != 0 {
+		prereleaseChannel = parsedCurrent.Prerelease[0]
+	}
+	release, err := latestReady(candidates, allowPrerelease, prereleaseChannel)
 	if err != nil {
 		return Result{}, err
 	}
@@ -282,10 +289,10 @@ func Update(ctx context.Context, options Options, hooks Hooks) (Result, error) {
 // SelectLatest exposes the same release selection used by Update to release
 // tooling and compatibility harnesses.
 func SelectLatest(candidates []Release, allowPrerelease bool) (Release, error) {
-	return latestReady(candidates, allowPrerelease)
+	return latestReady(candidates, allowPrerelease, "")
 }
 
-func latestReady(candidates []Release, allowPrerelease bool) (Release, error) {
+func latestReady(candidates []Release, allowPrerelease bool, prereleaseChannel string) (Release, error) {
 	var selected Release
 	var selectedVersion Version
 	found := false
@@ -303,6 +310,9 @@ func latestReady(candidates []Release, allowPrerelease bool) (Release, error) {
 		}
 		candidate.Version = version.String()
 		if !allowPrerelease && (candidate.Prerelease || len(version.Prerelease) != 0) {
+			continue
+		}
+		if prereleaseChannel != "" && (len(version.Prerelease) == 0 || version.Prerelease[0] != prereleaseChannel) {
 			continue
 		}
 		if candidate.Manifest != nil {
@@ -332,20 +342,6 @@ func (updater *Updater) discoverHTTP(ctx context.Context) ([]Release, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ReleasesURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("User-Agent", defaultUserAgent)
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("update request failed (%s)", response.Status)
-	}
 	var remote []struct {
 		Tag        string `json:"tag_name"`
 		Draft      bool   `json:"draft"`
@@ -355,50 +351,134 @@ func (updater *Updater) discoverHTTP(ctx context.Context) ([]Release, error) {
 			URL  string `json:"browser_download_url"`
 		} `json:"assets"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 4*1024*1024)).Decode(&remote); err != nil {
-		return nil, errors.New("GitHub returned an invalid release list")
-	}
-	result := make([]Release, 0, len(remote))
-	for _, item := range remote {
-		version, err := ParseVersion(item.Tag)
-		if err != nil || item.Draft {
-			continue
+	result := make([]Release, 0)
+	nextURL := ReleasesURL
+	for page := 1; page <= maxReleasePages; page++ {
+		pageURL := nextURL
+		var err error
+		if page == 1 {
+			pageURL, err = releasePageURL(ReleasesURL, page)
+			if err != nil {
+				return nil, err
+			}
 		}
-		assets := make(map[string]Asset, len(item.Assets))
-		for _, asset := range item.Assets {
-			assets[asset.Name] = Asset{Name: asset.Name, URL: asset.URL}
-		}
-		manifestAsset, ok := assets["ruk-release.json"]
-		if !ok {
-			continue
-		}
-		if err := validateAssetURL(manifestAsset, version.String()); err != nil {
-			continue
-		}
-		manifestBytes, err := updater.downloadFunc()(ctx, manifestAsset)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		var manifest Manifest
-		if json.Unmarshal(manifestBytes, &manifest) != nil || ValidateManifest(manifest, version.String()) != nil {
-			continue
+		request.Header.Set("Accept", "application/vnd.github+json")
+		request.Header.Set("User-Agent", defaultUserAgent)
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, err
 		}
-		validAssets := true
-		for name, metadata := range manifest.Assets {
-			asset, ok := assets[name]
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			response.Body.Close()
+			return nil, fmt.Errorf("update request failed (%s)", response.Status)
+		}
+		linkNext, err := nextReleasePageURL(response.Header.Get("Link"))
+		if err != nil {
+			response.Body.Close()
+			return nil, err
+		}
+		remote = remote[:0]
+		decodeErr := json.NewDecoder(io.LimitReader(response.Body, 4*1024*1024)).Decode(&remote)
+		closeErr := response.Body.Close()
+		if decodeErr != nil || closeErr != nil {
+			return nil, errors.New("GitHub returned an invalid release list")
+		}
+		for _, item := range remote {
+			version, err := ParseVersion(item.Tag)
+			if err != nil || item.Draft {
+				continue
+			}
+			assets := make(map[string]Asset, len(item.Assets))
+			for _, asset := range item.Assets {
+				assets[asset.Name] = Asset{Name: asset.Name, URL: asset.URL}
+			}
+			manifestAsset, ok := assets["ruk-release.json"]
 			if !ok {
-				validAssets = false
+				continue
+			}
+			if err := validateAssetURL(manifestAsset, version.String()); err != nil {
+				continue
+			}
+			manifestBytes, err := updater.downloadFunc()(ctx, manifestAsset)
+			if err != nil {
+				continue
+			}
+			var manifest Manifest
+			if json.Unmarshal(manifestBytes, &manifest) != nil || ValidateManifest(manifest, version.String()) != nil {
+				continue
+			}
+			validAssets := true
+			for name, metadata := range manifest.Assets {
+				asset, ok := assets[name]
+				if !ok {
+					validAssets = false
+					break
+				}
+				asset.SHA256, asset.Size = metadata.SHA256, metadata.Size
+				assets[name] = asset
+			}
+			if !validAssets {
+				continue
+			}
+			result = append(result, Release{Version: version.String(), Tag: item.Tag, Prerelease: item.Prerelease, Assets: assets, Manifest: &manifest})
+		}
+		if linkNext != "" {
+			nextURL = linkNext
+			continue
+		}
+		if len(remote) < releasesPerPage {
+			return result, nil
+		}
+		nextURL, err = releasePageURL(ReleasesURL, page+1)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return nil, errors.New("GitHub returned too many release pages")
+}
+
+func releasePageURL(base string, page int) (string, error) {
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	query := parsed.Query()
+	query.Set("page", strconv.Itoa(page))
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func nextReleasePageURL(link string) (string, error) {
+	for _, value := range strings.Split(link, ",") {
+		parts := strings.Split(value, ";")
+		if len(parts) < 2 {
+			continue
+		}
+		relNext := false
+		for _, parameter := range parts[1:] {
+			if strings.TrimSpace(parameter) == `rel="next"` {
+				relNext = true
 				break
 			}
-			asset.SHA256, asset.Size = metadata.SHA256, metadata.Size
-			assets[name] = asset
 		}
-		if !validAssets {
+		if !relNext {
 			continue
 		}
-		result = append(result, Release{Version: version.String(), Tag: item.Tag, Prerelease: item.Prerelease, Assets: assets, Manifest: &manifest})
+		rawURL := strings.TrimSpace(parts[0])
+		if len(rawURL) < 2 || rawURL[0] != '<' || rawURL[len(rawURL)-1] != '>' {
+			return "", errors.New("GitHub returned an invalid release pagination link")
+		}
+		parsed, err := url.Parse(rawURL[1 : len(rawURL)-1])
+		if err != nil || parsed.Scheme != "https" || parsed.Host != "api.github.com" || parsed.Path != "/repos/xenoviz/ruk/releases" {
+			return "", errors.New("GitHub returned an untrusted release pagination link")
+		}
+		return parsed.String(), nil
 	}
-	return result, nil
+	return "", nil
 }
 
 func (updater *Updater) downloadFunc() Download {
@@ -733,7 +813,11 @@ func InstallerCommand(installer Installer, version string) (string, []string, er
 	specification := PackageName + "@" + version
 	switch installer {
 	case InstallerBun:
-		return "bun", []string{"add", "--global", specification}, nil
+		// Bun does not run dependency lifecycle scripts during installs unless
+		// the package is explicitly trusted. The root package's postinstall is
+		// what installs the native launcher, so trust only this exact package
+		// operation rather than enabling arbitrary scripts globally.
+		return "bun", []string{"add", "--global", "--trust", specification}, nil
 	case InstallerNPM, "":
 		return "npm", []string{"install", "--global", specification}, nil
 	case InstallerPNPM:

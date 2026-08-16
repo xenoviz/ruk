@@ -240,6 +240,44 @@ func TestDirectoryLockGivesIncompleteOwnerOneSecondGrace(t *testing.T) {
 	}
 }
 
+func TestDirectoryLockRetainsMalformedOwnerMetadataAfterStaleAge(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "state.lock")
+	if err := os.MkdirAll(lockPath, 0o700); err != nil {
+		t.Fatalf("create malformed lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lockPath, "owner.json"), []byte(`{"pid":72,"hostname":"host-a"}`), 0o600); err != nil {
+		t.Fatalf("write malformed owner: %v", err)
+	}
+	setModified(t, lockPath, now.Add(-time.Hour))
+	locker := newTestLocker(t, lockpkg.Config{
+		Now:      func() time.Time { return now },
+		PID:      41,
+		Hostname: "host-a",
+		Options:  lockpkg.Options{Timeout: time.Millisecond, Stale: time.Millisecond},
+		Sleep: func(context.Context, time.Duration) error {
+			now = now.Add(time.Millisecond)
+			return nil
+		},
+	})
+
+	_, err := locker.Acquire(context.Background(), lockPath)
+	var timeout *lockpkg.TimeoutError
+	if !errors.As(err, &timeout) {
+		t.Fatalf("Acquire error = %v, want TimeoutError", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read root: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "state.lock" {
+		t.Fatalf("entries = %v, malformed lock was stolen", entries)
+	}
+}
+
 func TestDirectoryLockHonorsCanceledContext(t *testing.T) {
 	t.Parallel()
 

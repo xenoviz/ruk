@@ -35,6 +35,9 @@ type GroupTerminator struct {
 // TerminateGroup safely signals the detached group represented by record.
 func (terminator GroupTerminator) TerminateGroup(ctx context.Context, record state.TrackedProcessRecord, force bool) (bool, error) {
 	pid := int(record.PID)
+	if IsUnverifiedRecord(record) {
+		return false, processUnavailable(pid, errors.New("unverified process boundary cannot be signaled"))
+	}
 	if record.PID <= 0 || int64(pid) != record.PID || record.StartedAt == "" || record.GroupID == nil {
 		return false, processUnavailable(pid, errors.New("invalid detached process record"))
 	}

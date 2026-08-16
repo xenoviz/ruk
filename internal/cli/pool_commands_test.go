@@ -38,6 +38,9 @@ func TestWarmCarriesOptionsAndRendersHumanOutput(t *testing.T) {
 		Fetch: true,
 	}, func(_ context.Context, request cli.WarmRequest) (lifecycle.WarmResult, error) {
 		called = true
+		if request.JSON {
+			t.Fatal("human warm marked operation input machine-readable")
+		}
 		if request.Count != 2 || request.From != "origin/main" || !request.Fetch {
 			t.Fatalf("warm request = %#v", request)
 		}
@@ -60,7 +63,10 @@ func TestWarmCarriesOptionsAndRendersHumanOutput(t *testing.T) {
 }
 
 func TestWarmRendersStableJSONAndRejectsMalformedResults(t *testing.T) {
-	result, err := cli.Warm(context.Background(), cli.WarmInput{Count: "1", JSON: true}, func(context.Context, cli.WarmRequest) (lifecycle.WarmResult, error) {
+	result, err := cli.Warm(context.Background(), cli.WarmInput{Count: "1", JSON: true}, func(_ context.Context, request cli.WarmRequest) (lifecycle.WarmResult, error) {
+		if !request.JSON {
+			t.Fatal("JSON warm did not mark operation input machine-readable")
+		}
 		return lifecycle.WarmResult{Status: "warmed", Requested: 1, Available: 1, Created: []string{}}, nil
 	})
 	if err != nil {

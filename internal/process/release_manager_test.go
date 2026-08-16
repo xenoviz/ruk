@@ -94,6 +94,34 @@ func TestNativeProcessManagerExistsDelegatesFailClosedTracker(t *testing.T) {
 	}
 }
 
+func TestNativeProcessManagerUnverifiedSentinelNeverSignalsAndClearsOnlyWhenBoundaryGone(t *testing.T) {
+	group := int64(42)
+	signaler := &releaseGroupSignaler{}
+	manager := processpkg.NewNativeProcessManager(processpkg.ReleaseManagerOptions{
+		Probe:         &releaseProbe{states: []lock.ProcessState{{Alive: true, IdentityKnown: false}, {Alive: false}}},
+		Table:         releaseTable{{PID: 42, ParentPID: 1, GroupID: 42}},
+		GroupSignaler: signaler,
+	})
+	record := state.TrackedProcessRecord{PID: 42, GroupID: &group, StartedAt: processpkg.UnverifiedIdentityMarker}
+	exists, err := manager.Exists(context.Background(), record)
+	if err != nil || !exists {
+		t.Fatalf("live sentinel Exists = %v, %v", exists, err)
+	}
+	terminated, err := manager.Terminate(context.Background(), record, true)
+	if err == nil || terminated || signaler.calls != 0 {
+		t.Fatalf("live sentinel Terminate = %v, %v; signaler = %#v", terminated, err, signaler)
+	}
+
+	manager = processpkg.NewNativeProcessManager(processpkg.ReleaseManagerOptions{
+		Probe: &releaseProbe{states: []lock.ProcessState{{Alive: false}}},
+		Table: releaseTable{},
+	})
+	exists, err = manager.Exists(context.Background(), record)
+	if err != nil || exists {
+		t.Fatalf("drained sentinel Exists = %v, %v", exists, err)
+	}
+}
+
 func TestNativeProcessManagerAttachedRevalidatesPIDBeforeGracefulAndForceSignals(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses injected/native tree termination")
@@ -108,7 +136,10 @@ func TestNativeProcessManagerAttachedRevalidatesPIDBeforeGracefulAndForceSignals
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			signaler := &releasePIDSignaler{}
-			probe := &releaseProbe{states: []lock.ProcessState{{Alive: true, IdentityKnown: true, Identity: "started"}}}
+			probe := &releaseProbe{states: []lock.ProcessState{
+				{Alive: true, IdentityKnown: true, Identity: "started"},
+				{Alive: true, IdentityKnown: true, Identity: "started"},
+			}}
 			manager := processpkg.NewNativeProcessManager(processpkg.ReleaseManagerOptions{Probe: probe, PIDSignaler: signaler})
 			terminated, err := manager.Terminate(context.Background(), state.TrackedProcessRecord{PID: 42, StartedAt: "started"}, test.force)
 			if err != nil || !terminated {
@@ -117,10 +148,26 @@ func TestNativeProcessManagerAttachedRevalidatesPIDBeforeGracefulAndForceSignals
 			if signaler.calls != 1 || signaler.pid != 42 || signaler.kind != test.kind {
 				t.Fatalf("PID signal = %#v, want pid 42 kind %d", signaler, test.kind)
 			}
-			if probe.index != 1 {
-				t.Fatalf("identity probe calls = %d, want one immediate fence", probe.index)
+			if probe.index != 2 {
+				t.Fatalf("identity probe calls = %d, want initial and immediate pre-signal fences", probe.index)
 			}
 		})
+	}
+}
+
+func TestNativeProcessManagerAttachedRejectsIdentityChangeAtSecondFence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses injected/native tree termination")
+	}
+	signaler := &releasePIDSignaler{}
+	probe := &releaseProbe{states: []lock.ProcessState{
+		{Alive: true, IdentityKnown: true, Identity: "started"},
+		{Alive: true, IdentityKnown: true, Identity: "replacement"},
+	}}
+	manager := processpkg.NewNativeProcessManager(processpkg.ReleaseManagerOptions{Probe: probe, PIDSignaler: signaler})
+	terminated, err := manager.Terminate(context.Background(), state.TrackedProcessRecord{PID: 42, StartedAt: "started"}, false)
+	if err == nil || terminated || signaler.calls != 0 || probe.index != 2 {
+		t.Fatalf("Terminate = %v, %v; signaler = %#v; probe calls = %d", terminated, err, signaler, probe.index)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -65,6 +66,19 @@ type executeForwarder struct {
 func (forwarder *executeForwarder) Forward(_ context.Context, _ state.TrackedProcessRecord, signal os.Signal) error {
 	forwarder.signals = append(forwarder.signals, signal)
 	return nil
+}
+
+type executeProcesses struct {
+	alive bool
+	err   error
+}
+
+func (processes executeProcesses) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	return processes.alive, processes.err
+}
+
+func (executeProcesses) Terminate(context.Context, state.TrackedProcessRecord, bool) (bool, error) {
+	return false, nil
 }
 
 func executeFixture(t *testing.T, path string) (*executeStore, *lifecycle.Service, processpkg.Runner) {
@@ -155,13 +169,36 @@ func TestExecuteForwardsPendingDetachedSignalsAndPreservesSignalExitStatus(t *te
 	runner := processpkg.Runner{Spawner: spawner, Describer: executeDescriber{record: state.TrackedProcessRecord{PID: 42, StartedAt: "identity", GroupID: int64Pointer(42)}}, Forwarder: forwarder}
 	signals := make(chan os.Signal, 1)
 	signals <- syscall.SIGINT
-	service := cli.NewExecuteService(cli.ExecuteOptions{Lifecycle: lifecycleService, Reader: store, Runner: runner, Synchronize: func(context.Context, string, string) error { return nil }})
+	service := cli.NewExecuteService(cli.ExecuteOptions{Lifecycle: lifecycleService, Reader: store, Runner: runner, Processes: executeProcesses{}, Synchronize: func(context.Context, string, string) error { return nil }})
 	result, err := service.Execute(context.Background(), cli.ExecuteInput{AssignmentID: "assignment-1", WorkspacePath: path, Command: []string{"tool"}, Mode: processpkg.Detached, Signals: signals})
 	if err != nil {
 		t.Fatalf("Execute returned an error: %v", err)
 	}
 	if result.ExitCode != 143 || len(forwarder.signals) != 1 || forwarder.signals[0] != syscall.SIGINT {
 		t.Fatalf("signal execution = %#v / %#v", result, forwarder.signals)
+	}
+}
+
+func TestExecuteDetachedRetainsRecordWhenDescendantsRemain(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "workspace")
+	store, lifecycleService, _ := executeFixture(t, path)
+	child := &executeChild{pid: 42, status: processpkg.ExitStatus{Code: 0}}
+	runner := processpkg.Runner{
+		Spawner:   &executeSpawner{child: child},
+		Describer: executeDescriber{record: state.TrackedProcessRecord{PID: 42, StartedAt: "identity", GroupID: int64Pointer(42)}},
+	}
+	service := cli.NewExecuteService(cli.ExecuteOptions{
+		Lifecycle: lifecycleService, Reader: store, Runner: runner, Processes: executeProcesses{alive: true},
+		Synchronize: func(context.Context, string, string) error { return nil },
+	})
+	_, err := service.Execute(context.Background(), cli.ExecuteInput{AssignmentID: "assignment-1", WorkspacePath: path, Command: []string{"tool"}, Mode: processpkg.Detached})
+	if err == nil || !strings.Contains(err.Error(), "remains after its leader exited") {
+		t.Fatalf("Execute error = %v, want surviving detached tree", err)
+	}
+	key, _ := state.TreeKey(path)
+	if len(store.current.Workspaces[key].Processes) != 1 {
+		t.Fatalf("surviving detached process record was removed: %#v", store.current.Workspaces[key].Processes)
 	}
 }
 
@@ -199,6 +236,40 @@ func TestExecuteActivityFailureStopsBeforeSpawn(t *testing.T) {
 	_, err := service.Execute(context.Background(), cli.ExecuteInput{AssignmentID: "assignment-1", WorkspacePath: path, Command: []string{"tool"}, Mode: processpkg.Attached})
 	if !errors.Is(err, activityErr) || spawner.called {
 		t.Fatalf("activity failure/spawn = %v / %v", err, spawner.called)
+	}
+}
+
+func TestExecuteExecReleasesAssignmentWhenSynchronizationFailsBeforeSpawn(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "workspace")
+	store, lifecycleService, runner := executeFixture(t, path)
+	spawner := runner.Spawner.(*executeSpawner)
+	syncErr := errors.New("dependency synchronization failed")
+	released := false
+	service := cli.NewExecuteService(cli.ExecuteOptions{
+		Lifecycle: lifecycleService, Reader: store, Runner: runner,
+		Synchronize: func(context.Context, string, string) error { return syncErr },
+		Release:     func(context.Context, string) error { released = true; return nil },
+	})
+	result, err := service.Execute(context.Background(), cli.ExecuteInput{AssignmentID: "assignment-1", WorkspacePath: path, Command: []string{"tool"}, Mode: processpkg.Attached, Exec: true})
+	if !errors.Is(err, syncErr) || !released || !result.Released || spawner.called {
+		t.Fatalf("pre-spawn exec cleanup = result %#v error %v released %v spawned %v", result, err, released, spawner.called)
+	}
+}
+
+func TestExecuteExecSurfacesRecoveryWhenPreSpawnReleaseFails(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "workspace")
+	store, lifecycleService, runner := executeFixture(t, path)
+	releaseErr := errors.New("release lock unavailable")
+	service := cli.NewExecuteService(cli.ExecuteOptions{
+		Lifecycle: lifecycleService, Reader: store, Runner: runner,
+		Synchronize: func(context.Context, string, string) error { return errors.New("sync failed") },
+		Release:     func(context.Context, string) error { return releaseErr },
+	})
+	_, err := service.Execute(context.Background(), cli.ExecuteInput{AssignmentID: "assignment-1", WorkspacePath: path, Command: []string{"tool"}, Mode: processpkg.Attached, Exec: true})
+	if err == nil || !strings.Contains(err.Error(), "retained for recovery") || !errors.Is(err, releaseErr) {
+		t.Fatalf("pre-spawn release recovery error = %v", err)
 	}
 }
 

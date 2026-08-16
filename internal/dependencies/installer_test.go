@@ -1,12 +1,50 @@
 package dependencies
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestInstallerHumanModeTeesStdioAndKeepsBoundedTails(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	stdin := strings.NewReader("confirm\n")
+	var request CommandRequest
+	installer := Installer{
+		Runner: func(_ context.Context, got CommandRequest) (CommandResult, error) {
+			request = got
+			return CommandResult{Stdout: strings.Repeat("o", 32), Stderr: strings.Repeat("e", 32)}, nil
+		},
+		DiagnosticLimit: 8, Stdin: stdin, Stdout: &stdout, Stderr: &stderr, InheritStdio: true,
+	}
+	result, err := installer.Prepare(context.Background(), t.TempDir(), PackageManager{Name: "npm", Command: []string{"npm", "install"}, DependencyMode: "managed"})
+	if err != nil {
+		t.Fatalf("Prepare returned an error: %v", err)
+	}
+	if request.Stdin != stdin || request.Stdout != &stdout || request.Stderr != &stderr || !request.InheritStdio {
+		t.Fatalf("stdio request = %#v", request)
+	}
+	if len(result.Stdout) != 8 || len(result.Stderr) != 8 {
+		t.Fatalf("bounded tails = (%q, %q)", result.Stdout, result.Stderr)
+	}
+}
+
+func TestInstallerMachineReadableModeSuppressesStdio(t *testing.T) {
+	var request CommandRequest
+	installer := Installer{Runner: func(_ context.Context, got CommandRequest) (CommandResult, error) {
+		request = got
+		return CommandResult{}, nil
+	}}
+	if _, err := installer.Prepare(context.Background(), t.TempDir(), PackageManager{Name: "npm", Command: []string{"npm", "install"}, DependencyMode: "managed"}); err != nil {
+		t.Fatalf("Prepare returned an error: %v", err)
+	}
+	if request.InheritStdio || request.Stdout != nil || request.Stderr != nil || request.Stdin != nil {
+		t.Fatalf("machine-readable request leaked stdio = %#v", request)
+	}
+}
 
 type installerCall struct {
 	request CommandRequest

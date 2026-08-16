@@ -18,7 +18,6 @@ import (
 const (
 	defaultTimeout = 10 * time.Minute
 	defaultStale   = 30 * time.Minute
-	ownerGrace     = time.Second
 )
 
 // Options controls lock acquisition waits and abandoned-owner recovery.
@@ -231,7 +230,10 @@ func (locker *DirectoryLocker) recoverAbandoned(ctx context.Context, path string
 		// Unreadable owner metadata is not evidence that the owner is dead.
 		return false, nil
 	}
-	if !valid && age <= max(locker.options.Stale, ownerGrace) {
+	if !valid {
+		// A readable but malformed owner record is not evidence that the
+		// process holding this lock is gone. Keep it fenced indefinitely;
+		// recovery by age alone could race a live owner.
 		return false, nil
 	}
 	if valid && owner.Hostname == locker.hostname {

@@ -108,6 +108,7 @@ type RunRouteInput struct {
 	CWD                 string
 	Command             []string
 	AllowSharedCheckout bool
+	Stderr              io.Writer
 	Now                 time.Time
 }
 
@@ -308,6 +309,9 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 			GuardSharedCheckout: invocation.Name == "sync",
 			AllowSharedCheckout: invocation.AllowSharedCheckout,
 			Output:              application.stdout,
+			Stdin:               application.stdin,
+			Stdout:              application.stdout,
+			Stderr:              application.stderr,
 		})
 		if err != nil {
 			return 1, err
@@ -467,6 +471,7 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 			CWD:                 application.cwd,
 			Command:             append([]string(nil), invocation.Command...),
 			AllowSharedCheckout: invocation.AllowSharedCheckout,
+			Stderr:              application.stderr,
 			Now:                 application.now(),
 		})
 		return exitCode, err

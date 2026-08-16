@@ -76,6 +76,15 @@ func TestClassifyErrorPreservesRecoveryMetadata(t *testing.T) {
 	if RetainedAssignmentFailure("id", "/workspace", "expiry", errors.New("ordinary failure")) != nil {
 		t.Fatal("ordinary failure was incorrectly retained")
 	}
+	unsafeSetup := &processpkg.ProcessSetupError{
+		Cause: errors.New("describe failed"),
+		Cleanup: &processpkg.ProcessCleanupUnsafeError{
+			PID: 42, Mode: processpkg.Detached, Cause: errors.New("identity unavailable"),
+		},
+	}
+	if RetainedAssignmentFailure("id", "/workspace", "expiry", unsafeSetup) == nil {
+		t.Fatal("unsafe post-spawn cleanup was not retained")
+	}
 
 	shared := ClassifyError(NewSharedCheckoutError(2))
 	if shared.ActiveAssignments != 2 || shared.Recovery != "ruk acquire <branch>" {

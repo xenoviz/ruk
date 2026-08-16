@@ -102,28 +102,23 @@ func TestResolvePackageManagerParsesNoisyBoundedVersionOutput(t *testing.T) {
 	}
 }
 
-func TestResolvePackageManagerDoesNotProbeCustomOrManagedInstallers(t *testing.T) {
+func TestResolvePackageManagerDoesNotProbeCustomInstallers(t *testing.T) {
 	t.Parallel()
-	called := false
-	runner := func(context.Context, CommandRequest) (CommandResult, error) {
-		called = true
-		return CommandResult{}, errors.New("must not probe")
+	var calls []CommandRequest
+	runner := func(_ context.Context, request CommandRequest) (CommandResult, error) {
+		calls = append(calls, request)
+		return CommandResult{Stdout: "bun 1.3.14"}, nil
 	}
-	cases := []config.Config{
-		{InstallCommand: []string{"custom-wrapper", "bootstrap"}},
-		{InstallCommand: []string{"bun", "install"}},
+	manager, err := ResolvePackageManager(context.Background(), t.TempDir(), config.Config{InstallCommand: []string{"custom-wrapper", "bootstrap"}}, runner)
+	if err != nil {
+		t.Fatalf("ResolvePackageManager returned an error: %v", err)
 	}
-	for _, cfg := range cases {
-		manager, err := ResolvePackageManager(context.Background(), t.TempDir(), cfg, runner)
-		if err != nil {
-			t.Fatalf("ResolvePackageManager returned an error: %v", err)
-		}
-		if manager.Version != UnknownManagerVersion || manager.DependencyMode != string(config.Managed) {
-			t.Fatalf("manager = %#v, want deterministic managed manager", manager)
-		}
-	}
-	if called {
+	if manager.Version != UnknownManagerVersion || len(calls) != 0 {
 		t.Fatal("resolver probed a custom or managed installer")
+	}
+	manager, err = ResolvePackageManager(context.Background(), t.TempDir(), config.Config{InstallCommand: []string{"bun", "install"}}, runner)
+	if err != nil || manager.Version != "1.3.14" || len(calls) != 1 {
+		t.Fatalf("standard manager = %#v calls=%d err=%v", manager, len(calls), err)
 	}
 }
 

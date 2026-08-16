@@ -57,10 +57,11 @@ type RuntimeDefaultsOptions struct {
 	WarmValidateDependency func(context.Context, git.Repository, string, state.TreeRecord) (bool, error)
 	GCWorkspace            func(git.Repository) (lifecycle.GCWorkspaceGit, error)
 
-	ExecuteRunner   processpkg.Runner
-	ExecuteActivity ExecuteActivityRunner
-	ExecuteSignals  func() (<-chan os.Signal, func())
-	ShellTerminal   ShellTerminal
+	ExecuteRunner        processpkg.Runner
+	ExecuteActivity      ExecuteActivityRunner
+	ExecuteSignals       func() (<-chan os.Signal, func())
+	ShellTerminal        ShellTerminal
+	PrimaryCheckoutFence PrimaryCheckoutFence
 }
 
 // NewRuntimeDefaults constructs fail-closed production routes. It does not
@@ -115,13 +116,20 @@ func runtimeShell(ctx context.Context, input ShellRouteInput, now func() time.Ti
 	terminal := options.ShellTerminal
 	stopShellSignals := func() {}
 	if terminal == nil {
-		_, _, lifecycleService, err := runtimeState(input.Repository, now, newID)
+		store, locker, lifecycleService, err := runtimeState(ctx, input.Repository, now, newID)
 		if err != nil {
 			return ShellResult{}, err
 		}
 		shellSignals, stopSignals := runtimeManagedSignals()
 		stopShellSignals = stopSignals
 		terminal = NewNativeShellTerminal(ShellTerminalOptions{
+			HandoffLocker: locker,
+			HandoffPath: func(path string) (string, error) {
+				return MutationWorkspaceLockPath(input.Repository.CommonDir, path)
+			},
+			Validate: func(ctx context.Context, assignmentID, path string) error {
+				return verifyRuntimeAssignment(ctx, store, assignmentID, path)
+			},
 			Register: func(ctx context.Context, assignmentID string, record state.TrackedProcessRecord) error {
 				_, err := lifecycleService.AddAssignmentProcess(ctx, assignmentID, record)
 				return err
@@ -172,17 +180,20 @@ func runtimeEnvironmentMap(environment []string) map[string]string {
 	return result
 }
 
-func runtimeState(repository git.Repository, now func() time.Time, newID func() string) (*state.Store, *lock.DirectoryLocker, *lifecycle.Service, error) {
+func runtimeState(ctx context.Context, repository git.Repository, now func() time.Time, newID func() string) (*state.Store, *lock.DirectoryLocker, *lifecycle.Service, error) {
 	if err := validateRepositoryContext(repository); err != nil {
 		return nil, nil, nil, err
 	}
-	locker := lock.NewDirectoryLocker(lock.Config{})
+	locker, err := newNativeDirectoryLocker(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	store := state.NewStore(repository.CommonDir, locker)
 	return store, locker, lifecycle.New(store, lifecycle.Options{Now: now, NewID: newID}), nil
 }
 
 func runtimeWarm(ctx context.Context, repository git.Repository, request WarmRequest, now func() time.Time, newID func() string, syncRoute SyncRouteOperation, options RuntimeDefaultsOptions) (lifecycle.WarmResult, error) {
-	store, locker, service, err := runtimeState(repository, now, newID)
+	store, locker, service, err := runtimeState(ctx, repository, now, newID)
 	if err != nil {
 		return lifecycle.WarmResult{}, err
 	}
@@ -242,7 +253,7 @@ func runtimeWarm(ctx context.Context, repository git.Repository, request WarmReq
 		repo := repository
 		repo.Root = root
 		repo.PrimaryCheckout = false
-		result, err := syncRoute(ctx, SyncCommandInput{Repository: repo, Emit: false})
+		result, err := syncRoute(ctx, SyncCommandInput{Repository: repo, JSON: request.JSON, Emit: false})
 		if err != nil {
 			return dependencies.EnsureResult{}, err
 		}
@@ -278,11 +289,15 @@ func runtimeValidateDependency(ctx context.Context, repository git.Repository, p
 	if err != nil {
 		return false, err
 	}
+	runtimeIdentity, err := dependencies.ResolveRuntimeIdentity(ctx, path, manager)
+	if err != nil {
+		return false, err
+	}
 	files, err := git.ListRepositoryFiles(ctx, path, nil)
 	if err != nil {
 		return false, err
 	}
-	details, err := dependencies.DependencyFingerprint(dependencies.SourceFingerprintInput{Root: path, Files: files, Manager: manager})
+	details, err := dependencies.DependencyFingerprint(dependencies.SourceFingerprintInput{Root: path, Files: files, Manager: manager, Runtime: runtimeIdentity})
 	if err != nil {
 		return false, err
 	}
@@ -290,7 +305,7 @@ func runtimeValidateDependency(ctx context.Context, repository git.Repository, p
 }
 
 func runtimeGC(ctx context.Context, repository git.Repository, options lifecycle.GCOptions, now func() time.Time, newID func() string, runtimeOptions RuntimeDefaultsOptions) (lifecycle.GCResult, error) {
-	store, locker, service, err := runtimeState(repository, now, newID)
+	store, locker, service, err := runtimeState(ctx, repository, now, newID)
 	if err != nil {
 		return lifecycle.GCResult{}, err
 	}
@@ -377,7 +392,9 @@ func (operation runtimeReleaseOperation) ReleaseAssignment(ctx context.Context, 
 				return lifecycle.ReleaseResult{}, err
 			}
 			if tree, ok := snapshot.Trees[key]; ok {
-				options.PreservedProjections = append([]string(nil), tree.Projections...)
+				if dependencies.ProjectionIntegrityValid(workspace.Path, tree.Projections, tree.ProjectionFingerprint) {
+					options.PreservedProjections = append([]string(nil), tree.Projections...)
+				}
 			}
 			break
 		}
@@ -427,9 +444,37 @@ func runtimeRun(ctx context.Context, input RunRouteInput, now func() time.Time, 
 		if err != nil {
 			return 1, err
 		}
-		if err := defaultSharedCheckoutGuard(ctx, input.Repository, cfg); err != nil {
-			return 1, err
+		run := func() (int, error) {
+			if guardErr := defaultSharedCheckoutGuard(ctx, input.Repository, cfg); guardErr != nil {
+				var warning *SharedCheckoutWarning
+				if !errors.As(guardErr, &warning) {
+					return 1, guardErr
+				}
+				if input.Stderr != nil {
+					if _, writeErr := fmt.Fprintln(input.Stderr, warning.Error()); writeErr != nil {
+						return 1, fmt.Errorf("write shared-checkout warning: %w", writeErr)
+					}
+				}
+			}
+			return runtimeExecute(ctx, input.Repository, input.CWD, input.Command, false, input.AllowSharedCheckout, "", now, newID, syncRoute, options)
 		}
+		if cfg.SharedCheckoutPolicy == config.Warn || cfg.SharedCheckoutPolicy == config.Allow {
+			return run()
+		}
+		fence := options.PrimaryCheckoutFence
+		if fence == nil {
+			fence = defaultPrimaryCheckoutFence
+		}
+		var code int
+		var runErr error
+		fenceErr := fence(ctx, input.Repository, func() error {
+			code, runErr = run()
+			return runErr
+		})
+		if fenceErr != nil {
+			return code, fenceErr
+		}
+		return code, runErr
 	}
 	return runtimeExecute(ctx, input.Repository, input.CWD, input.Command, false, input.AllowSharedCheckout, "", now, newID, syncRoute, options)
 }
@@ -452,7 +497,7 @@ func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, 
 	if strings.TrimSpace(cwd) == "" {
 		return 1, errors.New("execution working directory must not be empty")
 	}
-	store, locker, service, err := runtimeState(repository, now, newID)
+	store, locker, service, err := runtimeState(ctx, repository, now, newID)
 	if err != nil {
 		return 1, err
 	}
@@ -536,7 +581,13 @@ func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, 
 	if runner.Forwarder == nil {
 		runner.Forwarder = processpkg.NewNativeSignalForwarder()
 	}
-	execute := NewExecuteService(ExecuteOptions{Lifecycle: service, Reader: store, Runner: runner, Synchronize: synchronize, Activity: activity, Release: release})
+	execute := NewExecuteService(ExecuteOptions{
+		Lifecycle: service, Reader: store, Runner: runner, Synchronize: synchronize,
+		Activity: activity, Release: release, HandoffLocker: locker,
+		HandoffPath: func(path string) (string, error) {
+			return MutationWorkspaceLockPath(repository.CommonDir, path)
+		},
+	})
 	environment := os.Environ()
 	snapshot, err := store.Read(ctx)
 	if err != nil {

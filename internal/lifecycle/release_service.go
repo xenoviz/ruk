@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/xenoviz/ruk/internal/state"
 )
@@ -71,6 +72,11 @@ type ReleaseServiceOptions struct {
 
 	LocksRoot string
 	LockPath  func(string) string
+
+	// ProcessDrainTimeout and ProcessPollInterval bound post-termination
+	// verification. Zero values select conservative production defaults.
+	ProcessDrainTimeout time.Duration
+	ProcessPollInterval time.Duration
 }
 
 // ReleaseOptions controls one assignment return.
@@ -80,6 +86,12 @@ type ReleaseOptions struct {
 	RequireExpiredBy       string
 	ExpectedUpdatedAt      string
 	PreservedProjections   []string
+
+	// handoffLockHeld is set only by GC after it has acquired the exact
+	// workspace handoff lock. It keeps forced recovery from recursively
+	// acquiring a non-reentrant directory lock while preserving the locked
+	// state revalidation performed by ReleaseAssignment.
+	handoffLockHeld bool
 }
 
 // ReleaseResult reports the reusable workspace and the number of tracked
@@ -88,6 +100,30 @@ type ReleaseResult struct {
 	Workspace        state.WorkspaceRecord
 	CleanedProcesses int
 }
+
+const (
+	defaultProcessDrainTimeout = 2 * time.Second
+	defaultProcessPollInterval = 25 * time.Millisecond
+)
+
+// ProcessDrainError means a tracked process could not be proved gone before
+// the bounded verification window ended. Alive is true only when the native
+// process manager repeatedly observed the tracked tree; false means identity
+// or descendant inspection remained uncertain.
+type ProcessDrainError struct {
+	PID   int64
+	Alive bool
+	Cause error
+}
+
+func (err *ProcessDrainError) Error() string {
+	if err.Cause == nil {
+		return fmt.Sprintf("tracked process %d did not drain", err.PID)
+	}
+	return fmt.Sprintf("tracked process %d did not drain: %v", err.PID, err.Cause)
+}
+
+func (err *ProcessDrainError) Unwrap() error { return err.Cause }
 
 // ReleaseService composes the lifecycle return transitions with bounded
 // process, Git, port, and lock operations.
@@ -133,7 +169,7 @@ func (service *ReleaseService) ReleaseAssignment(ctx context.Context, assignment
 	}
 
 	var result ReleaseResult
-	err = service.options.Locker.With(ctx, lockPath, func() error {
+	releaseLocked := func() error {
 		// Re-read under the same lock used by acquisition. The state transition
 		// below remains the final assignment-ID fence if the initial read was
 		// stale.
@@ -180,7 +216,12 @@ func (service *ReleaseService) ReleaseAssignment(ctx context.Context, assignment
 		// prunes inactive reservations on its next successful update.
 		_ = service.options.Ports.Release(ctx, assignmentID)
 		return nil
-	})
+	}
+	if options.handoffLockHeld {
+		err = releaseLocked()
+	} else {
+		err = service.options.Locker.With(ctx, lockPath, releaseLocked)
+	}
 	if err != nil {
 		return ReleaseResult{}, err
 	}
@@ -264,23 +305,19 @@ func (service *ReleaseService) cleanProcesses(ctx context.Context, assignmentID 
 			if _, err := service.options.Processes.Terminate(ctx, record, false); err != nil {
 				return cleaned, fmt.Errorf("terminate tracked process %d: %w", record.PID, err)
 			}
-			alive, err = service.options.Processes.Exists(ctx, record)
-			if err != nil {
-				return cleaned, fmt.Errorf("verify tracked process %d termination: %w", record.PID, err)
-			}
-			if alive && !force {
-				return cleaned, fmt.Errorf("Tracked process %d survived graceful termination; retry with --force", record.PID)
-			}
-			if alive {
+			if drainErr := service.waitForProcessDrain(ctx, record); drainErr != nil {
+				var observed *ProcessDrainError
+				if !force || !errors.As(drainErr, &observed) || !observed.Alive {
+					if !force && errors.As(drainErr, &observed) && observed.Alive {
+						return cleaned, fmt.Errorf("Tracked process %d survived graceful termination; retry with --force: %w", record.PID, drainErr)
+					}
+					return cleaned, fmt.Errorf("verify tracked process %d termination: %w", record.PID, drainErr)
+				}
 				if _, err := service.options.Processes.Terminate(ctx, record, true); err != nil {
 					return cleaned, fmt.Errorf("force terminate tracked process %d: %w", record.PID, err)
 				}
-				alive, err = service.options.Processes.Exists(ctx, record)
-				if err != nil {
-					return cleaned, fmt.Errorf("verify tracked process %d force termination: %w", record.PID, err)
-				}
-				if alive {
-					return cleaned, fmt.Errorf("Could not terminate tracked process %d", record.PID)
+				if forceDrainErr := service.waitForProcessDrain(ctx, record); forceDrainErr != nil {
+					return cleaned, fmt.Errorf("verify tracked process %d force termination: %w", record.PID, forceDrainErr)
 				}
 			}
 			cleaned++
@@ -290,6 +327,52 @@ func (service *ReleaseService) cleanProcesses(ctx context.Context, assignmentID 
 		}
 	}
 	return cleaned, nil
+}
+
+func (service *ReleaseService) waitForProcessDrain(ctx context.Context, record state.TrackedProcessRecord) error {
+	timeout := service.options.ProcessDrainTimeout
+	if timeout <= 0 {
+		timeout = defaultProcessDrainTimeout
+	}
+	interval := service.options.ProcessPollInterval
+	if interval <= 0 {
+		interval = defaultProcessPollInterval
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var lastErr error
+	observedAlive := false
+	for {
+		alive, err := service.options.Processes.Exists(waitCtx, record)
+		if err == nil && !alive {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+			observedAlive = false
+		} else {
+			observedAlive = true
+			lastErr = errors.New("tracked process tree is still present")
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-waitCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			if lastErr == nil {
+				lastErr = waitCtx.Err()
+			}
+			return &ProcessDrainError{PID: record.PID, Alive: observedAlive, Cause: lastErr}
+		case <-timer.C:
+		}
+	}
 }
 
 func (service *ReleaseService) relockAfterGitFailure(ctx context.Context, workspacePath string, gitErr error) error {

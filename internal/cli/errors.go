@@ -53,6 +53,18 @@ type SharedCheckoutError struct {
 	Recovery          string
 }
 
+// SharedCheckoutWarning reports active assignments under the explicit warn
+// policy. It is handled as a diagnostic by guarded sync and never reaches
+// stdout or JSON output.
+type SharedCheckoutWarning struct{ ActiveAssignments int }
+
+func (warning *SharedCheckoutWarning) Error() string {
+	if warning == nil {
+		return "Primary checkout has active Ruk assignments; continuing because sharedCheckoutPolicy is warn"
+	}
+	return fmt.Sprintf("Primary checkout has %d active Ruk assignment(s); continuing because sharedCheckoutPolicy is warn", warning.ActiveAssignments)
+}
+
 func (err *SharedCheckoutError) Error() string {
 	if err == nil {
 		return "Primary checkout is shared by active Ruk assignments"
@@ -142,8 +154,23 @@ func RetainedAssignmentFailure(assignmentID, path, expiresAt string, err error) 
 // ContainsProcessSafetyError reports whether an error chain contains the
 // typed process identity failure used by lifecycle cleanup.
 func ContainsProcessSafetyError(err error) bool {
+	if err == nil {
+		return false
+	}
 	var unavailable *processpkg.IdentityUnavailableError
-	return err != nil && errors.As(err, &unavailable)
+	if errors.As(err, &unavailable) {
+		return true
+	}
+	var unsafeCleanup *processpkg.ProcessCleanupUnsafeError
+	if errors.As(err, &unsafeCleanup) {
+		return true
+	}
+	var registration *processpkg.RegistrationError
+	if errors.As(err, &registration) && registration.Cleanup != nil {
+		return true
+	}
+	var setup *processpkg.ProcessSetupError
+	return errors.As(err, &setup) && setup.Cleanup != nil
 }
 
 // ClassifyError maps an error to the stable public failure record.

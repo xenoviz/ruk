@@ -24,6 +24,7 @@ type WarmRequest struct {
 	Count int
 	From  string
 	Fetch bool
+	JSON  bool
 }
 
 // WarmOperation is the injected lifecycle warm seam.
@@ -54,7 +55,7 @@ func Warm(ctx context.Context, input WarmInput, operation WarmOperation) (WarmRe
 	if operation == nil {
 		return WarmResult{}, errors.New("warm operation is not configured")
 	}
-	result, err := operation(ctx, WarmRequest{Count: count, From: input.From, Fetch: input.Fetch})
+	result, err := operation(ctx, WarmRequest{Count: count, From: input.From, Fetch: input.Fetch, JSON: input.JSON})
 	if err != nil {
 		return WarmResult{}, err
 	}

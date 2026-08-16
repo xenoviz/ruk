@@ -31,6 +31,7 @@ type AcquireOperationInput struct {
 	Hostname   string
 	ExpiresAt  time.Time
 	Ports      []string
+	JSON       bool
 }
 
 // AcquireInput is the parsed command input and deterministic rendering
@@ -118,6 +119,7 @@ func Acquire(ctx context.Context, input AcquireInput, operation AcquireOperation
 		Hostname:   hostname,
 		ExpiresAt:  expiresAt,
 		Ports:      append([]string(nil), input.Ports...),
+		JSON:       input.JSON,
 	}
 	acquisition, err := operation(ctx, operationInput)
 	if err != nil {

@@ -33,22 +33,60 @@ func (store *releaseStore) Update(_ context.Context, mutate func(*state.State) e
 func (store *releaseStore) Read(context.Context) (*state.State, error) { return store.current, nil }
 
 type releaseProcesses struct {
-	exists    []bool
-	terminate []bool
-	calls     int
-	err       error
+	exists      []bool
+	keepAlive   bool
+	terminate   []bool
+	existsCalls int
+	calls       int
+	err         error
 }
 
 func (processes *releaseProcesses) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	processes.existsCalls++
 	if processes.err != nil {
 		return false, processes.err
 	}
 	if len(processes.exists) == 0 {
-		return false, nil
+		return processes.keepAlive, nil
 	}
 	result := processes.exists[0]
 	processes.exists = processes.exists[1:]
 	return result, nil
+}
+
+func TestReleaseServicePollsUntilTrackedTreeDrains(t *testing.T) {
+	store, service, assignmentID, _ := newReleaseFixture(t, nil)
+	addTrackedProcess(t, store, assignmentID)
+	processes := &releaseProcesses{exists: []bool{true, true, false}}
+	release := lifecycle.NewReleaseService(service, lifecycle.ReleaseServiceOptions{
+		Reader: store, Processes: processes, Git: &releaseGit{}, Ports: &releasePorts{}, Locker: &releaseLocker{}, LocksRoot: t.TempDir(),
+		ProcessDrainTimeout: time.Second, ProcessPollInterval: time.Millisecond,
+	})
+
+	if _, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err != nil {
+		t.Fatalf("Release returned an error: %v", err)
+	}
+	if processes.existsCalls != 3 || processes.calls != 1 {
+		t.Fatalf("process drain verification = exists %d terminate %d, want 3 and 1", processes.existsCalls, processes.calls)
+	}
+}
+
+func TestReleaseServiceRetainsOwnershipWhenGracefulTreeSurvives(t *testing.T) {
+	store, service, assignmentID, _ := newReleaseFixture(t, nil)
+	addTrackedProcess(t, store, assignmentID)
+	processes := &releaseProcesses{exists: []bool{true}, keepAlive: true}
+	release := lifecycle.NewReleaseService(service, lifecycle.ReleaseServiceOptions{
+		Reader: store, Processes: processes, Git: &releaseGit{}, Ports: &releasePorts{}, Locker: &releaseLocker{}, LocksRoot: t.TempDir(),
+		ProcessDrainTimeout: 2 * time.Millisecond, ProcessPollInterval: time.Millisecond,
+	})
+
+	_, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
+	if err == nil || !strings.Contains(err.Error(), "retry with --force") {
+		t.Fatalf("Release error = %v, want bounded graceful-survival error", err)
+	}
+	if processes.calls != 1 || assignmentFromStore(t, store, assignmentID).Lifecycle != state.LifecycleAssigned {
+		t.Fatalf("surviving process cleanup = calls %d workspace %#v", processes.calls, assignmentFromStore(t, store, assignmentID))
+	}
 }
 
 func (processes *releaseProcesses) Terminate(_ context.Context, _ state.TrackedProcessRecord, force bool) (bool, error) {

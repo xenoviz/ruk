@@ -14,7 +14,6 @@ import (
 	"github.com/xenoviz/ruk/internal/dependencies"
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/lifecycle"
-	"github.com/xenoviz/ruk/internal/lock"
 	"github.com/xenoviz/ruk/internal/ports"
 	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
@@ -79,6 +78,7 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 
 	sharedSync := NewSyncCommand()
 	sharedSync.Guard = defaultSharedCheckoutGuard
+	sharedSync.PrimaryFence = defaultPrimaryCheckoutFence
 	defaultSyncRoute := func(ctx context.Context, input SyncCommandInput) (SyncCommandResult, error) {
 		if err := validateRepositoryContext(input.Repository); err != nil {
 			return SyncCommandResult{}, err
@@ -131,6 +131,25 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 	}, nil
 }
 
+func defaultPrimaryCheckoutFence(ctx context.Context, repository git.Repository, callback func() error) error {
+	if callback == nil {
+		return errors.New("primary checkout fence callback is not configured")
+	}
+	if err := validateRepositoryContext(repository); err != nil {
+		return err
+	}
+	locker, err := newNativeDirectoryLocker(ctx)
+	if err != nil {
+		return err
+	}
+	path := primaryCheckoutLockPath(repository.CommonDir)
+	return locker.With(ctx, path, callback)
+}
+
+func primaryCheckoutLockPath(commonDir string) string {
+	return filepath.Join(state.StorePaths(commonDir).Locks, "primary-checkout.lock")
+}
+
 // MutationWorkspaceLockPath returns the shared per-workspace lock path used
 // by acquisition, release, and unmanaged removal.
 func MutationWorkspaceLockPath(commonDir, workspacePath string) (string, error) {
@@ -151,7 +170,11 @@ func defaultRenewOperation(ctx context.Context, repository git.Repository, assig
 	if err := validateRepositoryContext(repository); err != nil {
 		return state.WorkspaceRecord{}, err
 	}
-	store := state.NewStore(repository.CommonDir, lock.NewDirectoryLocker(lock.Config{}))
+	locker, err := newNativeDirectoryLocker(ctx)
+	if err != nil {
+		return state.WorkspaceRecord{}, err
+	}
+	store := state.NewStore(repository.CommonDir, locker)
 	service := lifecycle.New(store, lifecycle.Options{Now: time.Now, NewID: func() string { return "unused-by-renew" }})
 	return service.RenewAssignment(ctx, assignmentID, expiresAt, nil)
 }
@@ -182,13 +205,18 @@ func (adapter acquisitionWorktreeAdapter) Create(ctx context.Context, destinatio
 	return adapter.service.Create(ctx, destination, branch, startPoint, true)
 }
 
+func (adapter acquisitionWorktreeAdapter) Lock(ctx context.Context, destination string) error {
+	return adapter.service.Lock(ctx, destination)
+}
+
 func (adapter acquisitionWorktreeAdapter) Assign(ctx context.Context, destination, branch, startPoint string) error {
 	return adapter.service.Assign(ctx, destination, branch, startPoint)
 }
 
 // Return is used by acquisition failure fencing to restore a partially
-// mutated native worktree. It is intentionally an additional method beyond
-// lifecycle.AcquisitionWorktree so test doubles can remain narrow.
+// mutated native worktree. It remains an additional method beyond
+// lifecycle.AcquisitionWorktree because acquisition only requires locking,
+// creation, and branch assignment.
 func (adapter acquisitionWorktreeAdapter) Return(ctx context.Context, destination string, force bool, projections []string) error {
 	return adapter.service.ResetCleanReturn(ctx, destination, force, projections)
 }
@@ -232,7 +260,10 @@ func acquireRepository(ctx context.Context, repository git.Repository, input Acq
 		return lifecycle.AcquisitionResult{}, err
 	}
 	input.StartPoint = startPoint
-	locker := lock.NewDirectoryLocker(lock.Config{})
+	locker, err := newNativeDirectoryLocker(ctx)
+	if err != nil {
+		return lifecycle.AcquisitionResult{}, err
+	}
 	store := state.NewStore(repository.CommonDir, locker)
 	service := lifecycle.New(store, lifecycle.Options{Now: now, NewID: newID})
 	worktreeFactory := options.AcquireWorktree
@@ -247,9 +278,9 @@ func acquireRepository(ctx context.Context, repository git.Repository, input Acq
 		repo := repository
 		repo.Root = root
 		result, err := syncRoute(ctx, SyncCommandInput{
-			Repository: repo,
-			Ensure:     dependencies.EnsureInput{Store: store, Locker: heldWorkspaceLocker{}},
-			Emit:       false,
+			Repository: repo, JSON: input.JSON,
+			Ensure: dependencies.EnsureInput{Store: store, Locker: heldWorkspaceLocker{}},
+			Emit:   false,
 		})
 		if err != nil {
 			return dependencies.EnsureResult{}, err
@@ -266,7 +297,8 @@ func acquireRepository(ctx context.Context, repository git.Repository, input Acq
 		return lifecycle.AcquisitionResult{}, err
 	}
 	acquisition := lifecycle.NewAcquisitionService(lifecycle.AcquisitionOptions{
-		Lifecycle: service, Reader: store, Locker: locker, Worktree: worktree,
+		Lifecycle: service, Reader: store, Locker: locker, PrimaryLocker: locker,
+		PrimaryLockPath: primaryCheckoutLockPath(repository.CommonDir), Worktree: worktree,
 		Prepare: prepare, Ports: allocator,
 		WorkspacePath: func(context.Context, string) (string, error) { return defaultPoolPath(repository.Root, input.Branch) },
 		LockPath: func(path string) string {
@@ -295,7 +327,10 @@ func releaseRepository(ctx context.Context, repository git.Repository, assignmen
 	if err := validateRepositoryContext(repository); err != nil {
 		return RepositoryReleaseResult{}, err
 	}
-	locker := lock.NewDirectoryLocker(lock.Config{})
+	locker, err := newNativeDirectoryLocker(ctx)
+	if err != nil {
+		return RepositoryReleaseResult{}, err
+	}
 	store := state.NewStore(repository.CommonDir, locker)
 	service := lifecycle.New(store, lifecycle.Options{Now: now, NewID: newID})
 	gitFactory := options.ReleaseGit
@@ -356,6 +391,9 @@ func assignmentProjections(snapshot *state.State, assignmentID string) []string 
 		if !ok {
 			return nil
 		}
+		if !dependencies.ProjectionIntegrityValid(workspace.Path, tree.Projections, tree.ProjectionFingerprint) {
+			return nil
+		}
 		return append([]string(nil), tree.Projections...)
 	}
 	return nil
@@ -365,7 +403,10 @@ func removeRepository(ctx context.Context, input RemoveInput) error {
 	if err := validateRepositoryContext(input.Repository); err != nil {
 		return err
 	}
-	locker := lock.NewDirectoryLocker(lock.Config{})
+	locker, err := newNativeDirectoryLocker(ctx)
+	if err != nil {
+		return err
+	}
 	store := state.NewStore(input.Repository.CommonDir, locker)
 	client := git.NewClient(nil)
 	return (RemoveCommand{
@@ -486,7 +527,11 @@ func defaultSharedCheckoutGuard(ctx context.Context, repository git.Repository, 
 	if err := validateRepositoryContext(repository); err != nil {
 		return err
 	}
-	store := state.NewStore(repository.CommonDir, lock.NewDirectoryLocker(lock.Config{}))
+	locker, err := newNativeDirectoryLocker(ctx)
+	if err != nil {
+		return err
+	}
+	store := state.NewStore(repository.CommonDir, locker)
 	snapshot, err := store.Read(ctx)
 	if err != nil {
 		return err
@@ -497,8 +542,11 @@ func defaultSharedCheckoutGuard(ctx context.Context, repository git.Repository, 
 			active++
 		}
 	}
-	if active == 0 || cfg.SharedCheckoutPolicy == config.Warn {
+	if active == 0 {
 		return nil
+	}
+	if cfg.SharedCheckoutPolicy == config.Warn {
+		return &SharedCheckoutWarning{ActiveAssignments: active}
 	}
 	return NewSharedCheckoutError(active)
 }

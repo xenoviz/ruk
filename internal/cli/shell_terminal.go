@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
+	"github.com/xenoviz/ruk/internal/lock"
 	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
 )
@@ -33,6 +36,17 @@ type ShellProcessRegister func(context.Context, string, state.TrackedProcessReco
 // native tree has been proven drained.
 type ShellProcessRemove func(context.Context, string, state.TrackedProcessRecord) error
 
+// ShellProcessValidate rechecks assignment ownership while the workspace
+// handoff lock is held, closing the release-before-spawn race.
+type ShellProcessValidate func(context.Context, string, string) error
+
+// ShellHandoffLocker exposes one native directory-lock guard. The guard is
+// released by the process runner immediately after registration (or failed
+// registration cleanup), before a long-lived shell is waited on.
+type ShellHandoffLocker interface {
+	Acquire(context.Context, string) (*lock.Guard, error)
+}
+
 // ShellSignalForwarder forwards terminal interrupts to the exact registered
 // native process group or tree.
 type ShellSignalForwarder interface {
@@ -43,24 +57,30 @@ type ShellSignalForwarder interface {
 // The default runner uses inherited stdio and a native process group/job; no
 // util-linux, PowerShell, tasklist, or taskkill helper is started.
 type ShellTerminalOptions struct {
-	Runner    ShellProcessRunner
-	Tracker   ShellProcessTracker
-	Register  ShellProcessRegister
-	Remove    ShellProcessRemove
-	Forwarder ShellSignalForwarder
-	Signals   <-chan os.Signal
+	Runner        ShellProcessRunner
+	Tracker       ShellProcessTracker
+	Register      ShellProcessRegister
+	Remove        ShellProcessRemove
+	Validate      ShellProcessValidate
+	HandoffLocker ShellHandoffLocker
+	HandoffPath   func(string) (string, error)
+	Forwarder     ShellSignalForwarder
+	Signals       <-chan os.Signal
 }
 
 // NativeShellTerminal runs the selected shell through the existing native
 // process and identity seams. It intentionally does not claim drained state
 // until the exact process record has been checked after the leader exits.
 type NativeShellTerminal struct {
-	runner    ShellProcessRunner
-	tracker   ShellProcessTracker
-	register  ShellProcessRegister
-	remove    ShellProcessRemove
-	forwarder ShellSignalForwarder
-	signals   <-chan os.Signal
+	runner        ShellProcessRunner
+	tracker       ShellProcessTracker
+	register      ShellProcessRegister
+	remove        ShellProcessRemove
+	validate      ShellProcessValidate
+	handoffLocker ShellHandoffLocker
+	handoffPath   func(string) (string, error)
+	forwarder     ShellSignalForwarder
+	signals       <-chan os.Signal
 }
 
 // NewNativeShellTerminal constructs a native terminal adapter. Nil seams use
@@ -83,14 +103,18 @@ func NewNativeShellTerminal(options ShellTerminalOptions) *NativeShellTerminal {
 	}
 	return &NativeShellTerminal{
 		runner: runner, tracker: tracker, register: options.Register, remove: options.Remove,
-		forwarder: forwarder, signals: options.Signals,
+		validate: options.Validate, handoffLocker: options.HandoffLocker,
+		handoffPath: options.HandoffPath, forwarder: forwarder, signals: options.Signals,
 	}
 }
 
-// Run starts the shell in the workspace using inherited stdio. Detached mode
-// provides the native process-group/job boundary needed to observe children;
-// PTY/ConPTY allocation remains an explicit platform seam rather than an
-// unsafe script or shell-helper fallback.
+// Run starts the shell in the workspace using inherited stdio and a detached
+// native process group/job. On POSIX TTYs the process runner temporarily moves
+// that group into the terminal foreground and restores the caller's group
+// after Wait, avoiding SIGTTIN while retaining a durable GroupID. This is
+// deliberately not described as a PTY/ConPTY: no pseudo-terminal is allocated
+// here. The tracker must still prove that the leader and descendants have
+// drained; an unavailable or uncertain identity retains the assignment.
 func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTerminalRequest) (ShellTerminalResult, error) {
 	if terminal == nil {
 		return ShellTerminalResult{}, errors.New("shell terminal is not configured")
@@ -113,6 +137,37 @@ func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTermi
 	signals := terminal.signals
 	if signals != nil && terminal.forwarder == nil {
 		return ShellTerminalResult{}, errors.New("shell terminal signal forwarding is unavailable")
+	}
+	var handoffGuard *lock.Guard
+	if terminal.handoffLocker != nil {
+		if terminal.handoffPath == nil {
+			return ShellTerminalResult{}, errors.New("shell workspace handoff lock path is not configured")
+		}
+		lockPath, err := terminal.handoffPath(request.WorkspacePath)
+		if err != nil {
+			return ShellTerminalResult{}, err
+		}
+		handoffGuard, err = terminal.handoffLocker.Acquire(ctx, lockPath)
+		if err != nil {
+			return ShellTerminalResult{}, err
+		}
+	}
+	var handoffErr error
+	releaseHandoff := func() {
+		if handoffGuard == nil {
+			return
+		}
+		if err := handoffGuard.Release(); err != nil {
+			handoffErr = errors.Join(handoffErr, err)
+			return
+		}
+		handoffGuard = nil
+	}
+	defer releaseHandoff()
+	if terminal.validate != nil {
+		if err := terminal.validate(ctx, request.AssignmentID, request.WorkspacePath); err != nil {
+			return ShellTerminalResult{}, err
+		}
 	}
 
 	var mu sync.Mutex
@@ -172,11 +227,14 @@ func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTermi
 		}()
 	}
 	run, err := terminal.runner.Run(ctx, []string{request.Shell}, processpkg.RunOptions{
-		Dir:    request.WorkspacePath,
-		Mode:   processpkg.Detached,
-		Stdin:  request.Stdin,
-		Stdout: request.Stdout,
-		Stderr: request.Stderr,
+		Dir:                request.WorkspacePath,
+		Env:                shellEnvironment(request.Environment),
+		Mode:               processpkg.Detached,
+		ForegroundTerminal: true,
+		Stdin:              request.Stdin,
+		Stdout:             request.Stdout,
+		Stderr:             request.Stderr,
+		HandoffComplete:    releaseHandoff,
 		Register: func(registerCtx context.Context, record state.TrackedProcessRecord) error {
 			if err := terminal.register(registerCtx, request.AssignmentID, record); err != nil {
 				return err
@@ -196,6 +254,9 @@ func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTermi
 			return nil
 		},
 	})
+	// Test runners and future adapters may not invoke the handoff callback;
+	// release here as a safe fallback after Run returns.
+	releaseHandoff()
 	stopWatching()
 	watcher.Wait()
 	result := ShellTerminalResult{ExitCode: run.ExitCode, Signal: run.Signal}
@@ -204,7 +265,8 @@ func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTermi
 	finalSignalErr := signalErr
 	mu.Unlock()
 	err = errors.Join(err, finalSignalErr)
-	if err != nil && registeredRecord.PID == 0 {
+	err = errors.Join(err, handoffErr)
+	if err != nil {
 		return result, err
 	}
 	if run.Record.PID <= 0 || run.Record.StartedAt == "" || registeredRecord.PID != run.Record.PID || registeredRecord.StartedAt != run.Record.StartedAt {
@@ -224,6 +286,31 @@ func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTermi
 	}
 	result.DescendantsDrained = true
 	return result, err
+}
+
+func shellEnvironment(additions map[string]string) []string {
+	environment := append([]string(nil), os.Environ()...)
+	keys := make([]string, 0, len(additions))
+	for name := range additions {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	for _, name := range keys {
+		entry := name + "=" + additions[name]
+		replaced := false
+		for index, existing := range environment {
+			key, _, ok := strings.Cut(existing, "=")
+			if ok && strings.EqualFold(key, name) {
+				environment[index] = entry
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			environment = append(environment, entry)
+		}
+	}
+	return environment
 }
 
 func shellForwardSignal(signal os.Signal) bool {

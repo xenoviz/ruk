@@ -39,6 +39,9 @@ func TestAcquireJSONValidatesTTLAndPassesStructuredOperationInput(t *testing.T) 
 		Hostname: "test-host", Ports: []string{"web", "api"}, JSON: true, Now: now,
 	}, func(_ context.Context, input cli.AcquireOperationInput) (lifecycle.AcquisitionResult, error) {
 		called = true
+		if !input.JSON {
+			t.Fatal("JSON acquire did not mark operation input machine-readable")
+		}
 		if input.Branch != "agent/task" || input.From != "origin/main" || input.StartPoint != "origin/main" || !input.Fetch || input.Owner != "explicit-owner" || input.Hostname != "test-host" {
 			t.Fatalf("operation input = %#v", input)
 		}
@@ -65,6 +68,9 @@ func TestAcquireDefaultTTLAndOwnerFallbackRenderSortedHumanPorts(t *testing.T) {
 		Branch: "agent/task", Now: now, OwnerFallback: func() string { return "fallback-owner" },
 		HostnameFallback: func() string { return "fallback-host" },
 	}, func(_ context.Context, input cli.AcquireOperationInput) (lifecycle.AcquisitionResult, error) {
+		if input.JSON {
+			t.Fatal("human acquire marked operation input machine-readable")
+		}
 		if input.Owner != "fallback-owner" || input.Hostname != "fallback-host" || !input.ExpiresAt.Equal(now.Add(8*time.Hour)) {
 			t.Fatalf("fallback operation input = %#v", input)
 		}

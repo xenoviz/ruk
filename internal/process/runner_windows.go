@@ -17,7 +17,7 @@ import (
 // configureCommand confines Windows command-line differences to this file.
 // Batch files use the native command interpreter; no PowerShell process is
 // involved.
-func configureCommand(command *exec.Cmd, _ ProcessMode) error {
+func configureCommand(command *exec.Cmd, _ ProcessMode, _ int) error {
 	if command == nil {
 		return errors.New("process: Windows command is unavailable")
 	}
@@ -81,7 +81,7 @@ func spawnWindowsProcess(ctx context.Context, request SpawnRequest) (Child, erro
 	command.Stdin = request.Stdin
 	command.Stdout = request.Stdout
 	command.Stderr = request.Stderr
-	if err := configureCommand(command, request.Mode); err != nil {
+	if err := configureCommand(command, request.Mode, -1); err != nil {
 		return nil, err
 	}
 	job, err := newWindowsJob()

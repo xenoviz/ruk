@@ -40,6 +40,7 @@ func validShellAcquire() cli.AcquireResult {
 		Path:         "/workspaces/one",
 		Branch:       "feature/shell",
 		ExpiresAt:    "2026-08-16T12:00:00Z",
+		Ports:        map[string]int64{"http": 4312},
 	}}
 }
 
@@ -111,6 +112,9 @@ func TestShellReleasesAfterDrainedTerminalAndPreservesStdioAndStatus(t *testing.
 	}
 	if terminal.request.Stdin != stdin || terminal.request.Stdout != stdout || terminal.request.Stderr != stderr {
 		t.Fatal("terminal did not receive the caller's stdio")
+	}
+	if terminal.request.Environment["RUK_PORT_HTTP"] != "4312" {
+		t.Fatalf("terminal port environment = %#v", terminal.request.Environment)
 	}
 	if stderr.String() != "Shell workspace: /workspaces/one\nAssignment: assignment-1\n" {
 		t.Fatalf("shell handoff diagnostic = %q", stderr.String())

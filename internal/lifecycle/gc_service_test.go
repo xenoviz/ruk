@@ -3,6 +3,7 @@ package lifecycle_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -119,7 +120,7 @@ func TestGCServiceApplyRemovesSafeWorkspaceAndSkipsCurrent(t *testing.T) {
 	tree := &gcTestTreeState{}
 	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{Reader: store, Lifecycle: service, Git: git, TreeState: tree, Locker: &gcTestLocker{}, LocksRoot: t.TempDir()})
 
-	result, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true, CurrentWorkspacePath: "/pool/current"})
+	result, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true, CurrentWorkspacePath: "/pool/current/subdirectory"})
 	if err != nil {
 		t.Fatalf("apply returned an error: %v", err)
 	}
@@ -140,7 +141,9 @@ func TestGCServiceAbandonedAcquisitionUsesReleaseFence(t *testing.T) {
 	workspace := gcWorkspaceForService("/pool/acquiring", state.LifecycleAssigned, &operation, gcAssignment("assignment", "2026-01-01T08:00:00.000Z", nil), "2026-01-01T00:00:00.000Z")
 	store, service := gcFixture(t, now, workspace)
 	release := &gcTestRelease{store: store, now: now}
-	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{Reader: store, Lifecycle: service, Release: release, Git: &gcTestGit{}, TreeState: &gcTestTreeState{}, Locker: &gcTestLocker{}, LocksRoot: t.TempDir()})
+	locksRoot := t.TempDir()
+	locker := &gcTestLocker{}
+	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{Reader: store, Lifecycle: service, Release: release, Git: &gcTestGit{}, TreeState: &gcTestTreeState{}, Locker: locker, LocksRoot: locksRoot})
 
 	result, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true})
 	if err != nil {
@@ -151,6 +154,14 @@ func TestGCServiceAbandonedAcquisitionUsesReleaseFence(t *testing.T) {
 	}
 	if len(result.Removed) != 1 || len(store.current.Workspaces) != 0 {
 		t.Fatalf("abandoned acquisition result/state = %#v/%#v", result, store.current.Workspaces)
+	}
+	key, err := state.TreeKey(workspace.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWorkspaceLock := filepath.Join(locksRoot, "workspace-"+key+".lock")
+	if len(locker.paths) != 3 || locker.paths[2] != wantWorkspaceLock {
+		t.Fatalf("GC lock paths = %#v, want exact handoff lock %q", locker.paths, wantWorkspaceLock)
 	}
 }
 
@@ -213,8 +224,32 @@ func TestGCServicePostRemovalStateFailureRetainsRetryFence(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "delete workspace record failed") {
 		t.Fatalf("state deletion failure = %v", err)
 	}
-	if workspaceAtPathForGC(t, store, "/pool/state").OperationID == nil || tree.calls != 0 {
+	if workspaceAtPathForGC(t, store, "/pool/state").OperationID == nil || tree.calls != 1 {
 		t.Fatalf("post-removal retry state/tree = %#v/%d", workspaceAtPathForGC(t, store, "/pool/state"), tree.calls)
+	}
+}
+
+func TestGCServiceTreeStateFailureRetainsFenceForRetry(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 2, 0, 0, 0, time.UTC)
+	store, service := gcFixture(t, now, gcWorkspaceForService("/pool/tree", state.LifecycleAvailable, nil, nil, "2026-01-01T00:00:00.000Z"))
+	tree := &gcTestTreeState{err: errors.New("delete tree state failed")}
+	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{Reader: store, Lifecycle: service, Git: &gcTestGit{worktree: true}, TreeState: tree, Locker: &gcTestLocker{}, LocksRoot: t.TempDir()})
+
+	_, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true})
+	if err == nil || !strings.Contains(err.Error(), "delete tree state failed") {
+		t.Fatalf("tree-state deletion failure = %v", err)
+	}
+	if workspaceAtPathForGC(t, store, "/pool/tree").OperationID == nil {
+		t.Fatal("tree-state failure lost retryable collection fence")
+	}
+
+	tree.err = nil
+	result, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true})
+	if err != nil {
+		t.Fatalf("retry after tree-state failure returned an error: %v", err)
+	}
+	if len(result.Removed) != 1 || len(store.current.Workspaces) != 0 {
+		t.Fatalf("retry result/state = %#v/%#v", result, store.current.Workspaces)
 	}
 }
 

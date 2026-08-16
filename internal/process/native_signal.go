@@ -92,6 +92,9 @@ func (forwarder NativeSignalForwarder) Forward(ctx context.Context, record state
 	if record.PID <= 0 || int64(int(record.PID)) != record.PID || record.StartedAt == "" {
 		return processUnavailable(int(record.PID), errors.New("invalid tracked process record"))
 	}
+	if IsUnverifiedRecord(record) {
+		return processUnavailable(int(record.PID), errors.New("unverified process boundary cannot receive signals"))
+	}
 	return forwardNativeSignal(ctx, forwarder, record, signal)
 }
 

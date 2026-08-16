@@ -11,7 +11,6 @@ import (
 	"github.com/xenoviz/ruk/internal/config"
 	"github.com/xenoviz/ruk/internal/dependencies"
 	"github.com/xenoviz/ruk/internal/git"
-	"github.com/xenoviz/ruk/internal/lock"
 	"github.com/xenoviz/ruk/internal/state"
 	"github.com/xenoviz/ruk/internal/statistics"
 )
@@ -22,7 +21,11 @@ func defaultQueryDependencies() QueryDependencies {
 			return git.ListWorktrees(ctx, root, nil)
 		},
 		ReadState: func(ctx context.Context, commonDir string) (state.State, error) {
-			store := state.NewStore(commonDir, lock.NewDirectoryLocker(lock.Config{}))
+			locker, err := newNativeDirectoryLocker(ctx)
+			if err != nil {
+				return state.State{}, err
+			}
+			store := state.NewStore(commonDir, locker)
 			snapshot, err := store.Read(ctx)
 			if err != nil {
 				return state.State{}, err
@@ -74,12 +77,16 @@ func currentDependencyFingerprint(ctx context.Context, root string) (string, err
 	if err != nil {
 		return "", err
 	}
+	runtimeIdentity, err := dependencies.ResolveRuntimeIdentity(ctx, root, manager)
+	if err != nil {
+		return "", err
+	}
 	files, err := git.ListRepositoryFiles(ctx, root, nil)
 	if err != nil {
 		return "", err
 	}
 	details, err := dependencies.DependencyFingerprint(dependencies.SourceFingerprintInput{
-		Root: root, Files: files, Manager: manager,
+		Root: root, Files: files, Manager: manager, Runtime: runtimeIdentity,
 	})
 	if err != nil {
 		return "", err

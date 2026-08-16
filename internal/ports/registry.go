@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/xenoviz/ruk/internal/lock"
 	"github.com/xenoviz/ruk/internal/state"
 )
 
@@ -174,7 +173,11 @@ func NewRegistry(options RegistryOptions) (*Registry, error) {
 	}
 	locker := options.Locker
 	if locker == nil {
-		locker = lock.NewDirectoryLocker(lock.Config{})
+		nativeLocker, err := newNativeDirectoryLocker()
+		if err != nil {
+			return nil, err
+		}
+		locker = nativeLocker
 	}
 	activity := options.Activity
 	if activity == nil {

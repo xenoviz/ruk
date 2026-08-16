@@ -150,7 +150,10 @@ Explicit shorthand `remote/branch` fetches reject missing remotes unless the
 start point is an existing local branch.
 
 For updates, stable installations select completed stable releases. A current
-prerelease follows newer prereleases automatically. Package installations
-delegate the exact version to their owning package manager; standalone
-installations verify the native asset and replace it atomically. Never infer
-installer ownership from a path when the distribution marker is available.
+prerelease follows newer releases on that same prerelease channel automatically;
+an explicit prerelease opt-in may change channels. Discovery follows GitHub
+pagination, and Bun package updates trust the exact Ruk package so its native
+postinstall can run. Package installations delegate the exact version to their
+owning package manager; standalone installations verify the native asset and
+replace it atomically. Never infer installer ownership from a path when the
+distribution marker is available.

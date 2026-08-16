@@ -75,6 +75,14 @@ func terminateNativeRecord(ctx context.Context, manager NativeProcessManager, re
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	// Recheck immediately before signaling: the first probe can race PID reuse.
+	revalidated, err := manager.probe.Inspect(ctx, int(record.PID))
+	if err != nil {
+		return false, processUnavailable(int(record.PID), err)
+	}
+	if !revalidated.Alive || !revalidated.IdentityKnown || revalidated.Identity != record.StartedAt {
+		return false, processUnavailable(int(record.PID), errors.New("process identity changed before signaling"))
+	}
 	kind := SignalGraceful
 	if force {
 		kind = SignalForce

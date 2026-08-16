@@ -81,6 +81,26 @@ func TestSyncCommandPreparationUsesInjectedContextAndHumanOutput(t *testing.T) {
 	}
 }
 
+func TestSyncCommandInjectsRuntimeAndMachineReadableInstallerPolicy(t *testing.T) {
+	var gotRuntime dependencies.RuntimeIdentity
+	var gotMachineReadable bool
+	command := syncTestCommand(dependencies.EnsureResult{Fingerprint: "fingerprint", Mode: "managed-install"}, func(input dependencies.EnsureInput) {
+		gotRuntime = input.Runtime
+		gotMachineReadable = input.MachineReadable
+	}, nil)
+	command.ResolveRuntime = func(context.Context, string, dependencies.PackageManager) (dependencies.RuntimeIdentity, error) {
+		return dependencies.RuntimeIdentity{Runtime: "node", Version: "22.0.0", NativeABI: "127"}, nil
+	}
+	input := syncTestInput(&bytes.Buffer{})
+	input.JSON = true
+	if _, err := command.Run(context.Background(), input); err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+	if gotRuntime.Version != "22.0.0" || gotRuntime.NativeABI != "127" || !gotMachineReadable {
+		t.Fatalf("runtime/machine-readable input = %#v/%v", gotRuntime, gotMachineReadable)
+	}
+}
+
 func TestSyncCommandGuardDenialSkipsDependencyPreparation(t *testing.T) {
 	var output bytes.Buffer
 	called := false
@@ -102,6 +122,58 @@ func TestSyncCommandGuardDenialSkipsDependencyPreparation(t *testing.T) {
 	}
 	if output.Len() != 0 {
 		t.Fatalf("output after denial = %q", output.String())
+	}
+}
+
+func TestSyncCommandPrimaryFenceCoversGuardAndPreparation(t *testing.T) {
+	fenced := false
+	command := syncTestCommand(dependencies.EnsureResult{Fingerprint: "fingerprint", Mode: "managed-install"}, func(dependencies.EnsureInput) {
+		if !fenced {
+			t.Fatal("dependency preparation ran outside primary-checkout fence")
+		}
+	}, func(context.Context, git.Repository, config.Config) error {
+		if !fenced {
+			t.Fatal("shared-checkout guard ran outside primary-checkout fence")
+		}
+		return nil
+	})
+	command.PrimaryFence = func(_ context.Context, _ git.Repository, callback func() error) error {
+		fenced = true
+		defer func() { fenced = false }()
+		return callback()
+	}
+	input := syncTestInput(&bytes.Buffer{})
+	input.GuardSharedCheckout = true
+	if _, err := command.Run(context.Background(), input); err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+	if fenced {
+		t.Fatal("primary-checkout fence remained held after sync")
+	}
+}
+
+func TestSyncCommandWarnPolicyWritesOnlyStderrDiagnostic(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	command := syncTestCommand(dependencies.EnsureResult{Fingerprint: "fingerprint", Mode: "managed-install"}, nil, func(context.Context, git.Repository, config.Config) error {
+		return &SharedCheckoutWarning{ActiveAssignments: 2}
+	})
+	command.PrimaryFence = func(context.Context, git.Repository, func() error) error {
+		t.Fatal("warn policy acquired the long-running primary fence")
+		return nil
+	}
+	input := syncTestInput(&stdout)
+	input.Config = config.Config{SharedCheckoutPolicy: config.Warn}
+	input.GuardSharedCheckout = true
+	input.JSON = true
+	input.Stderr = &stderr
+	if _, err := command.Run(context.Background(), input); err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "continuing because sharedCheckoutPolicy is warn") {
+		t.Fatalf("stderr warning = %q", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "sharedCheckoutPolicy") {
+		t.Fatalf("stdout contains warning: %q", stdout.String())
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -17,10 +18,14 @@ const defaultDiagnosticLimit = 4096
 // command. Keeping this request as data makes dependency preparation easy to
 // exercise without starting a package manager.
 type CommandRequest struct {
-	Command string
-	Args    []string
-	Dir     string
-	Env     []string
+	Command      string
+	Args         []string
+	Dir          string
+	Env          []string
+	Stdin        io.Reader
+	Stdout       io.Writer
+	Stderr       io.Writer
+	InheritStdio bool
 }
 
 // CommandResult is the bounded observable result of one installer command.
@@ -74,6 +79,10 @@ type Installer struct {
 	Runner          CommandRunner
 	DiagnosticLimit int
 	Environment     []string
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Stderr          io.Writer
+	InheritStdio    bool
 }
 
 // NewInstaller constructs an installer around an injected command runner.
@@ -128,7 +137,11 @@ func (installer Installer) Prepare(ctx context.Context, root string, manager Pac
 		}
 	}
 
-	request := CommandRequest{Command: command[0], Args: args, Dir: root, Env: environment}
+	request := CommandRequest{
+		Command: command[0], Args: args, Dir: root, Env: environment,
+		Stdin: installer.Stdin, Stdout: installer.Stdout, Stderr: installer.Stderr,
+		InheritStdio: installer.InheritStdio,
+	}
 	result, err := installer.runner()(ctx, request)
 	limit, limitErr := installer.limit()
 	if limitErr != nil {
@@ -295,11 +308,29 @@ func tail(value string, limit int) string {
 func OSCommandRunner(ctx context.Context, request CommandRequest) (CommandResult, error) {
 	stdout := newTailWriter(defaultDiagnosticLimit)
 	stderr := newTailWriter(defaultDiagnosticLimit)
+	var stdoutTarget io.Writer = stdout
+	var stderrTarget io.Writer = stderr
+	if request.InheritStdio {
+		if request.Stdout == nil {
+			request.Stdout = os.Stdout
+		}
+		if request.Stderr == nil {
+			request.Stderr = os.Stderr
+		}
+		stdoutTarget = io.MultiWriter(request.Stdout, stdout)
+		stderrTarget = io.MultiWriter(request.Stderr, stderr)
+	}
 	command := exec.CommandContext(ctx, request.Command, request.Args...)
 	command.Dir = request.Dir
 	command.Env = append([]string(nil), request.Env...)
-	command.Stdout = stdout
-	command.Stderr = stderr
+	if request.InheritStdio {
+		command.Stdin = request.Stdin
+		if command.Stdin == nil {
+			command.Stdin = os.Stdin
+		}
+	}
+	command.Stdout = stdoutTarget
+	command.Stderr = stderrTarget
 	err := command.Run()
 	result := CommandResult{Stdout: stdout.String(), Stderr: stderr.String()}
 	if err == nil {

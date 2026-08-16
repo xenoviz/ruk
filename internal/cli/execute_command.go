@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/xenoviz/ruk/internal/lifecycle"
+	"github.com/xenoviz/ruk/internal/lock"
 	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
 )
@@ -33,14 +34,30 @@ type ExecuteActivityRunner func(context.Context, string, func(context.Context) e
 // and its tracked process record has been removed.
 type ExecuteRelease func(context.Context, string) error
 
+// ExecuteProcesser proves whether a detached process tree still belongs to
+// the exact durable identity recorded for the assignment.
+type ExecuteProcesser interface {
+	Exists(context.Context, state.TrackedProcessRecord) (bool, error)
+}
+
+// ExecuteHandoffLocker exposes one native directory-lock guard. The guard is
+// released by the process runner immediately after registration (or failed
+// registration cleanup), before a long-lived child is waited on.
+type ExecuteHandoffLocker interface {
+	Acquire(context.Context, string) (*lock.Guard, error)
+}
+
 // ExecuteOptions contains the injected seams for managed execution.
 type ExecuteOptions struct {
-	Lifecycle   *lifecycle.Service
-	Reader      ExecuteStateReader
-	Runner      processpkg.Runner
-	Synchronize ExecuteDependencySynchronizer
-	Activity    ExecuteActivityRunner
-	Release     ExecuteRelease
+	Lifecycle     *lifecycle.Service
+	Reader        ExecuteStateReader
+	Runner        processpkg.Runner
+	Processes     ExecuteProcesser
+	Synchronize   ExecuteDependencySynchronizer
+	Activity      ExecuteActivityRunner
+	Release       ExecuteRelease
+	HandoffLocker ExecuteHandoffLocker
+	HandoffPath   func(string) (string, error)
 }
 
 // ExecuteService runs one command in a fenced managed workspace.
@@ -48,9 +65,12 @@ type ExecuteService struct {
 	lifecycle        *lifecycle.Service
 	reader           ExecuteStateReader
 	runner           processpkg.Runner
+	processes        ExecuteProcesser
 	synchronize      ExecuteDependencySynchronizer
 	activity         ExecuteActivityRunner
 	releaseOperation ExecuteRelease
+	handoffLocker    ExecuteHandoffLocker
+	handoffPath      func(string) (string, error)
 }
 
 // NewExecuteService constructs an execution service. OS/process behavior
@@ -62,13 +82,20 @@ func NewExecuteService(options ExecuteOptions) *ExecuteService {
 	if options.Runner.Spawner == nil {
 		options.Runner = processpkg.NewRunner()
 	}
+	if options.Processes == nil {
+		manager := processpkg.NewNativeProcessManager()
+		options.Processes = manager
+	}
 	return &ExecuteService{
 		lifecycle:        options.Lifecycle,
 		reader:           options.Reader,
 		runner:           options.Runner,
+		processes:        options.Processes,
 		synchronize:      options.Synchronize,
 		activity:         options.Activity,
 		releaseOperation: options.Release,
+		handoffLocker:    options.HandoffLocker,
+		handoffPath:      options.HandoffPath,
 	}
 }
 
@@ -129,7 +156,7 @@ func (service *ExecuteService) Execute(ctx context.Context, input ExecuteInput) 
 	}
 
 	if err := service.validateAssignment(ctx, input.AssignmentID, input.WorkspacePath); err != nil {
-		return result, err
+		return result, service.releaseBeforeChildFailure(ctx, input, &result, err)
 	}
 	operation := func(operationCtx context.Context) error {
 		if err := service.synchronize(operationCtx, input.AssignmentID, input.WorkspacePath); err != nil {
@@ -145,7 +172,23 @@ func (service *ExecuteService) Execute(ctx context.Context, input ExecuteInput) 
 	} else {
 		err = operation(ctx)
 	}
+	if err != nil && input.Exec && !result.RunResult.Started {
+		err = service.releaseBeforeChildFailure(ctx, input, &result, err)
+	}
 	return result, err
+}
+
+func (service *ExecuteService) releaseBeforeChildFailure(ctx context.Context, input ExecuteInput, result *ExecuteResult, cause error) error {
+	if !input.Exec || service.releaseOperation == nil || input.AssignmentID == "" {
+		return cause
+	}
+	if err := service.release(ctx, input.AssignmentID); err != nil {
+		return errors.Join(cause, fmt.Errorf("exec setup failed; Assignment %s retained for recovery: %w", input.AssignmentID, err))
+	}
+	if result != nil {
+		result.Released = true
+	}
+	return cause
 }
 
 func (service *ExecuteService) validateAssignment(ctx context.Context, assignmentID, workspacePath string) error {
@@ -174,6 +217,48 @@ func (service *ExecuteService) validateAssignment(ctx context.Context, assignmen
 }
 
 func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInput, result *ExecuteResult) error {
+	var handoffGuard *lock.Guard
+	if service.handoffLocker != nil {
+		if service.handoffPath == nil {
+			return errors.New("execute workspace handoff lock path is not configured")
+		}
+		lockPath, err := service.handoffPath(input.WorkspacePath)
+		if err != nil {
+			return err
+		}
+		handoffGuard, err = service.handoffLocker.Acquire(ctx, lockPath)
+		if err != nil {
+			return err
+		}
+	}
+	var handoffMu sync.Mutex
+	var handoffErr error
+	releaseHandoff := func() {
+		handoffMu.Lock()
+		defer handoffMu.Unlock()
+		if handoffGuard == nil {
+			return
+		}
+		if err := handoffGuard.Release(); err != nil {
+			handoffErr = errors.Join(handoffErr, err)
+			return
+		}
+		handoffGuard = nil
+	}
+	defer func() {
+		if handoffGuard != nil {
+			if err := handoffGuard.Release(); err != nil {
+				handoffMu.Lock()
+				handoffErr = errors.Join(handoffErr, err)
+				handoffMu.Unlock()
+			}
+		}
+	}()
+	if handoffGuard != nil {
+		if err := service.validateAssignment(ctx, input.AssignmentID, input.WorkspacePath); err != nil {
+			return err
+		}
+	}
 	var mu sync.Mutex
 	var tracked *state.TrackedProcessRecord
 	var pending os.Signal
@@ -231,7 +316,8 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 	runResult, runErr := service.runner.Run(ctx, input.Command, processpkg.RunOptions{
 		Dir: input.WorkspacePath, Env: input.Env, Mode: input.Mode,
 		Stdin: input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
-		CaptureLimit: input.CaptureLimit,
+		CaptureLimit:    input.CaptureLimit,
+		HandoffComplete: releaseHandoff,
 		Register: func(registerCtx context.Context, record state.TrackedProcessRecord) error {
 			if err := service.validateAssignment(registerCtx, input.AssignmentID, input.WorkspacePath); err != nil {
 				return err
@@ -257,6 +343,9 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 			return nil
 		},
 	})
+	// Test runners and future adapters may not invoke the handoff callback;
+	// release here as a safe fallback after Run returns.
+	releaseHandoff()
 	stopWatching()
 	watcher.Wait()
 	mu.Lock()
@@ -265,10 +354,28 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 	mu.Unlock()
 	recordRemoved := trackedRecord == nil
 	if trackedRecord != nil {
-		if _, removeErr := service.lifecycle.RemoveAssignmentProcess(ctx, input.AssignmentID, trackedRecord.PID, trackedRecord.StartedAt); removeErr != nil {
-			runErr = errors.Join(runErr, removeErr)
-		} else {
-			recordRemoved = true
+		drained := true
+		if input.Mode == processpkg.Detached {
+			if service.processes == nil {
+				runErr = errors.Join(runErr, errors.New("verify detached process cleanup: process manager is unavailable"))
+				drained = false
+			} else {
+				alive, existsErr := service.processes.Exists(ctx, *trackedRecord)
+				if existsErr != nil {
+					runErr = errors.Join(runErr, fmt.Errorf("verify detached process %d cleanup: %w", trackedRecord.PID, existsErr))
+					drained = false
+				} else if alive {
+					runErr = errors.Join(runErr, fmt.Errorf("detached process tree %d remains after its leader exited", trackedRecord.PID))
+					drained = false
+				}
+			}
+		}
+		if drained {
+			if _, removeErr := service.lifecycle.RemoveAssignmentProcess(ctx, input.AssignmentID, trackedRecord.PID, trackedRecord.StartedAt); removeErr != nil {
+				runErr = errors.Join(runErr, removeErr)
+			} else {
+				recordRemoved = true
+			}
 		}
 	}
 	if finalSignalErr != nil {
@@ -276,6 +383,15 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 	}
 	result.RunResult = runResult
 	result.AssignmentID = input.AssignmentID
+	handoffMu.Lock()
+	finalHandoffErr := handoffErr
+	handoffMu.Unlock()
+	runErr = errors.Join(runErr, finalHandoffErr)
+	if finalHandoffErr != nil {
+		// The workspace handoff fence could not be released cleanly. Keep the
+		// assignment for explicit recovery instead of racing a recycle.
+		return runErr
+	}
 	if input.Exec && recordRemoved && processCleanupSafe(runErr) {
 		if releaseErr := service.release(ctx, input.AssignmentID); releaseErr != nil {
 			return errors.Join(runErr, releaseErr)
@@ -299,6 +415,10 @@ func (service *ExecuteService) release(ctx context.Context, assignmentID string)
 func processCleanupSafe(err error) bool {
 	if err == nil {
 		return true
+	}
+	var waitErr *processpkg.ProcessWaitError
+	if errors.As(err, &waitErr) {
+		return false
 	}
 	var registration *processpkg.RegistrationError
 	if errors.As(err, &registration) {

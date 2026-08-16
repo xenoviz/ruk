@@ -35,6 +35,8 @@ func (lock acquisitionLockFake) With(_ context.Context, _ string, callback func(
 type acquisitionWorktreeFake struct {
 	created      int
 	createdPaths []string
+	locked       int
+	lockErr      error
 	assigned     int
 }
 
@@ -42,6 +44,11 @@ func (worktree *acquisitionWorktreeFake) Create(_ context.Context, path, _, _ st
 	worktree.created++
 	worktree.createdPaths = append(worktree.createdPaths, path)
 	return nil
+}
+
+func (worktree *acquisitionWorktreeFake) Lock(context.Context, string) error {
+	worktree.locked++
+	return worktree.lockErr
 }
 
 func (worktree *acquisitionWorktreeFake) Assign(context.Context, string, string, string) error {
@@ -145,7 +152,7 @@ func TestAcquireCreatesPreparingWorkspaceAndAssignsAfterPreparation(t *testing.T
 	if err != nil {
 		t.Fatalf("Acquire returned an error: %v", err)
 	}
-	if result.Reused || result.AssignmentID != assignmentID || worktree.created != 1 || worktree.assigned != 1 {
+	if result.Reused || result.AssignmentID != assignmentID || worktree.created != 1 || worktree.locked != 1 || worktree.assigned != 1 {
 		t.Fatalf("result/worktree = %#v / %#v", result, worktree)
 	}
 	if !lockEnteredBeforePreparation {
@@ -180,6 +187,28 @@ func TestAcquirePreparationFailureRecordsFailedWorkspace(t *testing.T) {
 	workspace := store.current.Workspaces[key]
 	if workspace.Lifecycle != state.LifecycleFailed || workspace.OperationID != nil || workspace.Failure == nil {
 		t.Fatalf("failed workspace = %#v", workspace)
+	}
+}
+
+func TestAcquireFreshWorktreeLockFailureRetainsRecoverableFailure(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStore()
+	path := filepath.Join(t.TempDir(), "lock-failure")
+	lockErr := errors.New("git worktree lock failed")
+	worktree := &acquisitionWorktreeFake{lockErr: lockErr}
+	service := acquisitionTestService(t, store, []string{preparationID}, worktree, successfulDependencies, acquisitionPortsFake{}, acquisitionLockFake{}, nil)
+
+	_, err := service.Acquire(context.Background(), lifecycle.AcquireInput{
+		Assignment: lifecycle.AssignmentInput{Owner: "agent", Hostname: "host", ExpiresAt: time.Date(2026, time.January, 1, 8, 0, 0, 0, time.UTC)},
+		Branch:     "agent/lock-failure", StartPoint: "origin/main", WorkspacePath: path,
+	})
+	if err == nil || !strings.Contains(err.Error(), lockErr.Error()) {
+		t.Fatalf("Acquire error = %v, want Git lock failure", err)
+	}
+	key, _ := state.TreeKey(path)
+	workspace := store.current.Workspaces[key]
+	if workspace.Lifecycle != state.LifecycleFailed || workspace.Failure == nil || worktree.assigned != 0 {
+		t.Fatalf("lock failure state/worktree = %#v / %#v", workspace, worktree)
 	}
 }
 
