@@ -93,12 +93,12 @@ func TestResolveEntrypointNormalizesRelativeExecutablePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveEntrypoint() error = %v", err)
 	}
-	want, err := filepath.Abs(target)
+	want, err := filepath.EvalSymlinks(target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Fatalf("resolved entrypoint = %q, want absolute %q", got, want)
+		t.Fatalf("resolved entrypoint = %q, want canonical absolute %q", got, want)
 	}
 }
 

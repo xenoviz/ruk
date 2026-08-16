@@ -115,7 +115,11 @@ func TestCanonicalRuntimePathResolvesMissingLeafThroughExistingAncestor(t *testi
 	if err != nil {
 		t.Fatalf("canonicalRuntimePath returned an error for a missing leaf: %v", err)
 	}
-	want := filepath.Clean(missing)
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(canonicalRoot, "never-created", "workspace")
 	if got != want {
 		t.Fatalf("canonicalRuntimePath = %q, want %q", got, want)
 	}
@@ -160,7 +164,11 @@ func TestCanonicalRuntimePathResolvesExistingAncestorSymlinkForMissingLeaf(t *te
 	if err != nil {
 		t.Fatalf("canonicalRuntimePath returned an error for a symlinked missing leaf: %v", err)
 	}
-	want := filepath.Join(target, "never-created", "workspace")
+	canonicalTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(canonicalTarget, "never-created", "workspace")
 	if got != want {
 		t.Fatalf("canonicalRuntimePath = %q, want %q", got, want)
 	}
