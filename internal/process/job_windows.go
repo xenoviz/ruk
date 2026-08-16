@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -17,15 +18,13 @@ const (
 	processQueryLimitedInformationAccess = uint32(0x1000)
 	createSuspended                      = uint32(0x00000004)
 	jobObjectExtendedLimitInformation    = uint32(9)
+	jobObjectBasicAccountingInformation  = uint32(1)
 	jobObjectLimitKillOnJobClose         = uint32(0x2000)
 
 	threadSuspendResume = uint32(0x0002)
 	threadSnapshot      = uintptr(0x00000004)
-	waitObjectSignaled  = uint32(0x00000000)
-	waitObjectTimeout   = uint32(0x00000102)
-	waitObjectFailed    = ^uint32(0)
 
-	terminateWaitMS = uint32(100)
+	jobActivePollIntervalMS = uint32(100)
 )
 
 var (
@@ -33,9 +32,9 @@ var (
 	setInformationJob   = kernel32.NewProc("SetInformationJobObject")
 	assignProcessToJob  = kernel32.NewProc("AssignProcessToJobObject")
 	terminateJobObject  = kernel32.NewProc("TerminateJobObject")
+	queryInformationJob = kernel32.NewProc("QueryInformationJobObject")
 	openProcessForJob   = kernel32.NewProc("OpenProcess")
 	terminateProcess    = kernel32.NewProc("TerminateProcess")
-	waitForSingleObject = kernel32.NewProc("WaitForSingleObject")
 	openThread          = kernel32.NewProc("OpenThread")
 	resumeThread        = kernel32.NewProc("ResumeThread")
 	thread32First       = kernel32.NewProc("Thread32First")
@@ -82,6 +81,21 @@ type windowsJobExtendedLimitInformation struct {
 	PeakJobMemoryUsed     uintptr
 }
 
+// windowsJobBasicAccountingInformation is
+// JOBOBJECT_BASIC_ACCOUNTING_INFORMATION. A Job Object handle is not signaled
+// when its active process count reaches zero, so WaitEmpty queries this
+// structure instead.
+type windowsJobBasicAccountingInformation struct {
+	TotalUserTime             int64
+	TotalKernelTime           int64
+	ThisPeriodTotalUserTime   int64
+	ThisPeriodTotalKernelTime int64
+	TotalPageFaultCount       uint32
+	TotalProcesses            uint32
+	ActiveProcesses           uint32
+	TotalTerminatedProcesses  uint32
+}
+
 // windowsJobSystem is injectable so lifecycle tests can exercise creation,
 // assignment, termination, and close ordering without requiring Windows
 // process state. Production code uses nativeWindowsJobSystem.
@@ -92,7 +106,7 @@ type windowsJobSystem struct {
 	assign           func(syscall.Handle, syscall.Handle) error
 	terminate        func(syscall.Handle) error
 	terminateProcess func(syscall.Handle) error
-	wait             func(syscall.Handle, uint32) (uint32, error)
+	queryActive      func(syscall.Handle) (uint32, error)
 	close            func(syscall.Handle) error
 }
 
@@ -146,12 +160,20 @@ var nativeWindowsJobSystem = windowsJobSystem{
 		}
 		return nil
 	},
-	wait: func(handle syscall.Handle, timeout uint32) (uint32, error) {
-		result, _, callErr := waitForSingleObject.Call(uintptr(handle), uintptr(timeout))
-		if uint32(result) == waitObjectFailed {
-			return uint32(result), windowsCallError(callErr)
+	queryActive: func(handle syscall.Handle) (uint32, error) {
+		accounting := windowsJobBasicAccountingInformation{}
+		var returnLength uint32
+		ok, _, callErr := queryInformationJob.Call(
+			uintptr(handle),
+			uintptr(jobObjectBasicAccountingInformation),
+			uintptr(unsafe.Pointer(&accounting)),
+			uintptr(unsafe.Sizeof(accounting)),
+			uintptr(unsafe.Pointer(&returnLength)),
+		)
+		if ok == 0 {
+			return 0, windowsCallError(callErr)
 		}
-		return uint32(result), nil
+		return accounting.ActiveProcesses, nil
 	},
 	close: func(handle syscall.Handle) error {
 		ok, _, callErr := closeHandle.Call(uintptr(handle))
@@ -174,7 +196,7 @@ func newWindowsJob() (*windowsJob, error) {
 }
 
 func newWindowsJobWith(system windowsJobSystem) (*windowsJob, error) {
-	if system.create == nil || system.setLimits == nil || system.openProcess == nil || system.assign == nil || system.terminate == nil || system.terminateProcess == nil || system.wait == nil || system.close == nil {
+	if system.create == nil || system.setLimits == nil || system.openProcess == nil || system.assign == nil || system.terminate == nil || system.terminateProcess == nil || system.queryActive == nil || system.close == nil {
 		return nil, errors.New("process: Windows Job Object boundary is incomplete")
 	}
 	handle, err := system.create()
@@ -197,13 +219,12 @@ func (job *windowsJob) AssignProcess(pid int) error {
 		return errors.New("process: invalid Windows child PID")
 	}
 	job.mu.Lock()
+	defer job.mu.Unlock()
 	if job.closed {
-		job.mu.Unlock()
 		return errors.New("process: Windows Job Object is closed")
 	}
 	handle := job.handle
 	system := job.system
-	job.mu.Unlock()
 
 	process, err := system.openProcess(processTerminate|processSetQuota|processQueryLimitedInformationAccess, uint32(pid))
 	if err != nil {
@@ -234,13 +255,17 @@ func (job *windowsJob) Close() error {
 	if job.closed {
 		return nil
 	}
+	if err := job.system.close(job.handle); err != nil {
+		return err
+	}
 	job.closed = true
-	return job.system.close(job.handle)
+	return nil
 }
 
-// WaitEmpty waits until the Job Object has no active processes. A short
-// timeout makes context cancellation observable while preserving the job
-// handle and its kill-on-close ownership fence until descendants finish.
+// WaitEmpty waits until the Job Object has no active processes. Job Object
+// handles are not signaled when ordinary child processes exit, so this polls
+// JobObjectBasicAccountingInformation while preserving the handle and its
+// kill-on-close ownership fence until descendants finish.
 func (job *windowsJob) WaitEmpty(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -258,20 +283,24 @@ func (job *windowsJob) WaitEmpty(ctx context.Context) error {
 			job.mu.Unlock()
 			return errors.New("process: Windows Job Object is closed")
 		}
-		system := job.system
-		handle := job.handle
+		active, err := job.system.queryActive(job.handle)
 		job.mu.Unlock()
-		result, err := system.wait(handle, terminateWaitMS)
 		if err != nil {
-			return fmt.Errorf("wait for Windows Job Object processes: %w", err)
+			return fmt.Errorf("query Windows Job Object active processes: %w", err)
 		}
-		switch result {
-		case waitObjectSignaled:
+		if active == 0 {
 			return nil
-		case waitObjectTimeout:
-			continue
-		default:
-			return fmt.Errorf("wait for Windows Job Object processes: unexpected wait result 0x%x", result)
+		}
+		timer := time.NewTimer(time.Duration(jobActivePollIntervalMS) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
 		}
 	}
 }

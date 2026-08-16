@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"unsafe"
 )
 
 func TestWindowsBatchCommandLineTable(t *testing.T) {
@@ -50,9 +51,9 @@ func TestWindowsJobAssignmentAndCloseOrdering(t *testing.T) {
 		assign:           func(syscall.Handle, syscall.Handle) error { calls = append(calls, "assign"); return nil },
 		terminate:        func(syscall.Handle) error { calls = append(calls, "terminate"); return nil },
 		terminateProcess: func(syscall.Handle) error { calls = append(calls, "terminate-process"); return nil },
-		wait: func(syscall.Handle, uint32) (uint32, error) {
-			calls = append(calls, "wait")
-			return waitObjectSignaled, nil
+		queryActive: func(syscall.Handle) (uint32, error) {
+			calls = append(calls, "query")
+			return 0, nil
 		},
 		close: func(syscall.Handle) error { calls = append(calls, "close"); return nil },
 	}
@@ -96,7 +97,7 @@ func TestWindowsJobAssignmentFailureClosesOpenedProcessHandle(t *testing.T) {
 		},
 		terminate:        func(syscall.Handle) error { return nil },
 		terminateProcess: func(syscall.Handle) error { calls = append(calls, "terminate-process"); return nil },
-		wait:             func(syscall.Handle, uint32) (uint32, error) { return waitObjectSignaled, nil },
+		queryActive:      func(syscall.Handle) (uint32, error) { return 0, nil },
 		close:            func(syscall.Handle) error { calls = append(calls, "close"); return nil },
 	}
 	job, err := newWindowsJobWith(system)
@@ -111,9 +112,9 @@ func TestWindowsJobAssignmentFailureClosesOpenedProcessHandle(t *testing.T) {
 	}
 }
 
-func TestWindowsJobWaitEmptyKeepsJobOpenForDescendants(t *testing.T) {
-	var waits int
-	var closed bool
+func TestWindowsJobWaitEmptyPollsActiveProcessesAndKeepsJobOpen(t *testing.T) {
+	var queries int
+	var calls []string
 	system := windowsJobSystem{
 		create:           func() (syscall.Handle, error) { return 10, nil },
 		setLimits:        func(syscall.Handle) error { return nil },
@@ -121,14 +122,15 @@ func TestWindowsJobWaitEmptyKeepsJobOpenForDescendants(t *testing.T) {
 		assign:           func(syscall.Handle, syscall.Handle) error { return nil },
 		terminate:        func(syscall.Handle) error { return nil },
 		terminateProcess: func(syscall.Handle) error { return nil },
-		wait: func(syscall.Handle, uint32) (uint32, error) {
-			waits++
-			if waits == 1 {
-				return waitObjectTimeout, nil
+		queryActive: func(syscall.Handle) (uint32, error) {
+			queries++
+			calls = append(calls, "query")
+			if queries == 1 {
+				return 1, nil
 			}
-			return waitObjectSignaled, nil
+			return 0, nil
 		},
-		close: func(syscall.Handle) error { closed = true; return nil },
+		close: func(syscall.Handle) error { calls = append(calls, "close"); return nil },
 	}
 	job, err := newWindowsJobWith(system)
 	if err != nil {
@@ -137,14 +139,117 @@ func TestWindowsJobWaitEmptyKeepsJobOpenForDescendants(t *testing.T) {
 	if err := job.WaitEmpty(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if waits != 2 || closed {
-		t.Fatalf("waits = %d, closed = %v; job must remain open until caller closes it", waits, closed)
+	if queries != 2 {
+		t.Fatalf("queries = %d, want two active-process queries", queries)
 	}
 	if err := job.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !closed {
-		t.Fatal("job close was not observed")
+	if want := []string{"query", "query", "close"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want query polling before explicit close %#v", calls, want)
+	}
+}
+
+func TestWindowsJobWaitEmptyTerminatesOnceOnCancellationAndKeepsPolling(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var terminateCalls, queries int
+	system := windowsJobSystem{
+		create:           func() (syscall.Handle, error) { return 10, nil },
+		setLimits:        func(syscall.Handle) error { return nil },
+		openProcess:      func(uint32, uint32) (syscall.Handle, error) { return 20, nil },
+		assign:           func(syscall.Handle, syscall.Handle) error { return nil },
+		terminate:        func(syscall.Handle) error { terminateCalls++; return nil },
+		terminateProcess: func(syscall.Handle) error { return nil },
+		queryActive: func(syscall.Handle) (uint32, error) {
+			queries++
+			if queries == 1 {
+				return 1, nil
+			}
+			return 0, nil
+		},
+		close: func(syscall.Handle) error { return nil },
+	}
+	job, err := newWindowsJobWith(system)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := job.WaitEmpty(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if terminateCalls != 1 || queries != 2 {
+		t.Fatalf("terminate calls = %d, queries = %d; want one termination and continued polling", terminateCalls, queries)
+	}
+}
+
+func TestWindowsJobWaitEmptyReportsActiveProcessQueryError(t *testing.T) {
+	queryErr := errors.New("query failed")
+	var terminateCalls int
+	system := windowsJobSystem{
+		create:           func() (syscall.Handle, error) { return 10, nil },
+		setLimits:        func(syscall.Handle) error { return nil },
+		openProcess:      func(uint32, uint32) (syscall.Handle, error) { return 20, nil },
+		assign:           func(syscall.Handle, syscall.Handle) error { return nil },
+		terminate:        func(syscall.Handle) error { terminateCalls++; return nil },
+		terminateProcess: func(syscall.Handle) error { return nil },
+		queryActive:      func(syscall.Handle) (uint32, error) { return 0, queryErr },
+		close:            func(syscall.Handle) error { return nil },
+	}
+	job, err := newWindowsJobWith(system)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := job.WaitEmpty(context.Background()); !errors.Is(err, queryErr) {
+		t.Fatalf("error = %v, want wrapped query error", err)
+	}
+	if terminateCalls != 0 {
+		t.Fatalf("terminate calls = %d, want no termination without cancellation", terminateCalls)
+	}
+}
+
+func TestWindowsJobCloseFailureRemainsRetryable(t *testing.T) {
+	closeCalls := 0
+	system := windowsJobSystem{
+		create:           func() (syscall.Handle, error) { return 10, nil },
+		setLimits:        func(syscall.Handle) error { return nil },
+		openProcess:      func(uint32, uint32) (syscall.Handle, error) { return 20, nil },
+		assign:           func(syscall.Handle, syscall.Handle) error { return nil },
+		terminate:        func(syscall.Handle) error { return nil },
+		terminateProcess: func(syscall.Handle) error { return nil },
+		queryActive:      func(syscall.Handle) (uint32, error) { return 0, nil },
+		close: func(syscall.Handle) error {
+			closeCalls++
+			if closeCalls == 1 {
+				return errors.New("close failed")
+			}
+			return nil
+		},
+	}
+	job, err := newWindowsJobWith(system)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Close(); err == nil {
+		t.Fatal("first close unexpectedly succeeded")
+	}
+	if err := job.Close(); err != nil {
+		t.Fatalf("second close failed: %v", err)
+	}
+	if err := job.Close(); err != nil {
+		t.Fatalf("repeated close failed: %v", err)
+	}
+	if closeCalls != 2 {
+		t.Fatalf("close calls = %d, want retry after failure and no call after success", closeCalls)
+	}
+}
+
+func TestWindowsJobBasicAccountingInformationLayout(t *testing.T) {
+	var accounting windowsJobBasicAccountingInformation
+	if got, want := unsafe.Sizeof(accounting), uintptr(48); got != want {
+		t.Fatalf("accounting size = %d, want %d", got, want)
+	}
+	if got, want := unsafe.Offsetof(accounting.ActiveProcesses), uintptr(40); got != want {
+		t.Fatalf("ActiveProcesses offset = %d, want %d", got, want)
 	}
 }
 
