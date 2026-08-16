@@ -244,9 +244,13 @@ async function waitForManagedChild(
 ): Promise<number> {
   const expectedName = normalizeExecutableName(expectedCommand);
   const deadline = performance.now() + MANAGED_CHILD_READINESS_TIMEOUT_MS;
+  let observed = "none";
   while (performance.now() < deadline) {
-    if (!isAlive()) throw new Error(`benchmark wrapper root ${rootPid} exited before managed ${expectedName} child readiness`);
+    if (!isAlive()) throw new Error(`benchmark wrapper root ${rootPid} exited before managed ${expectedName} child readiness; observed ${observed}`);
     const report = await inspect(inspector, [rootPid]);
+    observed = report.processes.length === 0
+      ? "none"
+      : report.processes.map((process) => `${process.pid}:${normalizeExecutableName(process.name)}<-ppid:${process.parentPid}`).join(", ");
     if (hasExpectedManagedChild(report, rootPid, expectedCommand)) {
       await new Promise((resolve) => setTimeout(resolve, MANAGED_CHILD_SETTLE_MS));
       if (!isAlive()) throw new Error(`benchmark wrapper root ${rootPid} exited during managed ${expectedName} child settling`);
@@ -254,7 +258,7 @@ async function waitForManagedChild(
     }
     await new Promise((resolve) => setTimeout(resolve, MANAGED_CHILD_POLL_MS));
   }
-  throw new Error(`benchmark wrapper root ${rootPid} did not expose managed ${expectedName} child within ${MANAGED_CHILD_READINESS_TIMEOUT_MS}ms`);
+  throw new Error(`benchmark wrapper root ${rootPid} did not expose managed ${expectedName} child within ${MANAGED_CHILD_READINESS_TIMEOUT_MS}ms; observed ${observed}`);
 }
 
 async function waitForWrapperCompletion(completion: Promise<WrapperResult[]>, timeoutMs: number): Promise<boolean> {
