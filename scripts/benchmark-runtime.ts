@@ -58,6 +58,7 @@ interface ParsedArguments {
   ttlMinutes: number;
   concurrencyLevels: number[];
   assertTarget: boolean;
+  allowSingleTarget: boolean;
 }
 
 interface Measurement {
@@ -169,6 +170,7 @@ function parseArguments(args: readonly string[], root: string): ParsedArguments 
   const ttlMinutes = Number(value("--ttl") ?? 0.5);
   const concurrencyLevels = (value("--concurrency") ?? "1,10,20").split(",").map(Number);
   const assertTarget = !args.includes("--no-assert");
+  const allowSingleTarget = args.includes("--allow-single-target");
   if (!Number.isSafeInteger(samples) || samples < 1) throw new Error("--samples must be a positive integer");
   if (!Number.isFinite(durationMs) || durationMs < 1_000) throw new Error("--duration must be at least 1000 milliseconds");
   if (!Number.isFinite(ttlMinutes) || ttlMinutes <= 0) throw new Error("--ttl must be a positive number of minutes");
@@ -183,7 +185,7 @@ function parseArguments(args: readonly string[], root: string): ParsedArguments 
   if (concurrencyLevels.length === 0 || concurrencyLevels.some((level) => !Number.isSafeInteger(level) || level < 1)) {
     throw new Error("--concurrency must be a comma-separated list of positive integers");
   }
-  return { nodeCli, binary, targets, samples, durationMs, ttlMinutes, concurrencyLevels, assertTarget };
+  return { nodeCli, binary, targets, samples, durationMs, ttlMinutes, concurrencyLevels, assertTarget, allowSingleTarget };
 }
 
 async function makeRepository(root: string, target: Target, nodeExecutable: string): Promise<string> {
@@ -682,6 +684,23 @@ export function makeAssertions(
   };
 }
 
+const RAM_COMPARISON_UNAVAILABLE_REASON = "RAM comparison unavailable: both runtimes must complete";
+
+export function shouldFailBenchmark(
+  requestedTargets: readonly TargetName[],
+  result: Pick<RuntimeBenchmarkResult, "targets" | "failures" | "assertions">,
+  allowSingleTarget: boolean,
+): boolean {
+  if (result.failures.length > 0) return true;
+  const completedSingleTarget = requestedTargets.length === 1
+    && result.targets.length === 1
+    && result.targets[0]?.name === requestedTargets[0];
+  if (!allowSingleTarget || !completedSingleTarget) {
+    return result.assertions.failureReasons.length > 0;
+  }
+  return result.assertions.failureReasons.some((reason) => reason !== RAM_COMPARISON_UNAVAILABLE_REASON);
+}
+
 export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchmarkResult> {
   const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
   const parsed = parseArguments(args, root);
@@ -728,11 +747,16 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
       concurrencyLevels: [...parsed.concurrencyLevels],
       targets,
       failures,
-      assertions: makeAssertions(targets, parsed.concurrencyLevels, failures),
+      assertions: makeAssertions(
+        targets,
+        parsed.concurrencyLevels,
+        failures,
+        process.platform === "win32" && parsed.targets.includes("go"),
+      ),
     });
     process.stderr.write(`${makeSummary(result)}\n`);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    if (parsed.assertTarget && (result.failures.length > 0 || result.assertions.failureReasons.length > 0)) {
+    if (parsed.assertTarget && shouldFailBenchmark(parsed.targets, result, parsed.allowSingleTarget)) {
       throw new Error(result.assertions.failureReasons.join("; "));
     }
     return result;

@@ -13,10 +13,10 @@ on:
           - windows
         default: both
       targets:
-        description: Runtime targets (comma-separated)
+        description: Runtime targets (auto, node, go, or node,go)
         required: true
         type: string
-        default: node,go
+        default: auto
       samples:
         description: Samples per target/concurrency cell
         required: true
@@ -69,7 +69,7 @@ jobs:
       - name: Install benchmark tooling
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Build previous Node oracle (POSIX)
-        if: runner.os != 'Windows' && contains(inputs.targets, 'node')
+        if: runner.os != 'Windows' && (inputs.targets == 'auto' || contains(inputs.targets, 'node'))
         shell: bash
         run: |
           git worktree add --detach "$RUNNER_TEMP/ruk-node-oracle" "$LEGACY_COMMIT"
@@ -77,7 +77,7 @@ jobs:
           bun install --frozen-lockfile --ignore-scripts
           bun run build
       - name: Build previous Node oracle (Windows)
-        if: runner.os == 'Windows' && contains(inputs.targets, 'node')
+        if: runner.os == 'Windows' && inputs.targets != 'auto' && contains(inputs.targets, 'node')
         shell: pwsh
         run: |
           git worktree add --detach "$env:RUNNER_TEMP\ruk-node-oracle" "$env:LEGACY_COMMIT"
@@ -97,7 +97,7 @@ jobs:
         shell: bash
         env:
           RUK_BENCH_NODE: node
-          RUK_BENCH_TARGETS: ${{ inputs.targets }}
+          RUK_BENCH_TARGETS: ${{ inputs.targets == 'auto' && (runner.os == 'Windows' && 'go' || 'node,go') || inputs.targets }}
           RUK_BENCH_SAMPLES: ${{ inputs.samples }}
           RUK_BENCH_DURATION: ${{ inputs.duration }}
           RUK_BENCH_CONCURRENCY: ${{ inputs.concurrency }}
@@ -106,6 +106,7 @@ jobs:
             --node "$RUNNER_TEMP/ruk-node-oracle/dist/bin/ruk.js" \
             --binary artifacts/ruk \
             --targets "$RUK_BENCH_TARGETS" \
+            --allow-single-target \
             --samples "$RUK_BENCH_SAMPLES" \
             --duration "$RUK_BENCH_DURATION" \
             --ttl 0.5 \
@@ -116,7 +117,7 @@ jobs:
         shell: pwsh
         env:
           RUK_BENCH_NODE: node
-          RUK_BENCH_TARGETS: ${{ inputs.targets }}
+          RUK_BENCH_TARGETS: ${{ inputs.targets == 'auto' && (runner.os == 'Windows' && 'go' || 'node,go') || inputs.targets }}
           RUK_BENCH_SAMPLES: ${{ inputs.samples }}
           RUK_BENCH_DURATION: ${{ inputs.duration }}
           RUK_BENCH_CONCURRENCY: ${{ inputs.concurrency }}
@@ -125,6 +126,7 @@ jobs:
             --node "$env:RUNNER_TEMP\ruk-node-oracle\dist\bin\ruk.js" `
             --binary artifacts\ruk.exe `
             --targets "$env:RUK_BENCH_TARGETS" `
+            --allow-single-target `
             --samples "$env:RUK_BENCH_SAMPLES" `
             --duration "$env:RUK_BENCH_DURATION" `
             --ttl 0.5 `

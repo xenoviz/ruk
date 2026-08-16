@@ -15,6 +15,7 @@ import {
   observedGoPowerShellChildren,
   collectTargetResults,
   parseBenchmarkTargets,
+  shouldFailBenchmark,
 } from "../scripts/benchmark-runtime.js";
 import type { TargetBenchmark } from "../scripts/runtime-benchmark-schema.js";
 
@@ -173,6 +174,36 @@ test("Windows applicability requires Go PowerShell evidence while preserving RAM
   assert.equal(goOnly.ramTargetMet, false);
   assert.ok(goOnly.failureReasons.some((reason) => /RAM comparison unavailable/i.test(reason)));
   assert.equal(goOnly.failureReasons.some((reason) => /Windows PowerShell evidence unavailable/i.test(reason)), false);
+});
+
+test("single-target allowance suppresses only the missing RAM comparison", () => {
+  const node = targetBenchmark("node", [1]);
+  const nodeAssertions = makeAssertions([node], [1], [], false);
+  const nodeResult = { targets: [node], failures: [], assertions: nodeAssertions };
+  assert.equal(shouldFailBenchmark(["node"], nodeResult, false), true);
+  assert.equal(shouldFailBenchmark(["node"], nodeResult, true), false);
+
+  const go = targetBenchmark("go", [1]);
+  const goAssertions = makeAssertions([go], [1], [], true);
+  const goResult = { targets: [go], failures: [], assertions: goAssertions };
+  assert.equal(shouldFailBenchmark(["go"], goResult, true), false);
+  go.wrappers[0]!.peakWindowsPowerShellChildren = { minimum: 1, median: 1, maximum: 1 };
+  const powershellResult = { targets: [go], failures: [], assertions: makeAssertions([go], [1], [], true) };
+  assert.equal(shouldFailBenchmark(["go"], powershellResult, true), true);
+});
+
+test("single-target allowance never bypasses selected-target failures or the two-target RAM gate", () => {
+  const node = targetBenchmark("node", [1]);
+  const go = targetBenchmark("go", [1]);
+  const failedSingleTarget = {
+    targets: [node],
+    failures: [{ target: "node" as const, message: "benchmark failed" }],
+    assertions: makeAssertions([node], [1], [{ target: "node", message: "benchmark failed" }], false),
+  };
+  assert.equal(shouldFailBenchmark(["node"], failedSingleTarget, true), true);
+
+  const bothAssertions = makeAssertions([node, go], [1], [], false);
+  assert.equal(shouldFailBenchmark(["node", "go"], { targets: [node, go], failures: [], assertions: bothAssertions }, true), true);
 });
 
 test("target collection records a Node failure and continues with Go", async () => {
