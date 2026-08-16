@@ -47,30 +47,32 @@ number.
 
 ## Verified Cloud result
 
-[GitHub Actions run 31967732136](https://github.com/xenoviz/ruk/actions/runs/31967732136)
-measured commit `a5a2e17ad8abd1806b52a5271c02b1f450575f36` with Node
+[GitHub Actions run 31971535905](https://github.com/xenoviz/ruk/actions/runs/31971535905)
+measured commit `3acb480a97f4550e6625779f58fce0812ca47904` with Node
 24.14.0 and Go 1.24.6. Each cell below is the median of three 26-second
 samples. The raw Linux JSON is in
-`runtime-benchmark-Linux-a5a2e17ad8abd1806b52a5271c02b1f450575f36`
-(SHA-256 `9c03dc0597f90ead8950cf844daf9003c9359cf40a169e61cc0702b82fb066e1`).
+[`runtime-benchmark-Linux-3acb480a97f4550e6625779f58fce0812ca47904`](https://github.com/xenoviz/ruk/actions/runs/31971535905/artifacts/9270033046)
+(artifact ID `9270033046`, SHA-256
+`02f3a3aedd64f6e4ed1b9f9efb14d4442dcf0ad88f6016a2adc60c85a80475d6`).
 
 | Linux x64 target | Concurrency 1 | Concurrency 10 | Concurrency 20 |
 | --- | ---: | ---: | ---: |
-| Previous Node median peak RSS | 56.7 MiB | 636.3 MiB | 1,295.4 MiB |
-| Go median peak RSS | 10.1 MiB | 127.5 MiB | 257.8 MiB |
-| Go reduction | 82.2% | 80.0% | 80.1% |
+| Previous Node median peak RSS | 56.8 MiB | 636.5 MiB | 1,294.5 MiB |
+| Go median peak RSS | 10.4 MiB | 130.2 MiB | 261.6 MiB |
+| Go reduction | 81.7% | 79.5% | 79.8% |
 
 The Go runtime met the 50% Linux memory target at every concurrency level. Its
-median cold start was 3 ms, compared with 49 ms for Node. The Go executable was
-6.93 MiB; the previous bundled JavaScript entrypoint was 431.1 KiB and required
+median cold start was 2 ms, compared with 30 ms for Node. The Go executable was
+7.02 MiB; the previous bundled JavaScript entrypoint was 431.1 KiB and required
 the external Node runtime.
 
 The same run measured the Windows Go runtime independently. Its median peak RSS
-was 10.7 MiB, 129.5 MiB, and 278.1 MiB at concurrency 1, 10, and 20. Median cold
+was 10.7 MiB, 130.8 MiB, and 279.0 MiB at concurrency 1, 10, and 20. Median cold
 start was 21 ms, every selected workload completed, and the maximum observed
 PowerShell child count was zero. The raw Windows JSON is in
-`runtime-benchmark-Windows-a5a2e17ad8abd1806b52a5271c02b1f450575f36`
-(SHA-256 `9cf5289ad02a4dcfce742fd5ab486d38a13aa9824b9f9161bd455e0e7f255ed0`).
+[`runtime-benchmark-Windows-3acb480a97f4550e6625779f58fce0812ca47904`](https://github.com/xenoviz/ruk/actions/runs/31971535905/artifacts/9270004856)
+(artifact ID `9270004856`, SHA-256
+`d9a86ae8f7b9e6b2423fc1e81951fd1c86312a37e7f6802cce7e9b3b0708ea16`).
 
 The immutable Windows Node baseline remains diagnostic rather than part of the
 release gate. [Run 31963842218](https://github.com/xenoviz/ruk/actions/runs/31963842218)
@@ -80,7 +82,7 @@ that partial run. The release evidence is the complete Linux comparison plus
 the isolated Windows Go completion, RSS, and zero-PowerShell result.
 
 Exact-head product CI also passed all 17 jobs in
-[run 31967728727](https://github.com/xenoviz/ruk/actions/runs/31967728727).
+[run 31971518651](https://github.com/xenoviz/ruk/actions/runs/31971518651).
 
 Correctness, race safety, packaging, updater verification, and cross-platform
 process cleanup remain release gates even when a memory target passes.
