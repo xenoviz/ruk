@@ -103,8 +103,10 @@ workspaces fenced by collection, both in statistics and warm-pool counts.
 Named ports are cooperative host-local reservations. `--port app` returns an
 `app` field and makes `RUK_PORT_APP` available to `ruk run`, `exec`, and
 `shell`. The stable per-user registry is owner-only and fails closed on unsafe
-or corrupt state, regardless of per-process temporary-directory settings.
-Ruk does not hold the socket against unrelated processes.
+or corrupt state, regardless of per-process temporary-directory settings. The
+native runtime imports active Ruk 0.2 host reservations under the legacy lock,
+so upgrading cannot make an in-use port appear free. Ruk does not hold the
+socket against unrelated processes.
 Allocation probes dual-stack IPv6 when the host supports it and falls back to IPv4.
 
 Use `ruk gc --json` to preview collection. Apply only when requested with

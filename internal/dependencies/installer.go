@@ -323,6 +323,9 @@ func OSCommandRunner(ctx context.Context, request CommandRequest) (CommandResult
 	command := exec.CommandContext(ctx, request.Command, request.Args...)
 	command.Dir = request.Dir
 	command.Env = append([]string(nil), request.Env...)
+	if err := configureInstallerCommand(command); err != nil {
+		return CommandResult{}, err
+	}
 	if request.InheritStdio {
 		command.Stdin = request.Stdin
 		if command.Stdin == nil {

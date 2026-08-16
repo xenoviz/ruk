@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -143,23 +144,26 @@ func (activity StateActivity) Active(ctx context.Context, statePath, assignmentI
 // RegistryOptions configures a host registry. Root is intended for tests and
 // controlled integrations; leaving it empty selects DefaultRegistryRoot.
 type RegistryOptions struct {
-	Root     string
-	Locker   RegistryLocker
-	Files    RegistryFileSystem
-	Activity ActivityChecker
+	Root       string
+	LegacyRoot string
+	Locker     RegistryLocker
+	Files      RegistryFileSystem
+	Activity   ActivityChecker
 }
 
 // Registry serializes and commits host-port reservations below one stable root.
 type Registry struct {
-	root     string
-	locker   RegistryLocker
-	files    RegistryFileSystem
-	activity ActivityChecker
+	root       string
+	legacyRoot string
+	locker     RegistryLocker
+	files      RegistryFileSystem
+	activity   ActivityChecker
 }
 
 // NewRegistry constructs a registry with production-safe defaults.
 func NewRegistry(options RegistryOptions) (*Registry, error) {
 	root := options.Root
+	usingDefaultRoot := root == ""
 	if root == "" {
 		var err error
 		root, err = DefaultRegistryRoot()
@@ -183,7 +187,15 @@ func NewRegistry(options RegistryOptions) (*Registry, error) {
 	if activity == nil {
 		activity = StateActivity{Files: files}
 	}
-	return &Registry{root: root, locker: locker, files: files, activity: activity}, nil
+	legacyRoot := options.LegacyRoot
+	if legacyRoot == "" && usingDefaultRoot {
+		var err error
+		legacyRoot, err = DefaultLegacyRegistryRoot()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Registry{root: root, legacyRoot: legacyRoot, locker: locker, files: files, activity: activity}, nil
 }
 
 // DefaultRegistryRoot returns a stable per-user path, deliberately avoiding
@@ -202,6 +214,25 @@ func DefaultRegistryRoot() (string, error) {
 		return "", fmt.Errorf("resolve per-user registry root: %w", configErr)
 	}
 	return filepath.Join(config, "ruk", "host"), nil
+}
+
+// DefaultLegacyRegistryRoot is the Ruk 0.2 host-port registry location. It is
+// read and imported on first use of the Go registry, but is never rewritten or
+// removed. A separate lock keeps an older Ruk process from racing that read.
+func DefaultLegacyRegistryRoot() (string, error) {
+	if runtime.GOOS == "windows" {
+		home, err := os.UserHomeDir()
+		if err != nil || strings.TrimSpace(home) == "" {
+			if err == nil {
+				err = errors.New("home directory is empty")
+			}
+			return "", fmt.Errorf("resolve legacy port registry root: %w", err)
+		}
+		return filepath.Join(home, ".ruk-host"), nil
+	}
+	// Ruk 0.2 used this literal POSIX path rather than os.TempDir(), so do
+	// not let TMPDIR redirect migration away from the registry it created.
+	return filepath.Join("/tmp", fmt.Sprintf("ruk-host-%d", os.Getuid())), nil
 }
 
 // Root reports the configured durable root. It is useful to diagnostics and
@@ -318,38 +349,104 @@ func (registry *Registry) With(ctx context.Context, callback func(*ReservationTr
 	file := filepath.Join(registry.root, registryFileName)
 	lockPath := filepath.Join(registry.root, registryLockName)
 	return registry.locker.With(ctx, lockPath, func() error {
-		current, err := registry.read(file)
-		if err != nil {
-			return err
-		}
-		for portText, reservation := range current.Ports {
-			port, parseErr := strconv.ParseInt(portText, 10, 64)
-			if parseErr != nil {
-				return fmt.Errorf("invalid port registry key %q: %w", portText, parseErr)
+		return registry.withLegacyReservations(ctx, func(legacy hostPortRegistry) error {
+			current, err := registry.read(file)
+			if err != nil {
+				return err
 			}
-			active, activityErr := registry.activity.Active(ctx, reservation.StatePath, reservation.AssignmentID, port)
-			if activityErr != nil {
-				return activityErr
+			if err := registry.pruneInactive(ctx, current); err != nil {
+				return err
 			}
-			if !active {
-				delete(current.Ports, portText)
+			if err := registry.importLegacy(ctx, current, legacy); err != nil {
+				return err
 			}
-		}
-		reservations := make(map[int64]RegistryReservation, len(current.Ports))
-		for portText, reservation := range current.Ports {
-			port, _ := strconv.ParseInt(portText, 10, 64)
-			reservations[port] = reservation
-		}
-		transaction := &ReservationTransaction{registry: registry, file: file, reservations: reservations, active: true}
-		defer func() { transaction.active = false }()
-		if err := callback(transaction); err != nil {
-			return err
-		}
-		if transaction.committed {
-			return nil
-		}
-		return transaction.Commit()
+			reservations := make(map[int64]RegistryReservation, len(current.Ports))
+			for portText, reservation := range current.Ports {
+				port, parseErr := strconv.ParseInt(portText, 10, 64)
+				if parseErr != nil {
+					return fmt.Errorf("invalid port registry key %q: %w", portText, parseErr)
+				}
+				reservations[port] = reservation
+			}
+			transaction := &ReservationTransaction{registry: registry, file: file, reservations: reservations, active: true}
+			defer func() { transaction.active = false }()
+			if err := callback(transaction); err != nil {
+				return err
+			}
+			if transaction.committed {
+				return nil
+			}
+			return transaction.Commit()
+		})
 	})
+}
+
+func (registry *Registry) withLegacyReservations(ctx context.Context, callback func(hostPortRegistry) error) error {
+	if registry.legacyRoot == "" || sameRegistryPath(registry.root, registry.legacyRoot) {
+		return callback(hostPortRegistry{Version: registryVersion, Ports: map[string]RegistryReservation{}})
+	}
+	// The legacy directory is part of the lock protocol even when no 0.2
+	// registry exists yet. Creating it before acquiring ports.lock closes the
+	// race where an older Ruk process could create the directory and reserve a
+	// port after an absent-root check but before this transaction reads it.
+	if err := ensureRegistryRoot(registry.files, registry.legacyRoot); err != nil {
+		return fmt.Errorf("unsafe legacy Ruk host port directory %s: %w", registry.legacyRoot, err)
+	}
+	lockPath := filepath.Join(registry.legacyRoot, registryLockName)
+	return registry.locker.With(ctx, lockPath, func() error {
+		legacy, err := registry.read(filepath.Join(registry.legacyRoot, registryFileName))
+		if err != nil {
+			return fmt.Errorf("read legacy port registry: %w", err)
+		}
+		return callback(legacy)
+	})
+}
+
+func (registry *Registry) pruneInactive(ctx context.Context, current hostPortRegistry) error {
+	for portText, reservation := range current.Ports {
+		port, parseErr := strconv.ParseInt(portText, 10, 64)
+		if parseErr != nil {
+			return fmt.Errorf("invalid port registry key %q: %w", portText, parseErr)
+		}
+		active, activityErr := registry.activity.Active(ctx, reservation.StatePath, reservation.AssignmentID, port)
+		if activityErr != nil {
+			return activityErr
+		}
+		if !active {
+			delete(current.Ports, portText)
+		}
+	}
+	return nil
+}
+
+func (registry *Registry) importLegacy(ctx context.Context, current, legacy hostPortRegistry) error {
+	for portText, reservation := range legacy.Ports {
+		port, parseErr := strconv.ParseInt(portText, 10, 64)
+		if parseErr != nil {
+			return fmt.Errorf("invalid legacy port registry key %q: %w", portText, parseErr)
+		}
+		active, activityErr := registry.activity.Active(ctx, reservation.StatePath, reservation.AssignmentID, port)
+		if activityErr != nil {
+			return fmt.Errorf("validate legacy port %d ownership: %w", port, activityErr)
+		}
+		if !active {
+			continue
+		}
+		if existing, exists := current.Ports[portText]; exists && existing != reservation {
+			return fmt.Errorf("port %d has conflicting active legacy and Go owners", port)
+		}
+		current.Ports[portText] = reservation
+	}
+	return nil
+}
+
+func sameRegistryPath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 // WithReservations adapts the concrete durable registry transaction to the

@@ -372,6 +372,73 @@ func TestPackageUpdatePassesHumanAndMachineReadableCommandIO(t *testing.T) {
 	}
 }
 
+func TestCommandSpecForPlatformUsesCOMSPECForWindowsPackageShims(t *testing.T) {
+	tests := []struct {
+		name    string
+		goos    string
+		command string
+		args    []string
+		want    string
+		wrapped bool
+	}{
+		{
+			name:    "npm bare shim",
+			goos:    "windows",
+			command: "npm",
+			args:    []string{"install", "--global", "@xenoviz/ruk@0.3.0"},
+			want:    `call "npm" "install" "--global" "@xenoviz/ruk@0.3.0"`,
+			wrapped: true,
+		},
+		{
+			name:    "explicit batch path",
+			goos:    "windows",
+			command: `C:\Program Files\nodejs\npm.cmd`,
+			args:    []string{"install"},
+			want:    `call "C:\Program Files\nodejs\npm.cmd" "install"`,
+			wrapped: true,
+		},
+		{
+			name:    "native executable stays direct",
+			goos:    "windows",
+			command: "bun",
+			args:    []string{"add", "--global", "@xenoviz/ruk@0.3.0"},
+			want:    "add --global @xenoviz/ruk@0.3.0",
+		},
+		{
+			name:    "non Windows stays direct",
+			goos:    "linux",
+			command: "npm.cmd",
+			args:    []string{"install"},
+			want:    "install",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			spec, err := commandSpecForPlatform(test.goos, `C:\Windows\System32\cmd.exe`, test.command, test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wrapped {
+				if spec.command != `C:\Windows\System32\cmd.exe` || len(spec.args) != 5 || spec.args[0] != `C:\Windows\System32\cmd.exe` || spec.args[1] != "/d" || spec.args[2] != "/s" || spec.args[3] != "/c" || spec.args[4] != test.want || spec.cmdLine == "" {
+					t.Fatalf("wrapped command = %#v", spec)
+				}
+				return
+			}
+			if spec.command != test.command || strings.Join(spec.args, " ") != test.want || spec.cmdLine != "" {
+				t.Fatalf("direct command = %#v", spec)
+			}
+		})
+	}
+}
+
+func TestCommandSpecForPlatformRejectsWindowsShellExpansion(t *testing.T) {
+	for _, value := range []string{"%PATH%", `quoted"value`, "line\nvalue", "bang!"} {
+		if _, err := commandSpecForPlatform("windows", "cmd.exe", "npm", []string{value}); err == nil {
+			t.Fatalf("unsafe token %q was accepted", value)
+		}
+	}
+}
+
 func TestBunInstallerCommandTrustsNativePostinstall(t *testing.T) {
 	command, args, err := InstallerCommand(InstallerBun, "0.3.0")
 	if err != nil {

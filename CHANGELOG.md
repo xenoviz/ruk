@@ -44,6 +44,8 @@ versioning.
 - Preserve current-workspace `exec` routing, fence explicit workspace creation,
   parse newline-containing worktree paths safely, stream human package updates,
   preserve POSIX rollback modes, and defer locked Windows package replacement.
+- Route Windows package-manager shims through `COMSPEC` without PowerShell and
+  import active Ruk 0.2 host-port reservations before allocating new ports.
 
 ## 0.1.2 - 2026-08-08
 

@@ -96,8 +96,9 @@ system action instead of accumulating in the CLI.
 - Machine-readable output contains one JSON value on stdout; diagnostics go to
   stderr, while suppressed installer streams are discarded rather than buffered.
 - Named ports are serialized through a stable per-user host registry and unique
-  among active recorded assignments. They are cooperative reservations, not
-  held sockets.
+  among active recorded assignments. Active Ruk 0.2 reservations are imported
+  under their legacy host lock during migration. They are cooperative
+  reservations, not held sockets.
 - Metrics are bounded counters; ordinary commands never append an event log or
   scan workspace disk usage.
 - Only observed Ruk operations renew leases. Ruk does not infer activity from
