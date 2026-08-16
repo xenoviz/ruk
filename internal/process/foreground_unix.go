@@ -29,6 +29,7 @@ type foregroundTerminal struct {
 // one controlling terminal concurrently.
 var foregroundLifetimeMu sync.Mutex
 var foregroundRestoreMu sync.Mutex
+var errNotControllingTerminal = errors.New("not a controlling terminal")
 
 func foregroundTerminalFor(stdin io.Reader, requested bool) (*foregroundTerminal, error) {
 	if !requested {
@@ -41,7 +42,7 @@ func foregroundTerminalFor(stdin io.Reader, requested bool) (*foregroundTerminal
 	foregroundLifetimeMu.Lock()
 	fd := int(file.Fd())
 	previous, err := terminalForegroundGroup(fd)
-	if errors.Is(err, syscall.ENOTTY) {
+	if errors.Is(err, syscall.ENOTTY) || errors.Is(err, errNotControllingTerminal) {
 		foregroundLifetimeMu.Unlock()
 		return nil, nil
 	}
@@ -75,7 +76,11 @@ func terminalForegroundGroup(fd int) (int32, error) {
 		return 0, errno
 	}
 	if group <= 0 {
-		return 0, errors.New("terminal foreground process group is invalid")
+		// Some pipe implementations report a successful ioctl with an empty
+		// process group instead of ENOTTY. Treat that the same as any other
+		// non-terminal stdin so --foreground-terminal remains harmless for
+		// redirected and piped input.
+		return 0, errNotControllingTerminal
 	}
 	return group, nil
 }

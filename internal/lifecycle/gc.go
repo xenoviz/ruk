@@ -114,9 +114,14 @@ func gcCandidate(workspace state.WorkspaceRecord, cutoff, now time.Time, include
 				return makeGCCandidate(workspace, GcAbandonedAcquisition, false), true, nil
 			}
 		case state.LifecycleAvailable, state.LifecycleFailed:
-			if !updatedAt.After(cutoff) {
-				return makeGCCandidate(workspace, GcInterruptedCollection, false), true, nil
-			}
+			// An operation fence on an available or failed workspace means a
+			// collection was already started. It must remain retryable even
+			// when BeginWorkspaceCollection refreshed UpdatedAt immediately
+			// before an external Git/tree-state step failed. The operation ID,
+			// update fence, and per-workspace lock still revalidate the retry;
+			// the age cutoff only determines whether abandoned preparation or
+			// acquisition work should be recovered.
+			return makeGCCandidate(workspace, GcInterruptedCollection, false), true, nil
 		}
 	}
 

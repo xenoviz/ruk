@@ -210,6 +210,7 @@ func TestAcquireResolvesStartPointForFreshAndReusedWorktrees(t *testing.T) {
 			var requested string
 			var fetched bool
 			adapters, err := NewMutationAdapters(MutationAdapterOptions{
+				Now:   func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) },
 				NewID: func() string { return "00000000-0000-4000-8000-000000000002" },
 				StartPointResolver: func(_ context.Context, _ git.Repository, value string, fetch bool) (string, error) {
 					requested, fetched = value, fetch
@@ -401,6 +402,7 @@ func TestAssignmentProjectionsReturnsAnOwnedCopy(t *testing.T) {
 	snapshot := &state.State{
 		Trees: map[string]state.TreeRecord{key: {Path: path, ProjectionFingerprint: projectionFingerprint, Projections: []string{"node_modules"}}},
 		Workspaces: map[string]state.WorkspaceRecord{key: {
+			Path:       path,
 			Assignment: &state.AssignmentRecord{ID: "assignment-1"},
 		}},
 	}

@@ -384,8 +384,15 @@ func TestRunnerPersistsUnverifiedDetachedSentinelBeforeUnsafeCleanup(t *testing.
 			return nil
 		},
 	})
-	if err == nil || sentinel.StartedAt != processpkg.UnverifiedIdentityMarker || sentinel.PID != 91 || sentinel.GroupID == nil || *sentinel.GroupID != 91 {
+	if err == nil || sentinel.StartedAt != processpkg.UnverifiedIdentityMarker || sentinel.PID != 91 {
 		t.Fatalf("Run error = %v; sentinel = %#v", err, sentinel)
+	}
+	if runtime.GOOS == "windows" {
+		if sentinel.GroupID != nil {
+			t.Fatalf("Windows detached sentinel group = %v, want nil because detached processes use a job boundary", *sentinel.GroupID)
+		}
+	} else if sentinel.GroupID == nil || *sentinel.GroupID != 91 {
+		t.Fatalf("POSIX detached sentinel group = %v, want 91", sentinel.GroupID)
 	}
 	if !reflect.DeepEqual(sentinel.Command, []string{"tool", "--flag"}) {
 		t.Fatalf("sentinel command = %#v", sentinel.Command)

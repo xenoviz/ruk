@@ -7,7 +7,7 @@ import (
 
 func TestResolveRuntimeIdentityUsesStandardRuntimeProbe(t *testing.T) {
 	var requests []CommandRequest
-	identity, err := ResolveRuntimeIdentity(context.Background(), t.TempDir(), PackageManager{Name: "npm", Version: "11.0.0"}, func(_ context.Context, request CommandRequest) (CommandResult, error) {
+	identity, err := ResolveRuntimeIdentity(context.Background(), t.TempDir(), PackageManager{Name: "npm", Version: "11.0.0", Command: []string{"npm", "install"}}, func(_ context.Context, request CommandRequest) (CommandResult, error) {
 		requests = append(requests, request)
 		if request.Command == "node" && len(request.Args) == 1 && request.Args[0] == "--version" {
 			return CommandResult{Stdout: "22.0.0\n"}, nil
