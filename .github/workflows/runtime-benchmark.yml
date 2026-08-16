@@ -26,7 +26,7 @@ on:
         description: Wrapper duration in milliseconds
         required: true
         type: string
-        default: '18000'
+        default: '26000'
       concurrency:
         description: Wrapper concurrency levels (comma-separated)
         required: true

@@ -10,8 +10,11 @@ Run the benchmark in Codex Cloud or on the GitHub Actions runners used for
 release validation. Repeat each target at concurrency 1, 10, and 20, and record
 the operating system, architecture, compiler/runtime versions, sample count,
 cold-start latency, binary size, idle RSS, peak RSS, child-process count, and
-PowerShell count on Windows. Use the same repository fixture, command, and
-duration for every target.
+PowerShell count on Windows. Use equivalent clean repository fixtures,
+commands, and durations for every target. All wrappers and samples for one
+target intentionally share that target's repository so the benchmark still
+measures coordination and state contention without allowing a failed baseline
+cleanup to corrupt the other runtime's evidence.
 
 The comparison target is the last TypeScript/Node release artifact. The release
 target is the Go binary used by the standalone and npm platform packages. The
@@ -37,6 +40,9 @@ sample unless every wrapper is ready with at least half of the configured
 duration left for concurrent measurement. This keeps the shared repository and
 steady-state contention while avoiding an artificial synchronized startup
 burst in the historical state implementation.
+The default 26-second command window leaves the required half-duration overlap
+at concurrency 20 on Windows without weakening the 250 ms readiness settling
+period.
 Measurements are machine-specific, so attach the raw JSON and runner details to
 the migration pull request rather than treating one local sample as a universal
 number.

@@ -165,7 +165,7 @@ function parseArguments(args: readonly string[], root: string): ParsedArguments 
   }
   const targets = parseBenchmarkTargets(targetArgument ?? "node,go");
   const samples = Number(value("--samples") ?? 3);
-  const durationMs = Number(value("--duration") ?? 12_000);
+  const durationMs = Number(value("--duration") ?? 26_000);
   const ttlMinutes = Number(value("--ttl") ?? 0.5);
   const concurrencyLevels = (value("--concurrency") ?? "1,10,20").split(",").map(Number);
   const assertTarget = !args.includes("--no-assert");

@@ -12,6 +12,8 @@ versioning.
   ARM64, with glibc and musl Linux x64 variants.
 - Replace state atomically on Windows with bounded retries for transient file
   sharing, access, and lock violations.
+- Drain native Windows Job Object descendants by querying their active-process
+  count, avoiding wrappers that wait forever after a managed command exits.
 - Automatically renew assignments during managed commands and dependency sync,
   using concurrent fenced keepers and observable activity timestamps.
 - Guard task commands in a shared primary checkout by default, with repository
