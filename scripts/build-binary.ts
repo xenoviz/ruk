@@ -9,9 +9,12 @@ const version = process.env["RUK_VERSION"] ?? await readPackageVersion(root);
 const distribution = process.env["RUK_DISTRIBUTION"] ?? "standalone";
 const targetName = process.env["RUK_BINARY_TARGET"];
 
+type GoOS = "linux" | "darwin" | "windows";
+type GoArch = "amd64" | "arm64";
+
 type GoTarget = {
-  readonly goos: string;
-  readonly goarch: string;
+  readonly goos: GoOS;
+  readonly goarch: GoArch;
   readonly windows: boolean;
 };
 
@@ -52,13 +55,13 @@ const args = [
   output,
   "./cmd/ruk",
 ];
-const environment = { ...process.env, CGO_ENABLED: "0" };
+const environment: NodeJS.ProcessEnv = { ...process.env, CGO_ENABLED: "0" };
 if (target !== undefined) {
-  environment.GOOS = target.goos;
-  environment.GOARCH = target.goarch;
+  environment["GOOS"] = target.goos;
+  environment["GOARCH"] = target.goarch;
 } else {
-  delete environment.GOOS;
-  delete environment.GOARCH;
+  delete environment["GOOS"];
+  delete environment["GOARCH"];
 }
 
 await run("go", args, { cwd: root, env: environment, stdio: "inherit" });

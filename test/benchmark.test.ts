@@ -91,7 +91,7 @@ test("runtime benchmark preserves target failure metadata", () => {
   };
   const result = runtimeBenchmarkResult({
     generatedAt: "2026-08-14T00:00:00Z",
-    platform: "windows",
+    platform: "win32",
     architecture: "x64",
     sampleCount: 3,
     wrapperDurationMs: 12_000,

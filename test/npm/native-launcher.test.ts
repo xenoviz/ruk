@@ -88,7 +88,7 @@ test("package template keeps the exact command, marker, and optional package set
     optionalDependencies: Record<string, string>;
     ruk: { distribution: string; binaryPath: string };
   };
-  assert.equal(manifest.bin.ruk, "bin/ruk");
+  assert.equal(manifest.bin["ruk"], "bin/ruk");
   assert.deepEqual(Object.keys(manifest.optionalDependencies).sort(), [
     "@xenoviz/ruk-darwin-arm64",
     "@xenoviz/ruk-darwin-x64",

@@ -41,11 +41,11 @@ test("golden schema validates canonical streams, states, and ordered manifests",
 });
 
 test("golden schema rejects unknown fields and non-canonical stream JSON", () => {
-  const unknown = structuredClone(golden()) as Record<string, unknown>;
-  unknown.extra = true;
+  const unknown = structuredClone(golden()) as unknown as Record<string, unknown>;
+  unknown["extra"] = true;
   assert.throws(() => validateGolden(unknown, { expectedScenarioCount: 1 }), /unknown field extra/);
 
-  const invalidStream = structuredClone(golden()) as Record<string, unknown>;
+  const invalidStream = structuredClone(golden()) as unknown as Record<string, unknown>;
   const scenarios = invalidStream["scenarios"] as Array<Record<string, unknown>>;
   const steps = scenarios[0]!["steps"] as Array<Record<string, unknown>>;
   steps[0]!["stdout"] = { kind: "json", value: '{"b":1,"a":2}' };

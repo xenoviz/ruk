@@ -1,7 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
   runtimeBenchmarkResult,
@@ -84,6 +85,7 @@ interface WrapperResult {
 const MANAGED_CHILD_READINESS_TIMEOUT_MS = 5_000;
 const MANAGED_CHILD_SETTLE_MS = 250;
 const MANAGED_CHILD_POLL_MS = 25;
+type BenchmarkChildProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 export function normalizeExecutableName(command: string): string {
   const basename = command.toLowerCase().replaceAll("\\", "/").split("/").at(-1) ?? "";
@@ -264,7 +266,7 @@ async function waitForWrapperCompletion(completion: Promise<WrapperResult[]>, ti
 }
 
 async function stopWrapperRoots(
-  children: readonly ChildProcessWithoutNullStreams[],
+  children: readonly BenchmarkChildProcess[],
   completion: Promise<WrapperResult[]>,
 ): Promise<void> {
   for (const child of children) {
@@ -287,7 +289,7 @@ async function measureWrappers(
   legacyBaseline: boolean,
 ): Promise<Measurement> {
   const started = performance.now();
-  const children: ChildProcessWithoutNullStreams[] = [];
+  const children: BenchmarkChildProcess[] = [];
   const completions: Array<Promise<WrapperResult>> = [];
   let completion: Promise<WrapperResult[]> | undefined;
   let firstWrapperNominalEnd = Number.POSITIVE_INFINITY;
