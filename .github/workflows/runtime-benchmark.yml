@@ -2,6 +2,36 @@ name: Runtime benchmark
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Runner platform(s) to benchmark
+        required: true
+        type: choice
+        options:
+          - both
+          - linux
+          - windows
+        default: both
+      targets:
+        description: Runtime targets (comma-separated)
+        required: true
+        type: string
+        default: node,go
+      samples:
+        description: Samples per target/concurrency cell
+        required: true
+        type: string
+        default: '3'
+      duration:
+        description: Wrapper duration in milliseconds
+        required: true
+        type: string
+        default: '18000'
+      concurrency:
+        description: Wrapper concurrency levels (comma-separated)
+        required: true
+        type: string
+        default: 1,10,20
 
 permissions:
   contents: read
@@ -14,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: ${{ fromJSON(inputs.platform == 'both' && '["ubuntu-latest","windows-latest"]' || inputs.platform == 'linux' && '["ubuntu-latest"]' || '["windows-latest"]') }}
     env:
       LEGACY_COMMIT: 86e3ac6f5883719d14522e14a14dc0520e74040d
     steps:
@@ -39,7 +69,7 @@ jobs:
       - name: Install benchmark tooling
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Build previous Node oracle (POSIX)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && contains(inputs.targets, 'node')
         shell: bash
         run: |
           git worktree add --detach "$RUNNER_TEMP/ruk-node-oracle" "$LEGACY_COMMIT"
@@ -47,7 +77,7 @@ jobs:
           bun install --frozen-lockfile --ignore-scripts
           bun run build
       - name: Build previous Node oracle (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && contains(inputs.targets, 'node')
         shell: pwsh
         run: |
           git worktree add --detach "$env:RUNNER_TEMP\ruk-node-oracle" "$env:LEGACY_COMMIT"
@@ -67,28 +97,38 @@ jobs:
         shell: bash
         env:
           RUK_BENCH_NODE: node
+          RUK_BENCH_TARGETS: ${{ inputs.targets }}
+          RUK_BENCH_SAMPLES: ${{ inputs.samples }}
+          RUK_BENCH_DURATION: ${{ inputs.duration }}
+          RUK_BENCH_CONCURRENCY: ${{ inputs.concurrency }}
         run: |
           node artifacts/benchmark-runtime.mjs \
             --node "$RUNNER_TEMP/ruk-node-oracle/dist/bin/ruk.js" \
             --binary artifacts/ruk \
-            --samples 3 \
-            --duration 18000 \
+            --targets "$RUK_BENCH_TARGETS" \
+            --samples "$RUK_BENCH_SAMPLES" \
+            --duration "$RUK_BENCH_DURATION" \
             --ttl 0.5 \
-            --concurrency 1,10,20 \
+            --concurrency "$RUK_BENCH_CONCURRENCY" \
             > artifacts/runtime-benchmark.json
       - name: Measure runtimes (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           RUK_BENCH_NODE: node
+          RUK_BENCH_TARGETS: ${{ inputs.targets }}
+          RUK_BENCH_SAMPLES: ${{ inputs.samples }}
+          RUK_BENCH_DURATION: ${{ inputs.duration }}
+          RUK_BENCH_CONCURRENCY: ${{ inputs.concurrency }}
         run: |
           node artifacts/benchmark-runtime.mjs `
             --node "$env:RUNNER_TEMP\ruk-node-oracle\dist\bin\ruk.js" `
             --binary artifacts\ruk.exe `
-            --samples 3 `
-            --duration 18000 `
+            --targets "$env:RUK_BENCH_TARGETS" `
+            --samples "$env:RUK_BENCH_SAMPLES" `
+            --duration "$env:RUK_BENCH_DURATION" `
             --ttl 0.5 `
-            --concurrency 1,10,20 `
+            --concurrency "$env:RUK_BENCH_CONCURRENCY" `
             | Set-Content -Encoding utf8 artifacts\runtime-benchmark.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload raw benchmark evidence

@@ -14,10 +14,19 @@ import {
   nominalWrapperEndFromReadiness,
   observedGoPowerShellChildren,
   collectTargetResults,
+  parseBenchmarkTargets,
 } from "../scripts/benchmark-runtime.js";
 import type { TargetBenchmark } from "../scripts/runtime-benchmark-schema.js";
 
 const zeroSummary = { minimum: 0, median: 0, maximum: 0 };
+
+test("benchmark target selection defaults and validates unique targets", () => {
+  assert.deepEqual(parseBenchmarkTargets("node,go"), ["node", "go"]);
+  assert.deepEqual(parseBenchmarkTargets(" go "), ["go"]);
+  assert.throws(() => parseBenchmarkTargets("node,node"), /duplicate target node/);
+  assert.throws(() => parseBenchmarkTargets("node,python"), /unsupported target/);
+  assert.throws(() => parseBenchmarkTargets("node,"), /comma-separated list/);
+});
 
 function targetBenchmark(name: TargetBenchmark["name"], concurrencyLevels: readonly number[]): TargetBenchmark {
   return {

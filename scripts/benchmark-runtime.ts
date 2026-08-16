@@ -52,6 +52,7 @@ interface Workload {
 interface ParsedArguments {
   nodeCli: string;
   binary: string;
+  targets: TargetName[];
   samples: number;
   durationMs: number;
   ttlMinutes: number;
@@ -133,6 +134,24 @@ async function fileSize(target: string): Promise<number> {
   return sizes.reduce((total, size) => total + size, 0);
 }
 
+export function parseBenchmarkTargets(value: string): TargetName[] {
+  const values = value.split(",").map((target) => target.trim());
+  if (values.length === 0 || values.some((target) => target.length === 0)) {
+    throw new Error("--targets must be a comma-separated list containing node and/or go");
+  }
+  const targets: TargetName[] = [];
+  for (const target of values) {
+    if (target !== "node" && target !== "go") {
+      throw new Error(`--targets contains unsupported target ${JSON.stringify(target)}; expected node or go`);
+    }
+    if (targets.includes(target)) {
+      throw new Error(`--targets contains duplicate target ${target}`);
+    }
+    targets.push(target);
+  }
+  return targets;
+}
+
 function parseArguments(args: readonly string[], root: string): ParsedArguments {
   const value = (name: string): string | undefined => {
     const index = args.indexOf(name);
@@ -140,6 +159,11 @@ function parseArguments(args: readonly string[], root: string): ParsedArguments 
   };
   const nodeCli = path.resolve(value("--node") ?? path.join(root, "dist", "bin", "ruk.js"));
   const binary = path.resolve(value("--binary") ?? path.join(root, "artifacts", process.platform === "win32" ? "ruk.exe" : "ruk"));
+  const targetArgument = value("--targets");
+  if (args.includes("--targets") && targetArgument === undefined) {
+    throw new Error("--targets requires a comma-separated value containing node and/or go");
+  }
+  const targets = parseBenchmarkTargets(targetArgument ?? "node,go");
   const samples = Number(value("--samples") ?? 3);
   const durationMs = Number(value("--duration") ?? 12_000);
   const ttlMinutes = Number(value("--ttl") ?? 0.5);
@@ -159,12 +183,13 @@ function parseArguments(args: readonly string[], root: string): ParsedArguments 
   if (concurrencyLevels.length === 0 || concurrencyLevels.some((level) => !Number.isSafeInteger(level) || level < 1)) {
     throw new Error("--concurrency must be a comma-separated list of positive integers");
   }
-  return { nodeCli, binary, samples, durationMs, ttlMinutes, concurrencyLevels, assertTarget };
+  return { nodeCli, binary, targets, samples, durationMs, ttlMinutes, concurrencyLevels, assertTarget };
 }
 
-async function makeRepository(root: string, node: Target, nodeExecutable: string): Promise<string> {
-  const repository = path.join(root, "repository");
-  const installer = path.join(root, "install.mjs");
+async function makeRepository(root: string, target: Target, nodeExecutable: string): Promise<string> {
+  const fixtureRoot = path.join(root, `fixture-${target.name}`);
+  const repository = path.join(fixtureRoot, "repository");
+  const installer = path.join(fixtureRoot, "install.mjs");
   await fs.mkdir(repository, { recursive: true });
   await fs.writeFile(installer, 'import fs from "node:fs/promises"; await fs.mkdir("node_modules", { recursive: true });\n');
   await fs.writeFile(path.join(repository, "package.json"), '{"name":"ruk-runtime-benchmark"}\n');
@@ -182,7 +207,7 @@ async function makeRepository(root: string, node: Target, nodeExecutable: string
   ]) {
     await requireSuccess({ command: "git", args, cwd: repository });
   }
-  await requireSuccess({ command: node.command, args: [...node.prefix, "init"], cwd: repository });
+  await requireSuccess({ command: target.command, args: [...target.prefix, "init"], cwd: repository });
   return repository;
 }
 
@@ -660,7 +685,8 @@ export function makeAssertions(
 export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchmarkResult> {
   const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
   const parsed = parseArguments(args, root);
-  await Promise.all([fs.access(parsed.nodeCli), fs.access(parsed.binary)]).catch(() => {
+  const requiredInputs = parsed.targets.map((target) => target === "node" ? parsed.nodeCli : parsed.binary);
+  await Promise.all(requiredInputs.map((input) => fs.access(input))).catch(() => {
     throw new Error("Build the TypeScript/Node oracle and production Go binary before benchmarking");
   });
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-runtime-benchmark-"));
@@ -668,22 +694,28 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
     const inspectorPath = path.join(temporary, process.platform === "win32" ? "process-inspector.exe" : "process-inspector");
     await compileInspector(root, inspectorPath);
     const nodeExecutable = process.env["RUK_BENCH_NODE"] ?? "node";
-    const nodeVersion = await requireSuccess({ command: nodeExecutable, args: ["--version"], cwd: root });
-    const node: Target = {
-      name: "node", version: nodeVersion, sizePath: path.dirname(path.dirname(parsed.nodeCli)), command: nodeExecutable,
-      prefix: [parsed.nodeCli], childCommand: nodeExecutable, cwd: root,
-    };
-    const repository = await makeRepository(temporary, node, nodeExecutable);
-    const goVersion = await requireSuccess({ command: parsed.binary, args: ["--version"], cwd: root });
-    const go: Target = {
-      name: "go", version: goVersion, sizePath: parsed.binary, command: parsed.binary,
-      prefix: [], childCommand: nodeExecutable, cwd: root,
-    };
+    const targetByName = new Map<TargetName, Target>();
+    if (parsed.targets.includes("node")) {
+      const nodeVersion = await requireSuccess({ command: nodeExecutable, args: ["--version"], cwd: root });
+      targetByName.set("node", {
+        name: "node", version: nodeVersion, sizePath: path.dirname(path.dirname(parsed.nodeCli)), command: nodeExecutable,
+        prefix: [parsed.nodeCli], childCommand: nodeExecutable, cwd: root,
+      });
+    }
+    if (parsed.targets.includes("go")) {
+      const goVersion = await requireSuccess({ command: parsed.binary, args: ["--version"], cwd: root });
+      targetByName.set("go", {
+        name: "go", version: goVersion, sizePath: parsed.binary, command: parsed.binary,
+        prefix: [], childCommand: nodeExecutable, cwd: root,
+      });
+    }
     const inspector = { command: inspectorPath, args: [], cwd: root };
-    const targetByName = new Map<TargetName, Target>([[node.name, node], [go.name, go]]);
-    const { targets, failures } = await collectTargetResults([node.name, go.name], async (name) => {
+    const { targets, failures } = await collectTargetResults(parsed.targets, async (name) => {
       const target = targetByName.get(name);
       if (!target) throw new Error(`benchmark target ${name} is not configured`);
+      // Keep one clean fixture per runtime target. Every wrapper and sample for
+      // that target intentionally shares this repository to preserve contention.
+      const repository = await makeRepository(temporary, target, nodeExecutable);
       return benchmarkTarget(target, repository, inspector, parsed.samples, parsed.durationMs, parsed.ttlMinutes, parsed.concurrencyLevels);
     });
     const result = runtimeBenchmarkResult({
