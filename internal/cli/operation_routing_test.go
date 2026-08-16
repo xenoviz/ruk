@@ -160,7 +160,10 @@ func TestApplicationRoutesBranchlessExecThroughCurrentWorkspaceRun(t *testing.T)
 	application, discoveries := routingApplication(nil, func(options *cli.Options) {
 		options.Now = func() time.Time { return now }
 		options.CWD = root
-		options.DiscoverRepository = func(context.Context, string) (git.Repository, error) { return repository, nil }
+		options.DiscoverRepository = func(context.Context, string) (git.Repository, error) {
+			*discoveries = *discoveries + 1
+			return repository, nil
+		}
 		options.Run = func(_ context.Context, input cli.RunRouteInput) (int, error) {
 			received = input
 			return 23, nil

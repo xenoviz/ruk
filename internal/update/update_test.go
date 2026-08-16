@@ -141,7 +141,7 @@ func TestPrereleasePackageUpdateDelegatesExactVersion(t *testing.T) {
 			return CommandResult{}, nil
 		},
 	})
-	result, err := updater.Update(context.Background(), Options{Distribution: DistributionPackage, CurrentVersion: "0.2.0", AllowPrerelease: true})
+	result, err := updater.Update(context.Background(), Options{Distribution: DistributionPackage, CurrentVersion: "0.2.0", AllowPrerelease: true, Platform: Platform{OS: "linux"}})
 	if err != nil {
 		t.Fatal(err)
 	}
