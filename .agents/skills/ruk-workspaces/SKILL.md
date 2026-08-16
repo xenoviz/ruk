@@ -42,9 +42,11 @@ immediately before they are signaled; PID reuse or an unreadable identity for a
 still-live process retains the assignment instead of killing or overlooking it.
 The workspace tree lock remains held until process registration succeeds or
 failed-registration cleanup settles, so release cannot race that handoff.
-If synchronization during a reused acquisition cannot verify an aborted
-installer tree, parse the retryable `RESOURCE_BUSY` error for its exact
+If a reused acquisition fails after ownership is published, parse its exact
 `assignmentId`, `path`, `expiresAt`, and `recovery`; Ruk keeps that slot assigned.
+The original machine-readable category is preserved for dependency and port
+failures, while otherwise unclassified retained failures use retryable
+`RESOURCE_BUSY`.
 The reported expiry is reloaded from retained state after keeper cleanup, so it
 includes any heartbeat renewal completed during the failed acquisition.
 The retained transition clears the incomplete handoff marker, so the returned

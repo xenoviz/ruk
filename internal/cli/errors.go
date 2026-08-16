@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/xenoviz/ruk/internal/dependencies"
+	"github.com/xenoviz/ruk/internal/lifecycle"
 	"github.com/xenoviz/ruk/internal/lock"
 	processpkg "github.com/xenoviz/ruk/internal/process"
 )
@@ -175,7 +176,36 @@ func ContainsProcessSafetyError(err error) bool {
 
 // ClassifyError maps an error to the stable public failure record.
 func ClassifyError(err error) ErrorRecord {
+	return classifyError(err, true)
+}
+
+// classifyError keeps lifecycle recovery metadata separate from the ordinary
+// category walk. A retained acquisition can still have a stable dependency
+// or port cause; inspecting that cause without re-entering the lifecycle
+// wrapper avoids turning every retained failure into RESOURCE_BUSY.
+func classifyError(err error, inspectLifecycle bool) ErrorRecord {
 	record := ErrorRecord{Status: "error", Code: OperationFailedCode, Message: errorDetail(err)}
+
+	var lifecycleRetained *lifecycle.RetainedAssignmentError
+	if inspectLifecycle && errors.As(err, &lifecycleRetained) && lifecycleRetained != nil {
+		causeRecord := classifyError(lifecycleRetained.Cause, false)
+		if causeRecord.Code == OperationFailedCode && !causeRecord.Retryable {
+			// With no stable underlying category, the fenced recovery state is
+			// itself the actionable resource-busy condition.
+			causeRecord.Code = ResourceBusyCode
+			causeRecord.Retryable = true
+		}
+		record.Code = causeRecord.Code
+		record.Retryable = causeRecord.Retryable
+		record.AssignmentID = lifecycleRetained.AssignmentID
+		record.Path = lifecycleRetained.Path
+		record.ExpiresAt = lifecycleRetained.ExpiresAt
+		record.Recovery = lifecycleRetained.Recovery
+		if record.Recovery == "" && record.AssignmentID != "" {
+			record.Recovery = "ruk release " + record.AssignmentID
+		}
+		return record
+	}
 
 	var retained *RetainedAssignmentError
 	if errors.As(err, &retained) && retained != nil {

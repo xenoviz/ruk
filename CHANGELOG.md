@@ -46,6 +46,10 @@ versioning.
   preserve POSIX rollback modes, and defer locked Windows package replacement.
 - Route Windows package-manager shims through `COMSPEC` without PowerShell and
   import active Ruk 0.2 host-port reservations before allocating new ports.
+- Rescan dependency inputs after installation, reserve dual-stack ports across
+  both address families, recycle shell acquisitions that fail before spawning,
+  and return exact retained-acquisition recovery metadata without changing the
+  underlying machine-readable failure category.
 
 ## 0.1.2 - 2026-08-08
 

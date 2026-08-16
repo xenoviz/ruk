@@ -121,7 +121,11 @@ type ListenFunc func(BindRequest) (BoundListener, error)
 // IPv6Unavailable reports errors for which probing should use IPv4. The
 // exported function lets platform adapters extend the sentinel behavior.
 func IPv6Unavailable(err error) bool {
-	return errors.Is(err, ErrIPv6Unavailable) || errors.Is(err, syscall.EAFNOSUPPORT) || errors.Is(err, syscall.EADDRNOTAVAIL)
+	return errors.Is(err, ErrIPv6Unavailable) ||
+		errors.Is(err, syscall.EAFNOSUPPORT) ||
+		errors.Is(err, syscall.EADDRNOTAVAIL) ||
+		errors.Is(err, syscall.ENOPROTOOPT) ||
+		errors.Is(err, syscall.EOPNOTSUPP)
 }
 
 // AvailabilityProbe finds a host-local ephemeral port while leaving no socket

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -98,6 +100,89 @@ func TestSyncCommandInjectsRuntimeAndMachineReadableInstallerPolicy(t *testing.T
 	}
 	if gotRuntime.Version != "22.0.0" || gotRuntime.NativeABI != "127" || !gotMachineReadable {
 		t.Fatalf("runtime/machine-readable input = %#v/%v", gotRuntime, gotMachineReadable)
+	}
+}
+
+func TestSyncCommandRescansRepositoryInputsAfterInstall(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"fixture"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	command := syncTestCommand(dependencies.EnsureResult{}, nil, nil)
+	command.ResolveRuntime = func(context.Context, string, dependencies.PackageManager) (dependencies.RuntimeIdentity, error) {
+		return dependencies.RuntimeIdentity{Runtime: "node", Version: "22.0.0", NativeABI: "127"}, nil
+	}
+	command.ListFiles = func(_ context.Context, repositoryRoot string) ([]string, error) {
+		files := []string{"package.json"}
+		if _, err := os.Stat(filepath.Join(repositoryRoot, "pnpm-lock.yaml")); err == nil {
+			files = append(files, "pnpm-lock.yaml")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		return files, nil
+	}
+	command.Ensure = func(ctx context.Context, input dependencies.EnsureInput) (dependencies.EnsureResult, error) {
+		before, err := dependencies.DependencyFingerprint(dependencies.SourceFingerprintInput{
+			Root: input.Repository.Root, Files: input.Files, Manager: input.Manager, Runtime: input.Runtime,
+		})
+		if err != nil {
+			return dependencies.EnsureResult{}, err
+		}
+		if input.ListFiles == nil {
+			return dependencies.EnsureResult{}, errors.New("sync command did not provide post-install file lister")
+		}
+		// Model an installer creating a lockfile, then use the propagated lister
+		// to make the same post-install inventory EnsureDependencies uses.
+		if err := os.WriteFile(filepath.Join(input.Repository.Root, "pnpm-lock.yaml"), []byte("lockfile-v1\n"), 0o600); err != nil {
+			return dependencies.EnsureResult{}, err
+		}
+		afterFiles, err := input.ListFiles(ctx, input.Repository.Root)
+		if err != nil {
+			return dependencies.EnsureResult{}, err
+		}
+		after, err := dependencies.DependencyFingerprint(dependencies.SourceFingerprintInput{
+			Root: input.Repository.Root, Files: afterFiles, Manager: input.Manager, Runtime: input.Runtime,
+		})
+		if err != nil {
+			return dependencies.EnsureResult{}, err
+		}
+		if before.Fingerprint == after.Fingerprint {
+			return dependencies.EnsureResult{}, errors.New("post-install input rescan did not change dependency fingerprint")
+		}
+		return dependencies.EnsureResult{Fingerprint: after.Fingerprint, Mode: "managed-install"}, nil
+	}
+
+	input := syncTestInput(&bytes.Buffer{})
+	input.Repository = git.Repository{Root: root, CommonDir: root, PrimaryRoot: root, PrimaryCheckout: true}
+	if _, err := command.Run(context.Background(), input); err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+}
+
+func TestSyncCommandPreservesExplicitPostInstallLister(t *testing.T) {
+	explicitCalls := 0
+	explicit := dependencies.DependencyFileLister(func(context.Context, string) ([]string, error) {
+		explicitCalls++
+		return []string{"explicit-lock.yaml"}, nil
+	})
+	var got dependencies.DependencyFileLister
+	command := syncTestCommand(dependencies.EnsureResult{Fingerprint: "fingerprint", Mode: "managed-install"}, func(input dependencies.EnsureInput) {
+		got = input.ListFiles
+	}, nil)
+	input := syncTestInput(&bytes.Buffer{})
+	input.Ensure.ListFiles = explicit
+	if _, err := command.Run(context.Background(), input); err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("explicit post-install lister was discarded")
+	}
+	if _, err := got(context.Background(), input.Repository.Root); err != nil {
+		t.Fatalf("explicit lister returned an error: %v", err)
+	}
+	if explicitCalls != 1 {
+		t.Fatalf("explicit lister calls = %d, want 1", explicitCalls)
 	}
 }
 

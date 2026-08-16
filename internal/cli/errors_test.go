@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/xenoviz/ruk/internal/dependencies"
+	"github.com/xenoviz/ruk/internal/lifecycle"
 	"github.com/xenoviz/ruk/internal/lock"
 	processpkg "github.com/xenoviz/ruk/internal/process"
 )
@@ -89,6 +90,81 @@ func TestClassifyErrorPreservesRecoveryMetadata(t *testing.T) {
 	shared := ClassifyError(NewSharedCheckoutError(2))
 	if shared.ActiveAssignments != 2 || shared.Recovery != "ruk acquire <branch>" {
 		t.Fatalf("shared checkout metadata = %#v", shared)
+	}
+}
+
+func TestClassifyLifecycleRetainedAssignmentPreservesCauseAndJSONMetadata(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("unexpected acquisition failure")
+	err := &lifecycle.RetainedAssignmentError{
+		AssignmentID: "assignment-1",
+		Path:         "/workspace",
+		ExpiresAt:    "2026-08-15T00:00:00.000Z",
+		Recovery:     "ruk release assignment-1",
+		Cause:        cause,
+	}
+	record := ClassifyError(err)
+	if record.Code != ResourceBusyCode || !record.Retryable || record.AssignmentID != "assignment-1" || record.Path != "/workspace" || record.ExpiresAt != "2026-08-15T00:00:00.000Z" || record.Recovery != "ruk release assignment-1" {
+		t.Fatalf("record = %#v", record)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("retained lifecycle error lost its original cause")
+	}
+	json := FormatJSONError(err)
+	for _, fragment := range []string{`"code":"RESOURCE_BUSY"`, `"assignmentId":"assignment-1"`, `"path":"/workspace"`, `"expiresAt":"2026-08-15T00:00:00.000Z"`, `"recovery":"ruk release assignment-1"`} {
+		if !strings.Contains(json, fragment) {
+			t.Errorf("JSON %q does not contain %q", json, fragment)
+		}
+	}
+	if human := FormatHumanError(err); !strings.Contains(human, "ruk release assignment-1") || !strings.Contains(human, "2026-08-15T00:00:00.000Z") || !strings.Contains(human, cause.Error()) {
+		t.Fatalf("human = %q", human)
+	}
+}
+
+func TestClassifyLifecycleRetainedAssignmentPreservesUnderlyingCategories(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		cause     error
+		code      ErrorCode
+		retryable bool
+	}{
+		{
+			name:      "dependency preparation",
+			cause:     &dependencies.DependencyPreparationError{Cause: errors.New("installer failed")},
+			code:      DependencyPreparationCode,
+			retryable: true,
+		},
+		{
+			name:      "port unavailable",
+			cause:     errors.New("Could not allocate an available port"),
+			code:      PortUnavailableCode,
+			retryable: true,
+		},
+		{
+			name:      "generic retained fallback",
+			cause:     errors.New("unexpected acquisition failure"),
+			code:      ResourceBusyCode,
+			retryable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := &lifecycle.RetainedAssignmentError{
+				AssignmentID: "assignment-1",
+				Path:         "/workspace",
+				ExpiresAt:    "2026-08-15T00:00:00.000Z",
+				Cause:        test.cause,
+			}
+			record := ClassifyError(err)
+			if record.Code != test.code || record.Retryable != test.retryable {
+				t.Fatalf("record = %#v, want code=%q retryable=%t", record, test.code, test.retryable)
+			}
+			if record.AssignmentID != "assignment-1" || record.Path != "/workspace" || record.ExpiresAt != "2026-08-15T00:00:00.000Z" {
+				t.Fatalf("recovery metadata = %#v", record)
+			}
+		})
 	}
 }
 

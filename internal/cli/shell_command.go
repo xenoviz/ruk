@@ -32,8 +32,13 @@ type ShellTerminalRequest struct {
 // ShellTerminalResult reports terminal completion and whether all descendants
 // have drained. ExitCode and Signal are preserved for the caller.
 type ShellTerminalResult struct {
-	ExitCode           int
-	Signal             os.Signal
+	ExitCode int
+	Signal   os.Signal
+	// Started is stage evidence from the process runner. False means startup
+	// failed before a child existed, so the acquired assignment can be safely
+	// released. True means ownership crossed the process boundary and any
+	// uncertain cleanup must remain fenced for recovery.
+	Started            bool
 	DescendantsDrained bool
 }
 
@@ -187,15 +192,22 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 	if acquired.AssignmentID == "" || acquired.Path == "" || acquired.ExpiresAt == "" {
 		return ShellResult{}, errors.New("shell acquire returned an incomplete assignment")
 	}
+	base := ShellResult{Shell: shell, AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: acquired.ExpiresAt}
+	releaseBeforeSpawnFailure := func(cause error) (ShellResult, error) {
+		if releaseErr := service.release(context.WithoutCancel(ctx), acquired.AssignmentID); releaseErr != nil {
+			base.Retained = true
+			return base, retainedShellError(acquired, errors.Join(cause, releaseErr))
+		}
+		base.Released = true
+		return base, cause
+	}
 	environment, err := ports.BuildEnvironment(acquired.Ports)
 	if err != nil {
-		return ShellResult{AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: acquired.ExpiresAt, Retained: true}, retainedShellError(acquired, fmt.Errorf("build shell port environment: %w", err))
+		return releaseBeforeSpawnFailure(fmt.Errorf("build shell port environment: %w", err))
 	}
-	base := ShellResult{Shell: shell, AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: acquired.ExpiresAt}
 	if input.Stderr != nil {
 		if _, err := fmt.Fprintf(input.Stderr, "Shell workspace: %s\nAssignment: %s\n", acquired.Path, acquired.AssignmentID); err != nil {
-			base.Retained = true
-			return base, retainedShellError(acquired, fmt.Errorf("write shell handoff: %w", err))
+			return releaseBeforeSpawnFailure(fmt.Errorf("write shell handoff: %w", err))
 		}
 	}
 	terminal, terminalErr := service.terminal.Run(ctx, ShellTerminalRequest{
@@ -206,6 +218,9 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 	base.ExitCode = terminal.ExitCode
 	base.Signal = terminal.Signal
 	if terminalErr != nil {
+		if !terminal.Started {
+			return releaseBeforeSpawnFailure(terminalErr)
+		}
 		base.Retained = true
 		return base, retainedShellError(acquired, terminalErr)
 	}

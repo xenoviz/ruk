@@ -184,8 +184,12 @@ func (command SyncCommand) run(ctx context.Context, input SyncCommandInput) (Syn
 	ensureInput.Stdout = input.Stdout
 	ensureInput.Stderr = input.Stderr
 	ensureInput.MachineReadable = input.JSON
-	// The command owns the initial inventory. Preserve a caller-provided lister
-	// only when it explicitly requested a post-install rescan.
+	// The command owns the initial inventory and should use the same repository
+	// lister for the post-install rescan. Preserve a caller-provided lister so
+	// callers can intentionally supply a different inventory seam.
+	if ensureInput.ListFiles == nil {
+		ensureInput.ListFiles = dependencies.DependencyFileLister(command.ListFiles)
+	}
 	result, err := command.Ensure(ctx, ensureInput)
 	if err != nil {
 		return SyncCommandResult{}, err

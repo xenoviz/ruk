@@ -450,8 +450,20 @@ func (service *AcquisitionService) failAssigned(ctx context.Context, assignmentI
 		cleanupErr = service.cleanup(ctx, path, true)
 	}
 	retained, retainErr := service.lifecycle.RetainAssignmentAfterAcquisitionFailure(ctx, assignmentID, operationID, failureText(cause, cleanupErr))
-	_ = retained
-	return errors.Join(cause, cleanupErr, retainErr)
+	if retainErr != nil {
+		return errors.Join(cause, cleanupErr, retainErr)
+	}
+	retainedCause := errors.Join(cause, cleanupErr)
+	recovery := &RetainedAssignmentError{
+		AssignmentID: assignmentID,
+		Path:         path,
+		Recovery:     "ruk release " + assignmentID,
+		Cause:        retainedCause,
+	}
+	if retained.Assignment != nil {
+		recovery.ExpiresAt = retained.Assignment.ExpiresAt
+	}
+	return recovery
 }
 
 func (service *AcquisitionService) failPreparation(ctx context.Context, path, operationID string, cleanup bool, cause error) error {

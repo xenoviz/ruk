@@ -468,7 +468,7 @@ func defaultPortRegistry(store *state.Store, statePath string) (lifecycle.PortAl
 		return nil, nil, err
 	}
 	probe := ports.NewAvailabilityProbe(func(request ports.BindRequest) (ports.BoundListener, error) {
-		listener, err := net.Listen(request.Network, request.Address)
+		listener, err := listenPort(request)
 		if err != nil {
 			return nil, err
 		}

@@ -148,7 +148,7 @@ func TestShellReturnsAcquireFailureWithoutStartingOrReleasing(t *testing.T) {
 func TestShellRetainsAssignmentWhenTerminalFails(t *testing.T) {
 	terminalErr := errors.New("terminal identity unavailable")
 	terminal := &shellTerminalStub{
-		result: cli.ShellTerminalResult{ExitCode: 143, Signal: shellSignal("terminate")},
+		result: cli.ShellTerminalResult{ExitCode: 143, Signal: shellSignal("terminate"), Started: true},
 		err:    terminalErr,
 	}
 	releaseCalls := 0
@@ -173,6 +173,47 @@ func TestShellRetainsAssignmentWhenTerminalFails(t *testing.T) {
 	}
 	if result.ExitCode != 143 || result.Signal == nil {
 		t.Fatalf("terminal status was not preserved: %#v", result)
+	}
+}
+
+func TestShellReleasesAssignmentWhenTerminalFailsBeforeSpawn(t *testing.T) {
+	terminalErr := errors.New("shell executable was not found")
+	terminal := &shellTerminalStub{err: terminalErr}
+	releaseCalls := 0
+	service := cli.NewShellService(cli.ShellOptions{
+		Acquire:  func(context.Context, cli.AcquireInput) (cli.AcquireResult, error) { return validShellAcquire(), nil },
+		Terminal: terminal,
+		Release: func(_ context.Context, assignmentID string) error {
+			releaseCalls++
+			if assignmentID != "assignment-1" {
+				t.Fatalf("released assignment = %q", assignmentID)
+			}
+			return nil
+		},
+	})
+
+	result, err := service.Shell(context.Background(), shellInput())
+	if !errors.Is(err, terminalErr) || result.Retained || !result.Released || releaseCalls != 1 {
+		t.Fatalf("result/error/release = %#v/%v/%d", result, err, releaseCalls)
+	}
+}
+
+func TestShellRetainsAssignmentWhenPreSpawnReleaseFails(t *testing.T) {
+	terminalErr := errors.New("shell executable was not found")
+	releaseErr := errors.New("release fence changed")
+	terminal := &shellTerminalStub{err: terminalErr}
+	service := cli.NewShellService(cli.ShellOptions{
+		Acquire:  func(context.Context, cli.AcquireInput) (cli.AcquireResult, error) { return validShellAcquire(), nil },
+		Terminal: terminal,
+		Release:  func(context.Context, string) error { return releaseErr },
+	})
+
+	result, err := service.Shell(context.Background(), shellInput())
+	if err == nil || !result.Retained || result.Released || !errors.Is(err, terminalErr) || !errors.Is(err, releaseErr) {
+		t.Fatalf("result/error = %#v/%v", result, err)
+	}
+	if !strings.Contains(err.Error(), "ruk release assignment-1") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

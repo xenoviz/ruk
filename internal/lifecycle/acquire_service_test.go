@@ -228,6 +228,16 @@ func TestAcquireCleanupFailureRetainsReusableAssignmentForRecovery(t *testing.T)
 	if err == nil || !strings.Contains(err.Error(), cleanupErr.Error()) {
 		t.Fatalf("Acquire error = %v", err)
 	}
+	var retained *lifecycle.RetainedAssignmentError
+	if !errors.As(err, &retained) {
+		t.Fatalf("Acquire error type = %T, want retained assignment metadata", err)
+	}
+	if retained.AssignmentID != assignmentID || retained.Path != path || retained.ExpiresAt != "2026-01-01T08:00:00.000Z" || retained.Recovery != "ruk release "+assignmentID {
+		t.Fatalf("retained metadata = %#v", retained)
+	}
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("Acquire error does not preserve cleanup cause: %v", err)
+	}
 	key, _ := state.TreeKey(path)
 	workspace := store.current.Workspaces[key]
 	if workspace.Lifecycle != state.LifecycleAssigned || workspace.OperationID != nil || workspace.Failure == nil {

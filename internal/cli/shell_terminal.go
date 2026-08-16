@@ -259,7 +259,7 @@ func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTermi
 	releaseHandoff()
 	stopWatching()
 	watcher.Wait()
-	result := ShellTerminalResult{ExitCode: run.ExitCode, Signal: run.Signal}
+	result := ShellTerminalResult{ExitCode: run.ExitCode, Signal: run.Signal, Started: run.Started}
 	mu.Lock()
 	registeredRecord := registered
 	finalSignalErr := signalErr

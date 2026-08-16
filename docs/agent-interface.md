@@ -42,11 +42,13 @@ remains current after the latest observed activity.
 and release. `reused` reports whether Ruk assigned an available managed
 workspace instead of creating one.
 
-If dependency synchronization in a reused assignment aborts without being able
-to verify that its installer process tree is gone, acquisition fails with a
-retryable `RESOURCE_BUSY` error and retains the workspace. That error includes
-`assignmentId`, `path`, `expiresAt`, and a `recovery` release command so
-automation can preserve and later recover the exact fenced assignment. Ruk
+If a reused acquisition fails after ownership is published, Ruk retains the
+workspace and includes `assignmentId`, `path`, `expiresAt`, and a `recovery`
+release command in the error. The original machine-readable category is
+preserved, so dependency failures remain `DEPENDENCY_PREPARATION_FAILED`, port
+failures remain `PORT_UNAVAILABLE`, and an otherwise unclassified retained
+failure is retryable `RESOURCE_BUSY`. Automation can therefore respond to the
+cause while preserving and later recovering the exact fenced assignment. Ruk
 clears the incomplete acquisition marker before returning this error, so the
 exact recovery command is accepted when the caller decides cleanup is safe.
 The returned expiry is the current retained-state value, including a heartbeat
