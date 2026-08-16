@@ -157,11 +157,12 @@ func TestApplicationRoutesBranchlessExecThroughCurrentWorkspaceRun(t *testing.T)
 	repository := git.Repository{Root: root, CommonDir: filepath.Join(root, ".git")}
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	var received cli.RunRouteInput
-	application, discoveries := routingApplication(nil, func(options *cli.Options) {
+	discoveryCalls := 0
+	application, _ := routingApplication(nil, func(options *cli.Options) {
 		options.Now = func() time.Time { return now }
 		options.CWD = root
 		options.DiscoverRepository = func(context.Context, string) (git.Repository, error) {
-			*discoveries = *discoveries + 1
+			discoveryCalls++
 			return repository, nil
 		}
 		options.Run = func(_ context.Context, input cli.RunRouteInput) (int, error) {
@@ -176,8 +177,8 @@ func TestApplicationRoutesBranchlessExecThroughCurrentWorkspaceRun(t *testing.T)
 	if err != nil || code != 23 {
 		t.Fatalf("branchless exec = code %d, error %v", code, err)
 	}
-	if *discoveries != 1 || received.Repository != repository || received.CWD != root || received.Now != now || strings.Join(received.Command, " ") != "tool --flag" {
-		t.Fatalf("current-workspace run input = %#v discoveries=%d", received, *discoveries)
+	if discoveryCalls != 1 || received.Repository != repository || received.CWD != root || received.Now != now || strings.Join(received.Command, " ") != "tool --flag" {
+		t.Fatalf("current-workspace run input = %#v discoveries=%d", received, discoveryCalls)
 	}
 }
 
