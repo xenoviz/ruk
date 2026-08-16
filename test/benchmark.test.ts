@@ -224,6 +224,7 @@ test("managed-child readiness recognizes Node's Linux MainThread process name", 
 
 test("first wrapper nominal end starts after managed-child readiness settles", () => {
   assert.equal(nominalWrapperEndFromReadiness(30_250, 12_000), 42_250);
+  assert.equal(nominalWrapperEndFromReadiness(38_500, 18_000) + 30_000, 86_500);
 });
 
 test("legacy benchmark tolerates only full-duration known cleanup failures", () => {

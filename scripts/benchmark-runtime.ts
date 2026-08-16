@@ -342,7 +342,7 @@ async function measureWrappers(
     }
     return true;
   };
-  const deadline = started + durationMs + 30_000;
+  let deadline = Number.POSITIVE_INFINITY;
   let results: WrapperResult[];
   try {
     // Every target uses the same readiness-gated schedule. The legacy Node
@@ -383,6 +383,7 @@ async function measureWrappers(
         () => child.exitCode === null && child.signalCode === null,
       );
       if (children.length === 1) firstWrapperNominalEnd = nominalWrapperEndFromReadiness(readyAt, durationMs);
+      deadline = nominalWrapperEndFromReadiness(readyAt, durationMs) + 30_000;
     }
     const remainingBeforeFirstWrapperExit = firstWrapperNominalEnd - performance.now();
     if (remainingBeforeFirstWrapperExit < durationMs / 2) {
