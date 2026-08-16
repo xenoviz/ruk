@@ -92,6 +92,15 @@ export function normalizeExecutableName(command: string): string {
   return basename.endsWith(".exe") ? basename.slice(0, -4) : basename;
 }
 
+export function matchesExpectedExecutable(observedName: string, expectedCommand: string): boolean {
+  const observed = normalizeExecutableName(observedName);
+  const expected = normalizeExecutableName(expectedCommand);
+  // Node 24 names its main Linux thread `MainThread` in /proc/status even
+  // though the executable is node. Keep this exception specific to the
+  // expected Node workload rather than accepting an arbitrary descendant.
+  return observed === expected || (process.platform === "linux" && expected === "node" && observed === "mainthread");
+}
+
 function run(spec: CommandSpec): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(spec.command, spec.args, {
@@ -207,7 +216,6 @@ export function hasExpectedManagedChild(
     siblings.push(process);
     children.set(process.parentPid, siblings);
   }
-  const expectedName = normalizeExecutableName(expectedCommand);
   const pending = [rootPid];
   const seen = new Set<number>(pending);
   while (pending.length > 0) {
@@ -215,7 +223,7 @@ export function hasExpectedManagedChild(
     for (const child of children.get(parent) ?? []) {
       if (seen.has(child.pid)) continue;
       seen.add(child.pid);
-      if (normalizeExecutableName(child.name) === expectedName) return true;
+      if (matchesExpectedExecutable(child.name, expectedCommand)) return true;
       pending.push(child.pid);
     }
   }

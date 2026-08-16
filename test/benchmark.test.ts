@@ -9,6 +9,7 @@ import {
   hasCompleteRootSample,
   isTolerableLegacyWrapperFailure,
   makeAssertions,
+  matchesExpectedExecutable,
   normalizeExecutableName,
   nominalWrapperEndFromReadiness,
   observedGoPowerShellChildren,
@@ -211,6 +212,14 @@ test("managed-child readiness rejects PowerShell-only and unrelated descendants"
     ],
   };
   assert.equal(hasExpectedManagedChild(report, 100, "node"), false);
+});
+
+test("managed-child readiness recognizes Node's Linux MainThread process name", () => {
+  assert.equal(matchesExpectedExecutable("node.exe", "node"), true);
+  if (process.platform === "linux") {
+    assert.equal(matchesExpectedExecutable("MainThread", "node"), true);
+    assert.equal(matchesExpectedExecutable("MainThread", "python"), false);
+  }
 });
 
 test("first wrapper nominal end starts after managed-child readiness settles", () => {
