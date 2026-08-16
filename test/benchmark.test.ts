@@ -10,6 +10,7 @@ import {
   isTolerableLegacyWrapperFailure,
   makeAssertions,
   normalizeExecutableName,
+  nominalWrapperEndFromReadiness,
   observedGoPowerShellChildren,
   collectTargetResults,
 } from "../scripts/benchmark-runtime.js";
@@ -210,6 +211,10 @@ test("managed-child readiness rejects PowerShell-only and unrelated descendants"
     ],
   };
   assert.equal(hasExpectedManagedChild(report, 100, "node"), false);
+});
+
+test("first wrapper nominal end starts after managed-child readiness settles", () => {
+  assert.equal(nominalWrapperEndFromReadiness(30_250, 12_000), 42_250);
 });
 
 test("legacy benchmark tolerates only full-duration known cleanup failures", () => {

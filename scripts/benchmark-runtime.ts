@@ -82,7 +82,7 @@ interface WrapperResult {
   elapsedMs: number;
 }
 
-const MANAGED_CHILD_READINESS_TIMEOUT_MS = 5_000;
+const MANAGED_CHILD_READINESS_TIMEOUT_MS = 30_000;
 const MANAGED_CHILD_SETTLE_MS = 250;
 const MANAGED_CHILD_POLL_MS = 25;
 type BenchmarkChildProcess = ChildProcessByStdio<null, Readable, Readable>;
@@ -232,12 +232,16 @@ export function hasCompleteRootSample(report: ProcessReport, rootPids: readonly 
   return rootPids.every((pid) => processIDs.has(pid));
 }
 
+export function nominalWrapperEndFromReadiness(readyAt: number, durationMs: number): number {
+  return readyAt + durationMs;
+}
+
 async function waitForManagedChild(
   inspector: InspectorTarget,
   rootPid: number,
   expectedCommand: string,
   isAlive: () => boolean,
-): Promise<void> {
+): Promise<number> {
   const expectedName = normalizeExecutableName(expectedCommand);
   const deadline = performance.now() + MANAGED_CHILD_READINESS_TIMEOUT_MS;
   while (performance.now() < deadline) {
@@ -246,7 +250,7 @@ async function waitForManagedChild(
     if (hasExpectedManagedChild(report, rootPid, expectedCommand)) {
       await new Promise((resolve) => setTimeout(resolve, MANAGED_CHILD_SETTLE_MS));
       if (!isAlive()) throw new Error(`benchmark wrapper root ${rootPid} exited during managed ${expectedName} child settling`);
-      return;
+      return performance.now();
     }
     await new Promise((resolve) => setTimeout(resolve, MANAGED_CHILD_POLL_MS));
   }
@@ -346,7 +350,6 @@ async function measureWrappers(
         windowsHide: true,
       });
       children.push(child);
-      if (children.length === 1) firstWrapperNominalEnd = childStarted + durationMs;
       completions.push(new Promise<WrapperResult>((resolve) => {
         let stdout = "";
         let stderr = "";
@@ -361,12 +364,13 @@ async function measureWrappers(
         child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr, elapsedMs: performance.now() - childStarted }));
       }));
       if (!child.pid) throw new Error("benchmark wrapper did not expose a process ID");
-      await waitForManagedChild(
+      const readyAt = await waitForManagedChild(
         inspector,
         child.pid,
         expectedChildCommand,
         () => child.exitCode === null && child.signalCode === null,
       );
+      if (children.length === 1) firstWrapperNominalEnd = nominalWrapperEndFromReadiness(readyAt, durationMs);
     }
     const remainingBeforeFirstWrapperExit = firstWrapperNominalEnd - performance.now();
     if (remainingBeforeFirstWrapperExit < durationMs / 2) {
