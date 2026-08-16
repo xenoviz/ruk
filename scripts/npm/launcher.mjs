@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -153,6 +154,136 @@ export function windowsCommandDestination(root, environment = process.env) {
   return path.resolve(root, "..", "..", ".bin", "ruk.exe");
 }
 
+// Package updates are normally installed by a child package-manager process.
+// When that child was launched by a running native Ruk executable, Windows
+// keeps the old ruk.exe locked until the parent exits. The update command
+// passes that parent PID through this narrow environment marker so the
+// postinstall can hand off replacement without guessing which process owns a
+// file or attempting to delete a live executable.
+export function windowsUpdateProcessID(environment = process.env) {
+  const value = String(environment.RUK_UPDATE_PID ?? "").trim();
+  if (!/^\d+$/.test(value)) return undefined;
+  const pid = Number(value);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+const WINDOWS_REPLACEMENT_SCRIPT = String.raw`import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const [pidText, ...values] = process.argv.slice(1);
+const pid = Number(pidText);
+const entries = [];
+for (let index = 0; index + 1 < values.length; index += 2) entries.push([values[index], values[index + 1]]);
+if (!Number.isSafeInteger(pid) || pid <= 0 || entries.length === 0) process.exit(2);
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const alive = () => {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error?.code === "EPERM"; }
+};
+const failurePath = (destination) => destination + ".ruk-update-failed";
+const reportStatus = async (status, error) => {
+  const message = JSON.stringify({ schemaVersion: 1, status, error: String(error?.message ?? error), pid, at: new Date().toISOString() }) + "\n";
+  for (const [, destination] of entries) await fs.writeFile(failurePath(destination), message, { mode: 0o600 }).catch(() => {});
+};
+const reportFailure = (error) => reportStatus("failed", error);
+const reportCleanupPending = (error) => reportStatus("committed-cleanup-pending", error);
+const deadline = Date.now() + 10 * 60 * 1000;
+while (alive() && Date.now() < deadline) await delay(100);
+if (alive()) {
+  await reportFailure(new Error("the previous Ruk process did not exit before the update handoff deadline"));
+  process.exit(1);
+}
+for (let attempt = 0; attempt < 120; attempt += 1) {
+  const backups = [];
+  try {
+    for (const [source, destination] of entries) {
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      const backup = destination + "." + process.pid + "." + crypto.randomUUID() + ".ruk-backup";
+      let hadDestination = true;
+      try { await fs.rename(destination, backup); }
+      catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        hadDestination = false;
+      }
+      backups.push([source, destination, backup, hadDestination, false]);
+      await fs.rename(source, destination);
+      backups[backups.length - 1][4] = true;
+    }
+    // Every staged source has been installed. The transaction is committed;
+    // cleanup failures must never trigger a rollback that could remove the
+    // newly installed binaries or rely on an already-deleted backup.
+    const cleanupErrors = [];
+    for (const [, , backup, hadDestination] of backups) {
+      if (!hadDestination) continue;
+      try { await fs.rm(backup, { force: true }); }
+      catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    }
+    if (cleanupErrors.length > 0) {
+      await reportCleanupPending(new Error("Windows update committed with backup cleanup pending: " + cleanupErrors.map((cleanupError) => cleanupError?.message ?? cleanupError).join("; ")));
+    } else {
+      for (const [, destination] of entries) await fs.rm(failurePath(destination), { force: true }).catch(() => {});
+    }
+    process.exit(0);
+  } catch (error) {
+    const rollbackErrors = [];
+    for (let index = backups.length - 1; index >= 0; index -= 1) {
+      const [source, destination, backup, hadDestination, installed] = backups[index];
+      try {
+        if (installed) await fs.rename(destination, source);
+        if (hadDestination) await fs.rename(backup, destination);
+      } catch (restoreError) {
+        rollbackErrors.push(restoreError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      await reportFailure(new Error("Windows update rollback failed: " + rollbackErrors.map((restoreError) => restoreError?.message ?? restoreError).join("; ")));
+      process.exit(1);
+    }
+    await reportFailure(error);
+    await delay(250);
+  }
+}
+await reportFailure(new Error("the Windows update handoff could not replace all destinations"));
+process.exit(1);`;
+
+async function scheduleWindowsReplacement(entries, pid, spawner = spawn) {
+  const child = spawner(process.execPath, ["--input-type=module", "-e", WINDOWS_REPLACEMENT_SCRIPT, String(pid), ...entries.flat()], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+}
+
+async function removeStagedWindowsEntries(entries) {
+  await Promise.all(entries.map(([source]) => fs.rm(source, { force: true }).catch(() => {})));
+}
+
+async function stageWindowsCopy(source, destination) {
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  const staged = `${destination}.${process.pid}.${crypto.randomUUID()}.ruk-pending`;
+  try {
+    await fs.copyFile(source, staged);
+    return staged;
+  } catch (error) {
+    await fs.rm(staged, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function stageWindowsContents(contents, destination) {
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  const staged = `${destination}.${process.pid}.${crypto.randomUUID()}.ruk-pending`;
+  try {
+    await fs.writeFile(staged, contents, { mode: 0o600 });
+    return staged;
+  } catch (error) {
+    await fs.rm(staged, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
 export async function installNativeLauncher(options = {}) {
   const root = path.resolve(options.root ?? fileURLToPath(new URL("../..", import.meta.url)));
   const platform = options.platform ?? process.platform;
@@ -212,17 +343,40 @@ export async function installNativeLauncher(options = {}) {
   if (actualDigest !== expectedDigest.toLowerCase()) {
     throw new Error(`Ruk native binary checksum mismatch for ${selected.packageName}`);
   }
-  await atomicCopy(source, destination, platform !== "win32");
+  const updatePID = platform === "win32" ? windowsUpdateProcessID(options.environment) : undefined;
+  const deferredEntries = [];
   const commandDestination = options.commandDestination ?? (
     platform === "win32" ? windowsCommandDestination(root, options.environment) : undefined
   );
-  if (commandDestination !== undefined) {
-    if (platform !== "win32" || path.extname(commandDestination).toLowerCase() !== ".exe") {
-      throw new Error("Ruk native command destination must be a Windows .exe path");
+  try {
+    if (updatePID !== undefined) {
+      deferredEntries.push([await stageWindowsCopy(source, destination), destination]);
+      if (commandDestination !== undefined) {
+        if (platform !== "win32" || path.extname(commandDestination).toLowerCase() !== ".exe") {
+          throw new Error("Ruk native command destination must be a Windows .exe path");
+        }
+        const resolvedCommandDestination = path.resolve(commandDestination);
+        deferredEntries.push([await stageWindowsCopy(source, resolvedCommandDestination), resolvedCommandDestination]);
+        const commandMarker = `${resolvedCommandDestination}.ruk-distribution`;
+        deferredEntries.push([await stageWindowsContents(markerContents, commandMarker), commandMarker]);
+      }
+      deferredEntries.push([await stageWindowsContents(markerContents, marker), marker]);
+      await scheduleWindowsReplacement(deferredEntries, updatePID, options.spawnReplacement ?? spawn);
+    } else {
+      await atomicCopy(source, destination, platform !== "win32");
+      if (commandDestination !== undefined) {
+        if (platform !== "win32" || path.extname(commandDestination).toLowerCase() !== ".exe") {
+          throw new Error("Ruk native command destination must be a Windows .exe path");
+        }
+        const resolvedCommandDestination = path.resolve(commandDestination);
+        await atomicCopy(source, resolvedCommandDestination, false);
+        await atomicWrite(`${resolvedCommandDestination}.ruk-distribution`, markerContents);
+      }
+      await atomicWrite(marker, markerContents);
     }
-    await atomicCopy(source, path.resolve(commandDestination), false);
-    await atomicWrite(`${path.resolve(commandDestination)}.ruk-distribution`, markerContents);
+  } catch (error) {
+    if (updatePID !== undefined) await removeStagedWindowsEntries(deferredEntries);
+    throw error;
   }
-  await atomicWrite(marker, markerContents);
-  return { packageName: selected.packageName, target: selected.target, destination, sha256: actualDigest, installer };
+  return { packageName: selected.packageName, target: selected.target, destination, sha256: actualDigest, installer, deferred: updatePID !== undefined };
 }

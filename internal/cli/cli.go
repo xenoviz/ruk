@@ -275,10 +275,14 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 	}
 	if invocation.Name == "update" {
 		result, err := application.update(ctx, updatepkg.Options{
-			Distribution:   application.distribution,
-			CurrentVersion: application.version,
-			CheckOnly:      invocation.Check,
-			Entrypoint:     application.entrypoint,
+			Distribution:    application.distribution,
+			CurrentVersion:  application.version,
+			CheckOnly:       invocation.Check,
+			Entrypoint:      application.entrypoint,
+			Stdin:           application.stdin,
+			Stdout:          application.stdout,
+			Stderr:          application.stderr,
+			MachineReadable: invocation.JSON,
 		})
 		if err != nil {
 			return 1, err
@@ -480,6 +484,23 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 		repository, err := application.discover(ctx, application.cwd)
 		if err != nil {
 			return 1, err
+		}
+		// A branchless exec is the explicit current-workspace form. Keep it on
+		// the run route so it cannot accidentally turn an empty branch into a
+		// new managed acquisition.
+		if invocation.Branch == "" {
+			if application.run == nil {
+				return 1, errors.New("run command is not configured")
+			}
+			exitCode, err := application.run(ctx, RunRouteInput{
+				Repository:          repository,
+				CWD:                 application.cwd,
+				Command:             append([]string(nil), invocation.Command...),
+				AllowSharedCheckout: invocation.AllowSharedCheckout,
+				Stderr:              application.stderr,
+				Now:                 application.now(),
+			})
+			return exitCode, err
 		}
 		if application.exec == nil {
 			return 1, errors.New("exec command is not configured")

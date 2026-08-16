@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -10,6 +11,7 @@ import {
   installNativeLauncher,
   platformTarget,
   windowsCommandDestination,
+  windowsUpdateProcessID,
 } from "../../scripts/npm/launcher.mjs";
 
 const version = "0.1.2";
@@ -215,6 +217,94 @@ test("Windows command placement follows npm local and global prefixes", () => {
     }),
     path.resolve("C:\\prefix", "ruk.exe"),
   );
+});
+
+test("Windows package updates defer native replacement to a detached handoff", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-launcher-deferred-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const packageRoot = path.join(root, "node_modules", "@xenoviz", "ruk-windows-x64");
+  const native = path.join(packageRoot, "native", "ruk.exe");
+  const contents = Buffer.from("deferred-windows-ruk-binary");
+  await fs.mkdir(path.dirname(native), { recursive: true });
+  await fs.writeFile(native, contents);
+  const sha256 = crypto.createHash("sha256").update(contents).digest("hex");
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
+    name: "@xenoviz/ruk",
+    version,
+    ruk: { distribution: "package", binaryPath: "bin/ruk" },
+  }));
+  await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "@xenoviz/ruk-windows-x64",
+    version,
+    ruk: { distribution: "package", target: "windows-x64", binary: "native/ruk.exe", sha256 },
+  }));
+  const commandDestination = path.join(root, "node_modules", ".bin", "ruk.exe");
+  let spawnCall: [string, string[], Record<string, unknown>] | undefined;
+  const result = await installNativeLauncher({
+    root,
+    platform: "win32",
+    arch: "x64",
+    commandDestination,
+    environment: { RUK_UPDATE_PID: "123" },
+    spawnReplacement: (command: string, args: string[], options: { detached: boolean; stdio: "ignore"; windowsHide: boolean }) => {
+      spawnCall = [command, args, options];
+      return { unref() {} };
+    },
+  });
+  assert.equal(windowsUpdateProcessID({ RUK_UPDATE_PID: "123" }), 123);
+  assert.equal(windowsUpdateProcessID({ RUK_UPDATE_PID: "0" }), undefined);
+  assert.equal(windowsUpdateProcessID({ RUK_UPDATE_PID: "not-a-pid" }), undefined);
+  assert.equal(result.destination.endsWith("bin/ruk.exe"), true);
+  assert.equal(result.deferred, true);
+  assert.equal(spawnCall?.[0], process.execPath);
+  assert.equal(spawnCall?.[1]?.[0], "--input-type=module");
+  assert.equal(spawnCall?.[1]?.[1], "-e");
+  assert.equal(spawnCall?.[1]?.[3], "123");
+  await assert.rejects(fs.access(result.destination));
+  await assert.rejects(fs.access(commandDestination));
+
+  if (spawnCall === undefined) throw new Error("deferred replacement helper was not captured");
+  const invalidPIDArgs = [...spawnCall[1]];
+  invalidPIDArgs[3] = "0";
+  const helper = spawnSync(spawnCall[0], invalidPIDArgs, { stdio: "ignore" });
+  assert.notEqual(helper.status, 0);
+});
+
+test("Windows deferred staging cleans up when detached handoff cannot start", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-launcher-spawn-failure-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const packageRoot = path.join(root, "node_modules", "@xenoviz", "ruk-windows-x64");
+  const native = path.join(packageRoot, "native", "ruk.exe");
+  const contents = Buffer.from("spawn-failure-windows-ruk-binary");
+  await fs.mkdir(path.dirname(native), { recursive: true });
+  await fs.writeFile(native, contents);
+  const sha256 = crypto.createHash("sha256").update(contents).digest("hex");
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
+    name: "@xenoviz/ruk",
+    version,
+    ruk: { distribution: "package", binaryPath: "bin/ruk" },
+  }));
+  await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "@xenoviz/ruk-windows-x64",
+    version,
+    ruk: { distribution: "package", target: "windows-x64", binary: "native/ruk.exe", sha256 },
+  }));
+  const commandDestination = path.join(root, "node_modules", ".bin", "ruk.exe");
+  await assert.rejects(
+    installNativeLauncher({
+      root,
+      platform: "win32",
+      arch: "x64",
+      commandDestination,
+      environment: { RUK_UPDATE_PID: "123" },
+      spawnReplacement: () => {
+        throw new Error("injected detached spawn failure");
+      },
+    }),
+    /injected detached spawn failure/,
+  );
+  const files = await fs.readdir(root, { recursive: true });
+  assert.deepEqual(files.filter((file) => file.endsWith(".ruk-pending")), []);
 });
 
 test("installer fails before replacing the destination on checksum or path violations", async (t) => {

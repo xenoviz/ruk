@@ -134,7 +134,9 @@ versions. An installation whose current version contains a prerelease
 identifier follows newer prereleases on that channel. Package installations
 delegate the exact version to the owning npm, Bun, pnpm, or Yarn installation;
 standalone binaries verify and replace their native executable. Ordinary
-commands never contact GitHub for updates.
+commands never contact GitHub for updates. On Windows, a package or standalone
+update reports a scheduled handoff and replaces locked native files only after
+the current Ruk process exits.
 
 ## Global output behavior
 

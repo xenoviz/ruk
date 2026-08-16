@@ -55,7 +55,9 @@ ruk update
 
 Package installations delegate the exact released version to their package
 manager. Standalone installations verify the release manifest and checksum
-before replacement. Stable installations stay on stable releases; a current
-prerelease installation follows newer prereleases on its channel.
+before replacement. On Windows, either installation mode schedules replacement
+of locked native files after the current Ruk process exits. Stable installations
+stay on stable releases; a current prerelease installation follows newer
+prereleases on its channel.
 
 Next, [create your first assigned workspace](/getting-started/).

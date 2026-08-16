@@ -41,6 +41,9 @@ versioning.
 - Harden garbage collection against current-workspace subdirectories and
   interrupted state removal, and keep prerelease updates on their current
   channel while discovering every paginated GitHub release.
+- Preserve current-workspace `exec` routing, fence explicit workspace creation,
+  parse newline-containing worktree paths safely, stream human package updates,
+  preserve POSIX rollback modes, and defer locked Windows package replacement.
 
 ## 0.1.2 - 2026-08-08
 

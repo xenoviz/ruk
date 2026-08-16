@@ -40,7 +40,11 @@ type MutationAdapterOptions struct {
 	// worktree mutation. Nil selects the same resolver used by create.
 	StartPointResolver CreateStartPointResolver
 
-	CreateWorkspace  func(git.Repository) (CreateWorkspace, error)
+	CreateWorkspace func(git.Repository) (CreateWorkspace, error)
+	// CreateFence optionally replaces the native per-workspace lifecycle lock
+	// used while create mutates and prepares its destination. It is primarily a
+	// deterministic embedding seam; nil selects the production lock.
+	CreateFence      CreateLifecycleFence
 	AcquireWorktree  func(git.Repository) (lifecycle.AcquisitionWorktree, error)
 	ReleaseGit       func(git.Repository) (lifecycle.ReleaseGitter, error)
 	ReleaseProcesses func() lifecycle.ReleaseProcesser
@@ -96,6 +100,25 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 	}
 
 	createRoute := func(ctx context.Context, input CreateCommandInput) (CreateCommandResult, error) {
+		// Create holds the workspace handoff lock for the whole operation. The
+		// dependency layer normally acquires that same lock, so give it the
+		// real state store plus a non-reentrant-lock-eliding adapter while this
+		// route owns the fence.
+		locker, err := newNativeDirectoryLocker(ctx)
+		if err != nil {
+			return CreateCommandResult{}, err
+		}
+		preparationStore := state.NewStore(input.Repository.CommonDir, locker)
+		fence := options.CreateFence
+		if fence == nil {
+			fence = func(fenceCtx context.Context, path string, operation func() error) error {
+				lockPath, err := MutationWorkspaceLockPath(input.Repository.CommonDir, path)
+				if err != nil {
+					return err
+				}
+				return locker.With(fenceCtx, lockPath, operation)
+			}
+		}
 		factory := options.CreateWorkspace
 		if factory == nil {
 			factory = defaultCreateWorkspace
@@ -105,9 +128,12 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 			return CreateCommandResult{}, err
 		}
 		command := NewCreateCommand(CreateCommandOptions{
-			Workspace: workspace,
+			Workspace: workspace, Fence: fence,
 			Sync: func(ctx context.Context, request CreateSyncRequest) (SyncCommandResult, error) {
-				return syncRoute(ctx, SyncCommandInput{Repository: request.Repository, JSON: request.JSON, Emit: false, Output: request.Output})
+				return syncRoute(ctx, SyncCommandInput{
+					Repository: request.Repository, JSON: request.JSON, Emit: false, Output: request.Output,
+					Ensure: dependencies.EnsureInput{Store: preparationStore, Locker: heldWorkspaceLocker{}},
+				})
 			},
 		})
 		return command.Run(ctx, input)

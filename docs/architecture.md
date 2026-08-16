@@ -44,8 +44,10 @@ newer prereleases on that channel without a second opt-in. Incomplete releases
 are ignored, so update discovery falls back to the previous ready release.
 
 POSIX replacement retains a rollback copy until the new executable reports the
-expected version. Windows defers replacement to a detached operating-system
-helper because a running executable may be locked. Release CI generates signed
+expected version. Windows standalone and package updates stage verified native
+files and defer replacement to a detached helper because a running executable
+may be locked. Package-mode updates report that scheduled handoff instead of
+claiming immediate replacement. Release CI generates signed
 GitHub build-provenance attestations in addition to checksums. Checksums protect
 download integrity; provenance provides an independently verifiable record of
 which repository workflow produced an executable.

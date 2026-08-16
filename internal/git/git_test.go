@@ -29,7 +29,7 @@ func TestDiscoverLinkedWorktreeNormalizesPrimaryRoot(t *testing.T) {
 		"rev-parse --show-toplevel":                         {Stdout: "../primary/linked\n"},
 		"rev-parse --path-format=absolute --git-common-dir": {Stdout: "../primary/.git\n"},
 		"rev-parse --path-format=absolute --git-dir":        {Stdout: "../primary/.git/worktrees/linked\n"},
-		"worktree list --porcelain":                         {Stdout: "worktree ../primary\nHEAD aaa\nbranch refs/heads/main\n\nworktree ../primary/linked\nHEAD bbb\nbranch refs/heads/agent\n"},
+		"worktree list --porcelain -z":                      {Stdout: "worktree ../primary\x00HEAD aaa\x00branch refs/heads/main\x00\x00worktree ../primary/linked\x00HEAD bbb\x00branch refs/heads/agent\x00\x00"},
 	}}
 	repository, err := git.NewClient(runner.call).Discover(context.Background(), filepath.Join("repo", "linked"))
 	if err != nil {
@@ -48,7 +48,7 @@ func TestDiscoverLinkedWorktreeNormalizesPrimaryRoot(t *testing.T) {
 		{"rev-parse", "--show-toplevel"},
 		{"rev-parse", "--path-format=absolute", "--git-common-dir"},
 		{"rev-parse", "--path-format=absolute", "--git-dir"},
-		{"worktree", "list", "--porcelain"},
+		{"worktree", "list", "--porcelain", "-z"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -60,7 +60,7 @@ func TestDiscoverSeparateGitDirKeepsPrimaryRootAtRepositoryRoot(t *testing.T) {
 		"rev-parse --show-toplevel":                         {Stdout: "../primary\n"},
 		"rev-parse --path-format=absolute --git-common-dir": {Stdout: "../shared.git\n"},
 		"rev-parse --path-format=absolute --git-dir":        {Stdout: "../shared.git\n"},
-		"worktree list --porcelain":                         {Stdout: "worktree ../primary\nHEAD aaa\n"},
+		"worktree list --porcelain -z":                      {Stdout: "worktree ../primary\x00HEAD aaa\x00"},
 	}}
 	repository, err := git.NewClient(runner.call).Discover(context.Background(), filepath.Join("repo", "linked"))
 	if err != nil {
@@ -68,6 +68,28 @@ func TestDiscoverSeparateGitDirKeepsPrimaryRootAtRepositoryRoot(t *testing.T) {
 	}
 	if !strings.HasSuffix(repository.PrimaryRoot, "primary") || !repository.PrimaryCheckout {
 		t.Fatalf("primary = (%q, %v), want repository root and primary checkout", repository.PrimaryRoot, repository.PrimaryCheckout)
+	}
+}
+
+func TestDiscoverWorktreePathPreservesNewline(t *testing.T) {
+	newlinePath := "../primary/line\nbreak"
+	runner := &fakeRunner{results: map[string]git.CommandResult{
+		"rev-parse --show-toplevel":                         {Stdout: newlinePath + "\n"},
+		"rev-parse --path-format=absolute --git-common-dir": {Stdout: "../primary/.git\n"},
+		"rev-parse --path-format=absolute --git-dir":        {Stdout: "../primary/.git/worktrees/line-break\n"},
+		"worktree list --porcelain -z":                      {Stdout: "worktree " + newlinePath + "\x00HEAD aaa\x00branch refs/heads/main\x00\x00"},
+	}}
+	repository, err := git.NewClient(runner.call).Discover(context.Background(), filepath.Join("repo", "linked"))
+	if err != nil {
+		t.Fatalf("Discover returned an error: %v", err)
+	}
+	want := filepath.Join("repo", "linked", newlinePath)
+	want, err = filepath.Abs(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.PrimaryRoot != want || !strings.Contains(repository.PrimaryRoot, "line\nbreak") {
+		t.Fatalf("primary root = %q, want newline path %q", repository.PrimaryRoot, want)
 	}
 }
 

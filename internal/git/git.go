@@ -105,7 +105,7 @@ func (client Client) Discover(ctx context.Context, cwd string) (Repository, erro
 	if err != nil {
 		return Repository{}, fmt.Errorf("discover Git directory: %w", err)
 	}
-	worktreeResult, err := client.run(ctx, base, []string{"worktree", "list", "--porcelain"})
+	worktreeResult, err := client.run(ctx, base, []string{"worktree", "list", "--porcelain", "-z"})
 	if err != nil {
 		return Repository{}, fmt.Errorf("discover Git worktrees: %w", err)
 	}
@@ -551,17 +551,30 @@ func resolveOutputPath(base, output string) (string, error) {
 
 func parseWorktreePaths(base, output string) ([]string, error) {
 	var paths []string
-	for _, line := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
-		if !strings.HasPrefix(line, "worktree ") {
+	for _, field := range strings.Split(output, "\x00") {
+		if !strings.HasPrefix(field, "worktree ") {
 			continue
 		}
-		path, err := resolveOutputPath(base, strings.TrimPrefix(line, "worktree "))
+		path, err := resolveNULPath(base, strings.TrimPrefix(field, "worktree "))
 		if err != nil {
 			return nil, err
 		}
 		paths = append(paths, path)
 	}
 	return paths, nil
+}
+
+// resolveNULPath preserves all path bytes except the NUL record delimiter.
+// Unlike line-oriented Git output, a porcelain -z path may legitimately
+// contain whitespace or newlines at either end.
+func resolveNULPath(base, value string) (string, error) {
+	if value == "" {
+		return "", errors.New("Git returned an empty path")
+	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(base, value)
+	}
+	return absoluteClean(value)
 }
 
 func samePath(left, right string) bool {

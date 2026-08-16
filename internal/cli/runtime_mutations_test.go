@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -82,7 +83,7 @@ func TestNewMutationAdaptersBuildsAllRoutesAndCreateOrchestratesFreshWorktree(t 
 	adapters, err := NewMutationAdapters(MutationAdapterOptions{
 		Now:   func() time.Time { return clock },
 		NewID: func() string { return "00000000-0000-4000-8000-000000000001" },
-		Sync: func(_ context.Context, input SyncCommandInput) (SyncCommandResult, error) {
+		Sync: func(ctx context.Context, input SyncCommandInput) (SyncCommandResult, error) {
 			syncJSON = input.JSON
 			if input.Repository.Root == "" {
 				return SyncCommandResult{}, errors.New("missing sync root")
@@ -118,6 +119,56 @@ func TestNewMutationAdaptersBuildsAllRoutesAndCreateOrchestratesFreshWorktree(t 
 	}
 	if !syncJSON {
 		t.Fatal("JSON acquire did not propagate machine-readable sync policy")
+	}
+}
+
+func TestNewMutationAdaptersCreateUsesWorkspaceFence(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	workspace := &createWorkspaceStub{}
+	fenceCalled := false
+	preparationLockerCalled := false
+	var fencedPath string
+	adapters, err := NewMutationAdapters(MutationAdapterOptions{
+		StartPointResolver: func(context.Context, git.Repository, string, bool) (string, error) { return "resolved-start", nil },
+		CreateWorkspace:    func(git.Repository) (CreateWorkspace, error) { return workspace, nil },
+		CreateFence: func(_ context.Context, path string, operation func() error) error {
+			fenceCalled = true
+			fencedPath = path
+			return operation()
+		},
+		Sync: func(ctx context.Context, input SyncCommandInput) (SyncCommandResult, error) {
+			if input.Repository.Root != fencedPath {
+				return SyncCommandResult{}, fmt.Errorf("sync root=%q, want fenced path %q", input.Repository.Root, fencedPath)
+			}
+			if input.Ensure.Store == nil || input.Ensure.Locker == nil {
+				return SyncCommandResult{}, errors.New("create preparation did not receive held lock seams")
+			}
+			lockPath, err := MutationWorkspaceLockPath(input.Repository.CommonDir, input.Repository.Root)
+			if err != nil {
+				return SyncCommandResult{}, err
+			}
+			if err := input.Ensure.Locker.With(ctx, lockPath, func() error {
+				preparationLockerCalled = true
+				return nil
+			}); err != nil {
+				return SyncCommandResult{}, err
+			}
+			return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "slot")
+	result, err := adapters.Create(context.Background(), CreateCommandInput{
+		Repository: repository, CWD: root, Branch: "agent/fenced", Path: path,
+	})
+	if err != nil {
+		t.Fatalf("Create returned an error: %v", err)
+	}
+	if !fenceCalled || !preparationLockerCalled || fencedPath != path || result.Path != path || !workspace.created {
+		t.Fatalf("fenceCalled=%v preparationLockerCalled=%v fencedPath=%q result=%#v workspace=%#v", fenceCalled, preparationLockerCalled, fencedPath, result, workspace)
 	}
 }
 

@@ -8,7 +8,8 @@ const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 try {
   const installed = await installNativeLauncher({ root });
-  process.stdout.write(`Installed native ${installed.target} for ${installed.packageName}.\n`);
+  const action = installed.deferred ? "Scheduled native replacement" : "Installed native";
+  process.stdout.write(`${action} ${installed.target} for ${installed.packageName}.\n`);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`Ruk native installation failed: ${message}\n`);

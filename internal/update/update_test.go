@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -210,7 +211,7 @@ func TestStandaloneRollback(t *testing.T) {
 	}
 	temporary := t.TempDir()
 	executable := filepath.Join(temporary, "ruk")
-	if err := os.WriteFile(executable, []byte("old"), 0o755); err != nil {
+	if err := os.WriteFile(executable, []byte("old"), 0o701); err != nil {
 		t.Fatal(err)
 	}
 	candidate := filepath.Join(temporary, "ruk.new")
@@ -227,6 +228,64 @@ func TestStandaloneRollback(t *testing.T) {
 	if readErr != nil || string(contents) != "old" {
 		t.Fatalf("rollback contents = %q, read error = %v", contents, readErr)
 	}
+	metadata, statErr := os.Stat(executable)
+	if statErr != nil {
+		t.Fatalf("rollback stat error = %v", statErr)
+	}
+	if metadata.Mode().Perm() != 0o701 {
+		t.Fatalf("rollback mode = %o, want 701", metadata.Mode().Perm())
+	}
+}
+
+type backupChmodFailureFileSystem struct {
+	OSFileSystem
+	removed []string
+}
+
+func (fileSystem *backupChmodFailureFileSystem) Chmod(name string, mode fs.FileMode) error {
+	if strings.Contains(filepath.Base(name), ".ruk-backup-") {
+		return fmt.Errorf("backup permission restore failed")
+	}
+	return fileSystem.OSFileSystem.Chmod(name, mode)
+}
+
+func (fileSystem *backupChmodFailureFileSystem) Remove(name string) error {
+	fileSystem.removed = append(fileSystem.removed, name)
+	return fileSystem.OSFileSystem.Remove(name)
+}
+
+func TestStandaloneRollbackCleansBackupWhenPermissionRestoreFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX replacement relies on rename-over-existing semantics")
+	}
+	temporary := t.TempDir()
+	executable := filepath.Join(temporary, "ruk")
+	candidate := filepath.Join(temporary, "ruk.new")
+	if err := os.WriteFile(executable, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(candidate, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fileSystem := &backupChmodFailureFileSystem{}
+	err := replacePOSIX(fileSystem, func(context.Context, string, []string) (CommandResult, error) {
+		return CommandResult{Stdout: "0.3.0\n"}, nil
+	}, context.Background(), executable, candidate, "0.3.0")
+	if err == nil || !strings.Contains(err.Error(), "backup permission restore failed") {
+		t.Fatalf("error = %v, want backup permission failure", err)
+	}
+	if len(fileSystem.removed) != 1 || !strings.Contains(filepath.Base(fileSystem.removed[0]), ".ruk-backup-") {
+		t.Fatalf("removed backup paths = %v", fileSystem.removed)
+	}
+	entries, readErr := os.ReadDir(temporary)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".ruk-backup-") {
+			t.Fatalf("backup artifact remained after chmod failure: %s", entry.Name())
+		}
+	}
 }
 
 func TestPackageDelegation(t *testing.T) {
@@ -241,12 +300,75 @@ func TestPackageDelegation(t *testing.T) {
 			return CommandResult{}, nil
 		},
 	})
-	result, err := updater.Update(context.Background(), Options{Distribution: DistributionPackage, CurrentVersion: "0.2.0", Installer: InstallerPNPM})
+	result, err := updater.Update(context.Background(), Options{Distribution: DistributionPackage, CurrentVersion: "0.2.0", Installer: InstallerPNPM, Platform: Platform{OS: "linux"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Status != StatusUpdated || command != "pnpm" || strings.Join(args, " ") != "add --global @xenoviz/ruk@0.3.0" {
 		t.Fatalf("delegation = %+v %s %v", result, command, args)
+	}
+}
+
+func TestWindowsPackageUpdateReportsScheduledReplacement(t *testing.T) {
+	updater := New(Hooks{
+		Discover: func(context.Context) ([]Release, error) {
+			return []Release{testRelease("0.3.0", []byte("ignored"))}, nil
+		},
+		Run: func(_ context.Context, command string, args []string) (CommandResult, error) {
+			if command != "npm" || strings.Join(args, " ") != "install --global @xenoviz/ruk@0.3.0" {
+				t.Fatalf("unexpected package command: %s %s", command, args)
+			}
+			return CommandResult{}, nil
+		},
+	})
+	result, err := updater.Update(context.Background(), Options{
+		Distribution: DistributionPackage, CurrentVersion: "0.2.0",
+		Installer: InstallerNPM, Platform: Platform{OS: "windows"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusScheduled {
+		t.Fatalf("Windows package update status = %s, want %s", result.Status, StatusScheduled)
+	}
+}
+
+func TestPackageUpdatePassesHumanAndMachineReadableCommandIO(t *testing.T) {
+	var seen []CommandIO
+	updater := New(Hooks{
+		Discover: func(context.Context) ([]Release, error) {
+			return []Release{testRelease("0.3.0", []byte("ignored"))}, nil
+		},
+		RunWithIO: func(_ context.Context, command string, args []string, commandIO CommandIO) (CommandResult, error) {
+			if command != "npm" || strings.Join(args, " ") != "install --global @xenoviz/ruk@0.3.0" {
+				return CommandResult{}, fmt.Errorf("unexpected package command: %s %s", command, args)
+			}
+			seen = append(seen, commandIO)
+			return CommandResult{}, nil
+		},
+	})
+	humanIn, humanOut, humanErr := strings.NewReader("confirm\n"), new(strings.Builder), new(strings.Builder)
+	if _, err := updater.Update(context.Background(), Options{
+		Distribution: DistributionPackage, CurrentVersion: "0.2.0",
+		Stdin: humanIn, Stdout: humanOut, Stderr: humanErr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	machineIn, machineOut, machineErr := strings.NewReader("should-not-be-forwarded"), new(strings.Builder), new(strings.Builder)
+	if _, err := updater.Update(context.Background(), Options{
+		Distribution: DistributionPackage, CurrentVersion: "0.2.0",
+		Stdin: machineIn, Stdout: machineOut, Stderr: machineErr, MachineReadable: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("command IO calls = %d, want 2", len(seen))
+	}
+	if seen[0].Stdin != humanIn || seen[0].Stdout != humanOut || seen[0].Stderr != humanErr || seen[0].MachineReadable {
+		t.Fatalf("human command IO = %#v", seen[0])
+	}
+	if seen[1].Stdin != nil || seen[1].Stdout != nil || seen[1].Stderr != nil || !seen[1].MachineReadable {
+		t.Fatalf("machine command IO = %#v", seen[1])
 	}
 }
 

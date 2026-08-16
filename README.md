@@ -165,9 +165,11 @@ Standalone executables select the matching operating-system, architecture, and
 Linux libc asset, verify its manifest-pinned SHA-256 digest, and replace the
 current executable atomically. Published checksum files remain available for
 manual verification. A failed post-replacement version check rolls back on
-POSIX systems; Windows schedules replacement after the running process exits.
-Package installations delegate the exact released version to their owning
-package manager rather than modifying managed files directly. A stable install
+POSIX systems. Windows schedules locked executable replacement after the
+running Ruk process exits, including when a package manager installs the new
+native package. Package installations otherwise delegate the exact released
+version to their owning package manager rather than modifying managed files
+directly. A stable install
 selects stable releases; an install already running a prerelease follows newer
 prereleases on that channel. Ruk never performs background update checks or
 downloads.

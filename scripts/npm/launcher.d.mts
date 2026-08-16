@@ -24,6 +24,10 @@ export declare function windowsCommandDestination(
   environment?: Record<string, string | undefined>,
 ): string;
 
+export declare function windowsUpdateProcessID(
+  environment?: Record<string, string | undefined>,
+): number | undefined;
+
 export declare function installNativeLauncher(options?: {
   root?: string;
   platform?: string;
@@ -31,10 +35,16 @@ export declare function installNativeLauncher(options?: {
   libc?: string;
   commandDestination?: string;
   environment?: Record<string, string | undefined>;
+  spawnReplacement?: (
+    command: string,
+    args: string[],
+    options: { detached: boolean; stdio: "ignore"; windowsHide: boolean },
+  ) => { unref(): void };
 }): Promise<{
   packageName: string;
   target: string;
   destination: string;
   sha256: string;
   installer: "bun" | "npm" | "pnpm" | "yarn";
+  deferred: boolean;
 }>;

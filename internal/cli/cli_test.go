@@ -135,6 +135,27 @@ func TestUpdateCommandPreservesDistributionAndOutputContracts(t *testing.T) {
 	}
 }
 
+func TestUpdateCommandPassesProcessStreamsAndJSONMode(t *testing.T) {
+	t.Parallel()
+
+	stdin := bytes.NewBufferString("update-input")
+	var stdout, stderr bytes.Buffer
+	var received updatepkg.Options
+	application := cli.New(cli.Options{
+		Version: "0.3.0-test", Stdin: stdin, Stdout: &stdout, Stderr: &stderr,
+		Update: func(_ context.Context, options updatepkg.Options) (updatepkg.Result, error) {
+			received = options
+			return updatepkg.Result{Status: updatepkg.StatusUpToDate, CurrentVersion: "0.3.0-test", LatestVersion: "0.3.0-test"}, nil
+		},
+	})
+	if code, err := application.Run(context.Background(), []string{"update", "--json"}); err != nil || code != 0 {
+		t.Fatalf("update = code %d, error %v", code, err)
+	}
+	if received.Stdin != stdin || received.Stdout != &stdout || received.Stderr != &stderr || !received.MachineReadable {
+		t.Fatalf("update streams/mode = %#v", received)
+	}
+}
+
 func TestHelpPreservesPublicContract(t *testing.T) {
 	t.Parallel()
 

@@ -128,6 +128,24 @@ type CommandResult struct {
 
 type CommandRunner func(context.Context, string, []string) (CommandResult, error)
 
+type packageUpdatePIDKey struct{}
+
+// CommandIO controls the terminal streams used by an update command. Human
+// updates may inherit these streams while retaining bounded diagnostic tails;
+// machine-readable updates keep the streams private so they cannot corrupt
+// the single JSON record emitted by the CLI.
+type CommandIO struct {
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Stderr          io.Writer
+	MachineReadable bool
+}
+
+// InteractiveCommandRunner is an optional update command seam that receives
+// the requested terminal policy. Run remains available for compatibility with
+// callers that only need captured output.
+type InteractiveCommandRunner func(context.Context, string, []string, CommandIO) (CommandResult, error)
+
 // FileSystem contains the operations needed by atomic replacement.  WriteFile
 // must fail when path already exists (the default implementation uses O_EXCL).
 type FileSystem interface {
@@ -148,6 +166,7 @@ type Hooks struct {
 	Download        Download
 	FileSystem      FileSystem
 	Run             CommandRunner
+	RunWithIO       InteractiveCommandRunner
 	ScheduleWindows WindowsScheduler
 	HTTPClient      *http.Client
 }
@@ -161,6 +180,10 @@ type Options struct {
 	Platform        Platform
 	Executable      string
 	AllowPrerelease bool
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Stderr          io.Writer
+	MachineReadable bool
 }
 
 type Updater struct {
@@ -168,6 +191,7 @@ type Updater struct {
 	download        Download
 	fileSystem      FileSystem
 	run             CommandRunner
+	runWithIO       InteractiveCommandRunner
 	scheduleWindows WindowsScheduler
 	httpClient      *http.Client
 }
@@ -175,7 +199,7 @@ type Updater struct {
 func New(hooks Hooks) *Updater {
 	return &Updater{
 		discover: hooks.Discover, download: hooks.Download, fileSystem: hooks.FileSystem,
-		run: hooks.Run, scheduleWindows: hooks.ScheduleWindows, httpClient: hooks.HTTPClient,
+		run: hooks.Run, runWithIO: hooks.RunWithIO, scheduleWindows: hooks.ScheduleWindows, httpClient: hooks.HTTPClient,
 	}
 }
 
@@ -260,15 +284,25 @@ func (updater *Updater) Update(ctx context.Context, options Options) (Result, er
 		if err != nil {
 			return Result{}, err
 		}
-		runner := updater.runner()
-		result, err := runner(ctx, command, args)
+		// The package postinstall may need to replace this executable on
+		// Windows. Pass the current PID only to the package-manager child so
+		// the npm launcher can defer that replacement until this process exits.
+		ctx = context.WithValue(ctx, packageUpdatePIDKey{}, os.Getpid())
+		result, err := updater.runPackageCommand(ctx, command, args, CommandIO{
+			Stdin: options.Stdin, Stdout: options.Stdout, Stderr: options.Stderr,
+			MachineReadable: options.MachineReadable,
+		})
 		if err != nil {
 			return Result{}, err
 		}
 		if result.ExitCode != 0 {
 			return Result{}, fmt.Errorf("package manager %s failed with exit code %d", installer, result.ExitCode)
 		}
-		return Result{Status: StatusUpdated, CurrentVersion: current, LatestVersion: latest.String(), Method: string(installer), Asset: nil}, nil
+		status := StatusUpdated
+		if updatePlatformOS(options.Platform) == "windows" {
+			status = StatusScheduled
+		}
+		return Result{Status: status, CurrentVersion: current, LatestVersion: latest.String(), Method: string(installer), Asset: nil}, nil
 	}
 	return updater.updateStandalone(ctx, release, latest.String(), assetName, options, current)
 }
@@ -609,6 +643,15 @@ func replacePOSIX(fsys FileSystem, runner CommandRunner, ctx context.Context, ex
 	if err := fsys.Copy(executable, backup); err != nil {
 		return err
 	}
+	// FileSystem.Copy intentionally creates security-sensitive backups with a
+	// restrictive mode. Restore the original executable permissions before the
+	// backup can become the rollback target.
+	if err := fsys.Chmod(backup, metadata.Mode()&0o777); err != nil {
+		if removeErr := fsys.Remove(backup); removeErr != nil {
+			return fmt.Errorf("%w (backup cleanup failed: %v)", err, removeErr)
+		}
+		return err
+	}
 	rollback := func(cause error) error {
 		if restoreErr := fsys.Rename(backup, executable); restoreErr != nil {
 			return fmt.Errorf("%w (rollback failed: %v)", cause, restoreErr)
@@ -636,6 +679,22 @@ func (updater *Updater) runner() CommandRunner {
 		return updater.run
 	}
 	return OSCommandRunner
+}
+
+func (updater *Updater) runPackageCommand(ctx context.Context, command string, args []string, commandIO CommandIO) (CommandResult, error) {
+	if commandIO.MachineReadable {
+		// Never pass terminal streams into package managers in JSON mode: an
+		// installer prompt could hang automation, and any output would corrupt
+		// the caller's single machine-readable record.
+		commandIO.Stdin, commandIO.Stdout, commandIO.Stderr = nil, nil, nil
+	}
+	if updater.runWithIO != nil {
+		return updater.runWithIO(ctx, command, args, commandIO)
+	}
+	if updater.run != nil {
+		return updater.run(ctx, command, args)
+	}
+	return OSCommandRunnerWithIO(ctx, command, args, commandIO)
 }
 
 func (updater *Updater) defaultWindowsScheduler(fsys FileSystem) WindowsScheduler {
@@ -705,9 +764,41 @@ func (OSFileSystem) Remove(name string) error {
 }
 
 func OSCommandRunner(ctx context.Context, command string, args []string) (CommandResult, error) {
+	return OSCommandRunnerWithIO(ctx, command, args, CommandIO{MachineReadable: true})
+}
+
+// OSCommandRunnerWithIO runs a command with bounded diagnostic tails. Human
+// mode tees output to the supplied streams and forwards stdin; machine mode
+// keeps all streams private so structured output remains uncontaminated.
+func OSCommandRunnerWithIO(ctx context.Context, command string, args []string, commandIO CommandIO) (CommandResult, error) {
 	process := exec.CommandContext(ctx, command, args...)
+	if pid, ok := ctx.Value(packageUpdatePIDKey{}).(int); ok && pid > 0 {
+		environment := make([]string, 0, len(os.Environ())+1)
+		for _, entry := range os.Environ() {
+			if strings.HasPrefix(entry, "RUK_UPDATE_PID=") {
+				continue
+			}
+			environment = append(environment, entry)
+		}
+		process.Env = append(environment, "RUK_UPDATE_PID="+strconv.Itoa(pid))
+	}
 	stdout, stderr := newTailBuffer(MaxCommandTail), newTailBuffer(MaxCommandTail)
-	process.Stdout, process.Stderr = stdout, stderr
+	if commandIO.MachineReadable {
+		process.Stdin = nil
+		process.Stdout, process.Stderr = stdout, stderr
+	} else {
+		process.Stdin = commandIO.Stdin
+		if commandIO.Stdout != nil {
+			process.Stdout = io.MultiWriter(stdout, commandIO.Stdout)
+		} else {
+			process.Stdout = stdout
+		}
+		if commandIO.Stderr != nil {
+			process.Stderr = io.MultiWriter(stderr, commandIO.Stderr)
+		} else {
+			process.Stderr = stderr
+		}
+	}
 	err := process.Run()
 	if err == nil {
 		return CommandResult{Stdout: stdout.String(), Stderr: stderr.String()}, nil
@@ -937,6 +1028,14 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 // runtime helpers are variables to keep platform naming testable without
 // requiring platform-specific files in this foundational package.
 var runtimeGOOS = func() string { return runtime.GOOS }
+
+func updatePlatformOS(platform Platform) string {
+	if platform.OS != "" {
+		return platform.OS
+	}
+	return runtimeGOOS()
+}
+
 var runtimeGOARCH = func() string { return runtime.GOARCH }
 
 // RuntimePlatform identifies the native standalone release asset without

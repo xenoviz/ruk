@@ -233,6 +233,9 @@ are non-retryable `INVALID_ARGUMENT` errors raised before acquisition.
 `ruk update` is explicit and never runs in the background. An npm installation
 delegates the exact version to the package manager recorded by its durable
 distribution marker; standalone binaries verify the release manifest and
-replace their native executable atomically. Stable installations select stable
-releases. A current prerelease follows newer prereleases automatically, which
-keeps beta installations on the beta channel without a second flag.
+replace their native executable atomically. On Windows, either distribution
+reports a scheduled update while a detached handoff waits for the running Ruk
+process to exit before replacing locked native files. Stable installations
+select stable releases. A current prerelease follows newer prereleases
+automatically, which keeps beta installations on the beta channel without a
+second flag.
