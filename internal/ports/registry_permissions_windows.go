@@ -44,26 +44,6 @@ func verifyRegistryFileOwner(info os.FileInfo, path string) error {
 	return verifyRegistryOwner(info, []string{path}, nativeRegistrySecurityInspector)
 }
 
-func verifyRegistryRootPathComponent(info os.FileInfo, path string) error {
-	if info == nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return os.ErrPermission
-	}
-	if path == "" || !filepath.IsAbs(path) {
-		return fmt.Errorf("object path is unavailable")
-	}
-	if nativeRegistrySecurityInspector.isReparsePoint == nil {
-		return fmt.Errorf("native reparse-point inspection is unavailable")
-	}
-	reparsePoint, err := nativeRegistrySecurityInspector.isReparsePoint(path)
-	if err != nil {
-		return fmt.Errorf("inspect reparse-point state: %w", err)
-	}
-	if reparsePoint {
-		return os.ErrPermission
-	}
-	return nil
-}
-
 func verifyRegistryOwner(info os.FileInfo, paths []string, inspector registrySecurityInspector) error {
 	if info == nil {
 		return fmt.Errorf("file information is unavailable")

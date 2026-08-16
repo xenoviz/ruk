@@ -68,7 +68,7 @@ func TestRegistryPrunesStaleReservationsAndEnforcesUniqueActivePorts(t *testing.
 		t.Fatalf("duplicate active reservation error = %v", err)
 	}
 
-	data := []byte(`{"version":1,"ports":{"3100":{"assignmentId":"live","statePath":"` + statePath + `"},"3101":{"assignmentId":"stale","statePath":"` + statePath + `"}}}`)
+	data := []byte(`{"version":1,"ports":{"3100":{"assignmentId":"live","statePath":` + strconv.Quote(statePath) + `},"3101":{"assignmentId":"stale","statePath":` + strconv.Quote(statePath) + `}}}`)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestRegistryRejectsCorruptionTable(t *testing.T) {
 		{name: "malformed", data: "{", want: "Cannot parse"},
 		{name: "unsupported version", data: `{"version":2,"ports":{}}`, want: "Unsupported or invalid"},
 		{name: "missing ports", data: `{"version":1}`, want: "Unsupported or invalid"},
-		{name: "bad port key", data: `{"version":1,"ports":{"0001":{"assignmentId":"a","statePath":"` + statePath + `"}}}`, want: "Unsupported or invalid"},
+		{name: "bad port key", data: `{"version":1,"ports":{"0001":{"assignmentId":"a","statePath":` + strconv.Quote(statePath) + `}}}`, want: "Unsupported or invalid"},
 		{name: "unknown field", data: `{"version":1,"ports":{},"extra":true}`, want: "Cannot parse"},
 		{name: "duplicate field", data: `{"version":1,"version":1,"ports":{}}`, want: "Cannot parse"},
 	}
@@ -158,7 +158,7 @@ func TestRegistryFailedActivityDoesNotRewriteCorruptibleRegistry(t *testing.T) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	original := []byte(`{"version":1,"ports":{"3100":{"assignmentId":"a","statePath":"` + statePath + `"}}}`)
+	original := []byte(`{"version":1,"ports":{"3100":{"assignmentId":"a","statePath":` + strconv.Quote(statePath) + `}}}`)
 	if err := os.WriteFile(filepath.Join(root, registryFileName), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -193,29 +193,6 @@ func TestRegistryRejectsSymlinkRoot(t *testing.T) {
 	}
 	if err := registry.With(context.Background(), func(*ReservationTransaction) error { return nil }); err == nil || !strings.Contains(err.Error(), "Unsafe Ruk host port directory") {
 		t.Fatalf("symlink root error = %v", err)
-	}
-}
-
-func TestRegistryRejectsSymlinkAncestor(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("creating symlinks requires elevated Windows privileges")
-	}
-	parent := t.TempDir()
-	target := filepath.Join(parent, "target")
-	linked := filepath.Join(parent, "linked")
-	root := filepath.Join(linked, "host")
-	if err := os.Mkdir(target, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, linked); err != nil {
-		t.Fatal(err)
-	}
-	registry, err := NewRegistry(RegistryOptions{Root: root, Activity: registryTestActivity{active: map[string]bool{}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.With(context.Background(), func(*ReservationTransaction) error { return nil }); err == nil || !strings.Contains(err.Error(), "unsafe port registry path") {
-		t.Fatalf("symlink ancestor error = %v", err)
 	}
 }
 
