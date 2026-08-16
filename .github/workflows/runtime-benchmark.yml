@@ -72,7 +72,7 @@ jobs:
             --node "$RUNNER_TEMP/ruk-node-oracle/dist/bin/ruk.js" \
             --binary artifacts/ruk \
             --samples 3 \
-            --duration 12000 \
+            --duration 18000 \
             --ttl 0.5 \
             --concurrency 1,10,20 \
             > artifacts/runtime-benchmark.json
@@ -86,7 +86,7 @@ jobs:
             --node "$env:RUNNER_TEMP\ruk-node-oracle\dist\bin\ruk.js" `
             --binary artifacts\ruk.exe `
             --samples 3 `
-            --duration 12000 `
+            --duration 18000 `
             --ttl 0.5 `
             --concurrency 1,10,20 `
             | Set-Content -Encoding utf8 artifacts\runtime-benchmark.json

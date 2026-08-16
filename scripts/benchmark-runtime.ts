@@ -8,6 +8,7 @@ import {
   summarizeSamples,
 } from "./runtime-benchmark-schema.js";
 import type {
+  BenchmarkFailure,
   ConcurrencyBenchmark,
   RuntimeBenchmarkResult,
   TargetBenchmark,
@@ -78,6 +79,15 @@ interface WrapperResult {
   stdout: string;
   stderr: string;
   elapsedMs: number;
+}
+
+const MANAGED_CHILD_READINESS_TIMEOUT_MS = 5_000;
+const MANAGED_CHILD_SETTLE_MS = 250;
+const MANAGED_CHILD_POLL_MS = 25;
+
+export function normalizeExecutableName(command: string): string {
+  const basename = command.toLowerCase().replaceAll("\\", "/").split("/").at(-1) ?? "";
+  return basename.endsWith(".exe") ? basename.slice(0, -4) : basename;
 }
 
 function run(spec: CommandSpec): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -182,6 +192,34 @@ async function inspect(inspector: InspectorTarget, pids: readonly number[]): Pro
   return report as ProcessReport;
 }
 
+export function hasExpectedManagedChild(
+  report: ProcessReport,
+  rootPid: number,
+  expectedCommand: string,
+): boolean {
+  const records = new Map(report.processes.map((process) => [process.pid, process]));
+  if (!records.has(rootPid)) return false;
+  const children = new Map<number, ProcessRecord[]>();
+  for (const process of report.processes) {
+    const siblings = children.get(process.parentPid) ?? [];
+    siblings.push(process);
+    children.set(process.parentPid, siblings);
+  }
+  const expectedName = normalizeExecutableName(expectedCommand);
+  const pending = [rootPid];
+  const seen = new Set<number>(pending);
+  while (pending.length > 0) {
+    const parent = pending.shift()!;
+    for (const child of children.get(parent) ?? []) {
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
+      if (normalizeExecutableName(child.name) === expectedName) return true;
+      pending.push(child.pid);
+    }
+  }
+  return false;
+}
+
 function isPowerShell(name: string): boolean {
   const normalized = name.toLowerCase().replaceAll("\\", "/").split("/").at(-1) ?? "";
   return normalized === "powershell.exe" || normalized === "pwsh.exe" || normalized === "powershell" || normalized === "pwsh";
@@ -190,6 +228,27 @@ function isPowerShell(name: string): boolean {
 export function hasCompleteRootSample(report: ProcessReport, rootPids: readonly number[]): boolean {
   const processIDs = new Set(report.processes.map((process) => process.pid));
   return rootPids.every((pid) => processIDs.has(pid));
+}
+
+async function waitForManagedChild(
+  inspector: InspectorTarget,
+  rootPid: number,
+  expectedCommand: string,
+  isAlive: () => boolean,
+): Promise<void> {
+  const expectedName = normalizeExecutableName(expectedCommand);
+  const deadline = performance.now() + MANAGED_CHILD_READINESS_TIMEOUT_MS;
+  while (performance.now() < deadline) {
+    if (!isAlive()) throw new Error(`benchmark wrapper root ${rootPid} exited before managed ${expectedName} child readiness`);
+    const report = await inspect(inspector, [rootPid]);
+    if (hasExpectedManagedChild(report, rootPid, expectedCommand)) {
+      await new Promise((resolve) => setTimeout(resolve, MANAGED_CHILD_SETTLE_MS));
+      if (!isAlive()) throw new Error(`benchmark wrapper root ${rootPid} exited during managed ${expectedName} child settling`);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, MANAGED_CHILD_POLL_MS));
+  }
+  throw new Error(`benchmark wrapper root ${rootPid} did not expose managed ${expectedName} child within ${MANAGED_CHILD_READINESS_TIMEOUT_MS}ms`);
 }
 
 async function waitForWrapperCompletion(completion: Promise<WrapperResult[]>, timeoutMs: number): Promise<boolean> {
@@ -224,35 +283,14 @@ async function measureWrappers(
   commands: readonly CommandSpec[],
   durationMs: number,
   inspector: InspectorTarget,
+  expectedChildCommand: string,
   legacyBaseline: boolean,
 ): Promise<Measurement> {
   const started = performance.now();
   const children: ChildProcessWithoutNullStreams[] = [];
   const completions: Array<Promise<WrapperResult>> = [];
-  for (const [index, spec] of commands.entries()) {
-    const childStarted = performance.now();
-    const child = spawn(spec.command, spec.args, {
-      cwd: spec.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    children.push(child);
-    completions.push(new Promise<WrapperResult>((resolve, reject) => {
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
-      child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
-      child.once("error", reject);
-      child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr, elapsedMs: performance.now() - childStarted }));
-    }));
-    if (process.platform === "win32" && index < commands.length - 1) {
-      // Avoid making the legacy baseline's synchronized state-write storm the
-      // benchmark result. All wrappers still overlap for more than ten seconds
-      // at concurrency 20, and the same schedule is used for the Go target.
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  const completion = Promise.all(completions);
+  let completion: Promise<WrapperResult[]> | undefined;
+  let firstWrapperNominalEnd = Number.POSITIVE_INFINITY;
   let idleResidentBytes = 0;
   let coldResidentBytes = 0;
   let idleChildProcessCount = 0;
@@ -289,6 +327,50 @@ async function measureWrappers(
   const deadline = started + durationMs + 30_000;
   let results: WrapperResult[];
   try {
+    // Every target uses the same readiness-gated schedule. The legacy Node
+    // runtime performs state reads and writes during `run`; a fixed launch
+    // delay is not enough to prove that its managed child has started and its
+    // initial state mutation has settled. Starting the next wrapper only
+    // after this proof avoids measuring a synchronized fixture-write storm
+    // while retaining one shared repository and overlapping steady state.
+    for (const spec of commands) {
+      if (performance.now() >= started + durationMs) {
+        throw new Error("benchmark readiness schedule did not leave an overlapping measurement window");
+      }
+      const childStarted = performance.now();
+      const child = spawn(spec.command, spec.args, {
+        cwd: spec.cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      children.push(child);
+      if (children.length === 1) firstWrapperNominalEnd = childStarted + durationMs;
+      completions.push(new Promise<WrapperResult>((resolve) => {
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+        child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+        child.once("error", (error) => resolve({
+          code: 1,
+          stdout,
+          stderr: `${stderr}${stderr ? "\n" : ""}${error instanceof Error ? error.message : String(error)}`,
+          elapsedMs: performance.now() - childStarted,
+        }));
+        child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr, elapsedMs: performance.now() - childStarted }));
+      }));
+      if (!child.pid) throw new Error("benchmark wrapper did not expose a process ID");
+      await waitForManagedChild(
+        inspector,
+        child.pid,
+        expectedChildCommand,
+        () => child.exitCode === null && child.signalCode === null,
+      );
+    }
+    const remainingBeforeFirstWrapperExit = firstWrapperNominalEnd - performance.now();
+    if (remainingBeforeFirstWrapperExit < durationMs / 2) {
+      throw new Error(`benchmark readiness schedule left only ${Math.max(0, Math.round(remainingBeforeFirstWrapperExit))}ms before the first wrapper ended; need at least ${Math.round(durationMs / 2)}ms of overlap`);
+    }
+    completion = Promise.all(completions);
     while (children.some(({ exitCode, signalCode }) => exitCode === null && signalCode === null)) {
       if (performance.now() > deadline) {
         throw new Error(`benchmark workload exceeded ${Math.round((deadline - started) / 1000)} seconds`);
@@ -311,6 +393,7 @@ async function measureWrappers(
       if (allRootPids.length > 0) recordReport(await inspect(inspector, allRootPids), allRootPids, false);
     }
   } catch (error) {
+    completion ??= Promise.all(completions);
     try {
       await stopWrapperRoots(children, completion);
     } catch (cleanupError) {
@@ -352,6 +435,26 @@ export function isTolerableLegacyWrapperFailure(result: WrapperResult, durationM
   return /^ruk: Process \d+ could not be identified, so its workspace cannot be released safely$/.test(message);
 }
 
+export async function collectTargetResults(
+  targetNames: readonly TargetName[],
+  runTarget: (target: TargetName) => Promise<TargetBenchmark>,
+): Promise<{
+  targets: TargetBenchmark[];
+  failures: BenchmarkFailure[];
+}> {
+  const targets: TargetBenchmark[] = [];
+  const failures: BenchmarkFailure[] = [];
+  for (const target of targetNames) {
+    try {
+      targets.push(await runTarget(target));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({ target, message });
+    }
+  }
+  return { targets, failures };
+}
+
 async function benchmarkTarget(
   target: Target,
   repository: string,
@@ -379,7 +482,7 @@ async function benchmarkTarget(
     for (let sample = 0; sample < samples; sample += 1) {
       const workload = await createWorkload(target, repository, concurrency, sample, durationMs, ttlMinutes);
       try {
-        const measurement = await measureWrappers(workload.commands, durationMs, inspector, target.name === "node");
+        const measurement = await measureWrappers(workload.commands, durationMs, inspector, target.childCommand, target.name === "node");
         elapsed.push(measurement.elapsedMs);
         idle.push(measurement.idleResidentBytes);
         cold.push(measurement.coldResidentBytes);
@@ -471,6 +574,9 @@ function makeSummary(result: RuntimeBenchmarkResult): string {
     }
   }
   const assertion = result.assertions;
+  for (const failure of result.failures) {
+    lines.push(`Target failure (${failure.target}): ${failure.message}`);
+  }
   const reductions = Object.entries(assertion.ramReductionPercentByConcurrency)
     .map(([concurrency, percent]) => `c=${concurrency}:${percent === null ? "n/a" : `${percent.toFixed(1)}%`}`)
     .join(", ");
@@ -486,7 +592,12 @@ export function observedGoPowerShellChildren(targets: readonly TargetBenchmark[]
     .reduce((maximum, wrapper) => Math.max(maximum, wrapper.peakWindowsPowerShellChildren.maximum), 0);
 }
 
-function makeAssertions(targets: readonly TargetBenchmark[], concurrencyLevels: readonly number[]): RuntimeBenchmarkResult["assertions"] {
+export function makeAssertions(
+  targets: readonly TargetBenchmark[],
+  concurrencyLevels: readonly number[],
+  failures: readonly BenchmarkFailure[] = [],
+  windowsApplicable = process.platform === "win32",
+): RuntimeBenchmarkResult["assertions"] {
   const node = targets.find((target) => target.name === "node");
   const go = targets.find((target) => target.name === "go");
   const failureReasons: string[] = [];
@@ -500,11 +611,22 @@ function makeAssertions(targets: readonly TargetBenchmark[], concurrencyLevels: 
   }
   const reductions = Object.values(ramReductionPercentByConcurrency);
   const ramTargetMet = reductions.length > 0 && reductions.every((value) => value !== null && value >= 50);
-  if (!ramTargetMet) failureReasons.push("Go did not reduce median peak RSS by at least 50% at every requested concurrency level");
+  if (!node || !go) {
+    failureReasons.push("RAM comparison unavailable: both runtimes must complete");
+  } else if (!ramTargetMet) {
+    failureReasons.push("Go did not reduce median peak RSS by at least 50% at every requested concurrency level");
+  }
+  for (const failure of failures) {
+    failureReasons.push(`${failure.target} benchmark failed: ${failure.message}`);
+  }
   const observedWindowsPowerShellChildren = observedGoPowerShellChildren(targets);
-  const applicable = process.platform === "win32";
-  const zeroRoutineWindowsPowerShellChildren = !applicable || observedWindowsPowerShellChildren === 0;
-  if (!zeroRoutineWindowsPowerShellChildren) failureReasons.push("routine Windows PowerShell children were observed");
+  const applicable = windowsApplicable;
+  const zeroRoutineWindowsPowerShellChildren = !applicable || (go !== undefined && observedWindowsPowerShellChildren === 0);
+  if (applicable && !go) {
+    failureReasons.push("Windows PowerShell evidence unavailable: Go runtime did not complete");
+  } else if (!zeroRoutineWindowsPowerShellChildren) {
+    failureReasons.push("routine Windows PowerShell children were observed");
+  }
   return {
     minimumRamReductionPercent: 50,
     ramReductionPercentByConcurrency,
@@ -539,10 +661,12 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
       prefix: [], childCommand: nodeExecutable, cwd: root,
     };
     const inspector = { command: inspectorPath, args: [], cwd: root };
-    const targets = [
-      await benchmarkTarget(node, repository, inspector, parsed.samples, parsed.durationMs, parsed.ttlMinutes, parsed.concurrencyLevels),
-      await benchmarkTarget(go, repository, inspector, parsed.samples, parsed.durationMs, parsed.ttlMinutes, parsed.concurrencyLevels),
-    ];
+    const targetByName = new Map<TargetName, Target>([[node.name, node], [go.name, go]]);
+    const { targets, failures } = await collectTargetResults([node.name, go.name], async (name) => {
+      const target = targetByName.get(name);
+      if (!target) throw new Error(`benchmark target ${name} is not configured`);
+      return benchmarkTarget(target, repository, inspector, parsed.samples, parsed.durationMs, parsed.ttlMinutes, parsed.concurrencyLevels);
+    });
     const result = runtimeBenchmarkResult({
       generatedAt: new Date().toISOString(),
       platform: process.platform,
@@ -552,11 +676,12 @@ export async function main(args = process.argv.slice(2)): Promise<RuntimeBenchma
       assignmentTTLMinutes: parsed.ttlMinutes,
       concurrencyLevels: [...parsed.concurrencyLevels],
       targets,
-      assertions: makeAssertions(targets, parsed.concurrencyLevels),
+      failures,
+      assertions: makeAssertions(targets, parsed.concurrencyLevels, failures),
     });
     process.stderr.write(`${makeSummary(result)}\n`);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    if (parsed.assertTarget && result.assertions.failureReasons.length > 0) {
+    if (parsed.assertTarget && (result.failures.length > 0 || result.assertions.failureReasons.length > 0)) {
       throw new Error(result.assertions.failureReasons.join("; "));
     }
     return result;

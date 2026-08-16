@@ -30,9 +30,13 @@ failure is tolerated only after that wrapper completed the full workload and
 only for the historical post-exit identity-retention error. Atomic state errors
 remain benchmark failures because they can occur before the workload starts.
 Every early failure and every Go failure still fails the benchmark.
-Windows wrapper starts are spaced by 100 ms for both targets, leaving more than
-ten seconds with all 20 wrappers active while avoiding an artificial synchronized
-write burst in the historical state implementation.
+Both targets use the same readiness-gated launch schedule. The harness starts
+the next wrapper only after the current wrapper exposes its expected managed
+child, then waits 250 ms for its initial state mutation to settle. It rejects a
+sample unless every wrapper is ready with at least half of the configured
+duration left for concurrent measurement. This keeps the shared repository and
+steady-state contention while avoiding an artificial synchronized startup
+burst in the historical state implementation.
 Measurements are machine-specific, so attach the raw JSON and runner details to
 the migration pull request rather than treating one local sample as a universal
 number.

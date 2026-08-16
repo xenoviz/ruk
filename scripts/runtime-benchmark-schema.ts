@@ -23,8 +23,14 @@ export interface TargetBenchmark {
   wrappers: ConcurrencyBenchmark[];
 }
 
+export interface BenchmarkFailure {
+  target: TargetBenchmark["name"];
+  message: string;
+}
+
 export interface RuntimeBenchmarkResult {
-  schemaVersion: 2;
+  schemaVersion: 3;
+  fixtureMode: "shared-repository-readiness-gated";
   generatedAt: string;
   platform: { os: NodeJS.Platform; architecture: string };
   sampleCount: number;
@@ -32,6 +38,7 @@ export interface RuntimeBenchmarkResult {
   assignmentTTLMinutes: number;
   concurrencyLevels: number[];
   targets: TargetBenchmark[];
+  failures: BenchmarkFailure[];
   assertions: RuntimeBenchmarkAssertions;
 }
 
@@ -70,10 +77,12 @@ export function runtimeBenchmarkResult(input: {
   assignmentTTLMinutes: number;
   concurrencyLevels: number[];
   targets: TargetBenchmark[];
+  failures: BenchmarkFailure[];
   assertions: RuntimeBenchmarkAssertions;
 }): RuntimeBenchmarkResult {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    fixtureMode: "shared-repository-readiness-gated",
     generatedAt: new Date(input.generatedAt).toISOString(),
     platform: { os: input.platform, architecture: input.architecture },
     sampleCount: input.sampleCount,
@@ -81,6 +90,7 @@ export function runtimeBenchmarkResult(input: {
     assignmentTTLMinutes: input.assignmentTTLMinutes,
     concurrencyLevels: [...input.concurrencyLevels],
     targets: input.targets,
+    failures: input.failures,
     assertions: input.assertions,
   };
 }
