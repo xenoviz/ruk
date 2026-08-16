@@ -393,12 +393,16 @@ func releaseRepository(ctx context.Context, repository git.Repository, assignmen
 			return result
 		},
 	})
-	snapshot, err := store.Read(ctx)
-	if err != nil {
-		return RepositoryReleaseResult{}, err
-	}
-	preserved := assignmentProjections(snapshot, assignmentID)
-	result, err := release.ReleaseAssignment(ctx, assignmentID, lifecycle.ReleaseOptions{Force: force, PreservedProjections: preserved})
+	result, err := release.ReleaseAssignment(ctx, assignmentID, lifecycle.ReleaseOptions{
+		Force: force,
+		PreservedProjectionReader: func(readCtx context.Context, _ state.WorkspaceRecord) ([]string, error) {
+			snapshot, readErr := store.Read(readCtx)
+			if readErr != nil {
+				return nil, readErr
+			}
+			return assignmentProjections(snapshot, assignmentID), nil
+		},
+	})
 	if err != nil {
 		return RepositoryReleaseResult{}, err
 	}

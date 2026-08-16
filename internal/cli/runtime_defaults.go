@@ -327,9 +327,55 @@ func runtimeGC(ctx context.Context, repository git.Repository, options lifecycle
 	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{
 		Reader: store, Lifecycle: service, Release: release, Git: workspace,
 		TreeState: stateTreeDeleter{store: store}, Locker: locker, LocksRoot: paths.Locks,
-		Canonicalize: func(_ context.Context, path string) (string, error) { return filepath.EvalSymlinks(path) },
+		Canonicalize: func(_ context.Context, path string) (string, error) { return canonicalRuntimePath(path) },
 	})
 	return gc.Run(ctx, options)
+}
+
+// canonicalRuntimePath resolves an existing path through symlinks while also
+// supporting state records whose workspace leaf was never created or has
+// already been removed. Only a missing leaf is tolerated; unreadable or
+// otherwise invalid ancestors still fail closed. Resolving the nearest
+// existing ancestor preserves containment checks when an ancestor is a
+// symlink, rather than falling back to a purely lexical path.
+func canonicalRuntimePath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("runtime path must not be blank")
+	}
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	candidate := absolute
+	for {
+		canonical, evalErr := filepath.EvalSymlinks(candidate)
+		if evalErr == nil {
+			canonical, err = filepath.Abs(filepath.Clean(canonical))
+			if err != nil {
+				return "", err
+			}
+			suffix, err := filepath.Rel(candidate, absolute)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Abs(filepath.Clean(filepath.Join(canonical, suffix)))
+		}
+		if !errors.Is(evalErr, os.ErrNotExist) {
+			return "", evalErr
+		}
+		if info, lstatErr := os.Lstat(candidate); lstatErr == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", fmt.Errorf("resolve runtime path %s: dangling symlink", candidate)
+			}
+		} else if !errors.Is(lstatErr, os.ErrNotExist) {
+			return "", lstatErr
+		}
+		parent := filepath.Dir(candidate)
+		if sameRuntimePath(parent, candidate) {
+			return "", evalErr
+		}
+		candidate = parent
+	}
 }
 
 type stateTreeDeleter struct{ store *state.Store }
@@ -378,25 +424,23 @@ type runtimeReleaseOperation struct {
 }
 
 func (operation runtimeReleaseOperation) ReleaseAssignment(ctx context.Context, assignmentID string, options lifecycle.ReleaseOptions) (lifecycle.ReleaseResult, error) {
-	if options.PreservedProjections == nil && operation.store != nil {
-		snapshot, err := operation.store.Read(ctx)
-		if err != nil {
-			return lifecycle.ReleaseResult{}, err
-		}
-		for _, workspace := range snapshot.Workspaces {
-			if workspace.Assignment == nil || workspace.Assignment.ID != assignmentID {
-				continue
-			}
+	if options.PreservedProjections == nil && options.PreservedProjectionReader == nil && operation.store != nil {
+		options.PreservedProjectionReader = func(readCtx context.Context, workspace state.WorkspaceRecord) ([]string, error) {
 			key, err := state.TreeKey(workspace.Path)
 			if err != nil {
-				return lifecycle.ReleaseResult{}, err
+				return nil, err
 			}
-			if tree, ok := snapshot.Trees[key]; ok {
-				if dependencies.ProjectionIntegrityValid(workspace.Path, tree.Projections, tree.ProjectionFingerprint) {
-					options.PreservedProjections = append([]string(nil), tree.Projections...)
-				}
+			snapshot, readErr := operation.store.Read(readCtx)
+			if readErr != nil {
+				return nil, readErr
 			}
-			break
+			if snapshot == nil {
+				return nil, errors.New("release state reader returned nil state")
+			}
+			if tree, ok := snapshot.Trees[key]; ok && dependencies.ProjectionIntegrityValid(workspace.Path, tree.Projections, tree.ProjectionFingerprint) {
+				return append([]string(nil), tree.Projections...), nil
+			}
+			return nil, nil
 		}
 	}
 	return operation.service.ReleaseAssignment(ctx, assignmentID, options)

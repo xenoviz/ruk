@@ -50,6 +50,10 @@ versioning.
   both address families, recycle shell acquisitions that fail before spawning,
   and return exact retained-acquisition recovery metadata without changing the
   underlying machine-readable failure category.
+- Resolve package executable symlinks before update ownership detection,
+  validate release projections inside the workspace fence, recover missing GC
+  leaves without trusting dangling symlinks, preserve Windows rollback backups,
+  and restore shared-backend dependency error classification.
 
 ## 0.1.2 - 2026-08-08
 

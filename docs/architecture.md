@@ -191,7 +191,10 @@ the current post-heartbeat expiry from the retained record. Command
 launch snapshots its original assignment across dependency repair and rejects
 reassignment or an initially unassigned pool slot instead of adopting another
 agent's lease. Assigned dependency synchronization revalidates that same immutable
-assignment inside the tree lock before inspecting or modifying dependency projections.
+assignment inside the tree lock before inspecting or modifying dependency
+projections. Release snapshots and validates projections only after acquiring
+that same tree lock, so it cannot preserve stale projection metadata across a
+concurrent synchronization.
 Explicit `--fetch` is
 the only workspace operation in this layer that contacts a Git remote, and an
 explicit remote name must exist.
@@ -213,6 +216,9 @@ cannot be removed after being reported as available.
 Collection revalidates every stale snapshot under the slot's acquisition lock,
 passes that update fence into the lifecycle transaction, and acquisition handoff
 does not overwrite a concurrent lease renewal.
+Missing workspace leaves are canonicalized through their nearest existing
+ancestor for recovery, while blank paths and dangling symlink ancestors fail
+closed.
 Ordinary release cannot cross an active acquisition marker, and an unreadable
 identity for a provably live lock owner never authorizes stale-lock recovery.
 

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/xenoviz/ruk/internal/cli"
 	updatepkg "github.com/xenoviz/ruk/internal/update"
@@ -22,6 +24,11 @@ func main() {
 }
 
 func runMain(args []string, stdout, stderr io.Writer) int {
+	entrypoint, err := resolveEntrypoint(os.Executable)
+	if err != nil {
+		_ = cli.WriteError(stderr, err, cli.JSONRequested(args))
+		return 1
+	}
 	defaults, err := cli.NewRuntimeDefaults(cli.RuntimeDefaultsOptions{})
 	if err != nil {
 		_ = cli.WriteError(stderr, err, cli.JSONRequested(args))
@@ -30,10 +37,7 @@ func runMain(args []string, stdout, stderr io.Writer) int {
 	options := defaults.Options()
 	options.Version = version
 	options.Distribution = updatepkg.Distribution(distribution)
-	options.Entrypoint = os.Args[0]
-	if executable, executableErr := os.Executable(); executableErr == nil {
-		options.Entrypoint = executable
-	}
+	options.Entrypoint = entrypoint
 	options.Stdout = stdout
 	options.Stderr = stderr
 	application := cli.New(options)
@@ -43,4 +47,25 @@ func runMain(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return code
+}
+
+// resolveEntrypoint resolves the executable target before update ownership is
+// selected. Package launchers may invoke the native binary through a symlink;
+// the distribution marker is stored beside the target, not beside the link.
+// Failure is fatal because falling back to an unresolved path could select the
+// wrong package manager or update the wrong executable.
+func resolveEntrypoint(executable func() (string, error)) (string, error) {
+	path, err := executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve executable symlinks: %w", err)
+	}
+	abs, err := filepath.Abs(filepath.Clean(resolved))
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+	return abs, nil
 }

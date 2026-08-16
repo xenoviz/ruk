@@ -96,13 +96,15 @@ func (processes *releaseProcesses) Terminate(_ context.Context, _ state.TrackedP
 }
 
 type releaseGit struct {
-	err      error
-	relocked int
-	paths    []string
+	err         error
+	relocked    int
+	paths       []string
+	projections []string
 }
 
-func (git *releaseGit) ResetCleanReturn(_ context.Context, path string, _ bool, _ []string) error {
+func (git *releaseGit) ResetCleanReturn(_ context.Context, path string, _ bool, projections []string) error {
 	git.paths = append(git.paths, path)
+	git.projections = append([]string(nil), projections...)
 	return git.err
 }
 
@@ -122,13 +124,17 @@ func (ports *releasePorts) Release(context.Context, string) error {
 }
 
 type releaseLocker struct {
-	calls int
-	path  string
+	calls  int
+	path   string
+	inside func()
 }
 
 func (locker *releaseLocker) With(_ context.Context, path string, callback func() error) error {
 	locker.calls++
 	locker.path = path
+	if locker.inside != nil {
+		locker.inside()
+	}
 	return callback()
 }
 
@@ -155,6 +161,47 @@ func TestReleaseServiceCleanRelease(t *testing.T) {
 	}
 	if locker.calls != 1 || !strings.Contains(locker.path, "workspace-") {
 		t.Fatalf("lock calls = %d path %q", locker.calls, locker.path)
+	}
+}
+
+func TestReleaseServiceReadsPreservedProjectionsInsideWorkspaceFence(t *testing.T) {
+	store, service, assignmentID, path := newReleaseFixture(t, nil)
+	git := &releaseGit{}
+	locker := &releaseLocker{}
+	readerCalled := false
+	key, err := state.TreeKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locker.inside = func() {
+		tree := store.current.Trees[key]
+		tree.Projections = []string{"packages/api/node_modules"}
+		store.current.Trees[key] = tree
+	}
+	reader := func(ctx context.Context, workspace state.WorkspaceRecord) ([]string, error) {
+		readerCalled = true
+		if locker.calls != 1 || locker.path == "" {
+			t.Fatalf("projection reader ran outside workspace fence: calls=%d path=%q", locker.calls, locker.path)
+		}
+		if workspace.Path != path {
+			t.Fatalf("projection reader workspace = %q, want %q", workspace.Path, path)
+		}
+		snapshot, readErr := store.Read(ctx)
+		if readErr != nil {
+			return nil, readErr
+		}
+		return append([]string(nil), snapshot.Trees[key].Projections...), nil
+	}
+	release := lifecycle.NewReleaseService(service, lifecycle.ReleaseServiceOptions{
+		Reader: store, Processes: &releaseProcesses{}, Git: git, Ports: &releasePorts{}, Locker: locker,
+		LocksRoot: t.TempDir(),
+	})
+
+	if _, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{PreservedProjectionReader: reader}); err != nil {
+		t.Fatalf("Release returned an error: %v", err)
+	}
+	if !readerCalled || len(git.projections) != 1 || git.projections[0] != "packages/api/node_modules" {
+		t.Fatalf("projection reader/git inputs = %v/%v, want fenced reader and current projection", readerCalled, git.projections)
 	}
 }
 

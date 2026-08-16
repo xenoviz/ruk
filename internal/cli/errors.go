@@ -344,6 +344,12 @@ func classifyMessage(message string) (ErrorCode, bool) {
 	if strings.Contains(lower, "is required but was not found on path") {
 		return DependencyPreparationCode, true
 	}
+	// Shared Bun/pnpm preflight and version checks are dependency preparation,
+	// even when their wording contains "requires", which otherwise belongs to
+	// invalid-argument validation.
+	if strings.Contains(lower, "shared dependency backend") || strings.Contains(lower, "global virtual store requires") {
+		return DependencyPreparationCode, true
+	}
 
 	// Parse/configuration failures are intentionally checked before broad
 	// dependency and Git terms, as in the TypeScript classifier.

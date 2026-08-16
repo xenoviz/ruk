@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +104,65 @@ func TestRuntimeGCPlanIsFailClosedAndUsesRepositoryState(t *testing.T) {
 	}
 	if result.Status != "planned" || result.Removed == nil || result.Expired == nil {
 		t.Fatalf("GC result = %#v, want canonical empty plan", result)
+	}
+}
+
+func TestCanonicalRuntimePathResolvesMissingLeafThroughExistingAncestor(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "never-created", "workspace")
+
+	got, err := canonicalRuntimePath(missing)
+	if err != nil {
+		t.Fatalf("canonicalRuntimePath returned an error for a missing leaf: %v", err)
+	}
+	want := filepath.Clean(missing)
+	if got != want {
+		t.Fatalf("canonicalRuntimePath = %q, want %q", got, want)
+	}
+}
+
+func TestCanonicalRuntimePathRejectsBlankInput(t *testing.T) {
+	for _, value := range []string{"", " ", "\t"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := canonicalRuntimePath(value); err == nil {
+				t.Fatal("canonicalRuntimePath accepted blank input")
+			}
+		})
+	}
+}
+
+func TestCanonicalRuntimePathRejectsDanglingSymlink(t *testing.T) {
+	root := t.TempDir()
+	dangling := filepath.Join(root, "dangling")
+	if err := os.Symlink(filepath.Join(root, "missing-target"), dangling); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, err := canonicalRuntimePath(filepath.Join(dangling, "workspace"))
+	if err == nil || !strings.Contains(err.Error(), "dangling symlink") {
+		t.Fatalf("canonicalRuntimePath error = %v, want dangling symlink failure", err)
+	}
+}
+
+func TestCanonicalRuntimePathResolvesExistingAncestorSymlinkForMissingLeaf(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	missing := filepath.Join(link, "never-created", "workspace")
+	got, err := canonicalRuntimePath(missing)
+	if err != nil {
+		t.Fatalf("canonicalRuntimePath returned an error for a symlinked missing leaf: %v", err)
+	}
+	want := filepath.Join(target, "never-created", "workspace")
+	if got != want {
+		t.Fatalf("canonicalRuntimePath = %q, want %q", got, want)
 	}
 }
 

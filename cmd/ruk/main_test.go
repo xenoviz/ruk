@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xenoviz/ruk/internal/cli"
@@ -30,6 +33,72 @@ func TestRunMainPreservesVersionAndErrorBoundary(t *testing.T) {
 	}
 	if stdout.String() != "" || stderr.String() != "ruk: Unknown command unknown. Run ruk --help.\n" {
 		t.Fatalf("error stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestResolveEntrypointFollowsSymlinkToDistributionTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "native", "ruk")
+	link := filepath.Join(root, "bin", "ruk")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got, err := resolveEntrypoint(func() (string, error) { return link, nil })
+	if err != nil {
+		t.Fatalf("resolveEntrypoint() error = %v", err)
+	}
+	want, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("resolved entrypoint = %q, want %q", got, want)
+	}
+}
+
+func TestResolveEntrypointFailsClosedWhenSymlinkResolutionFails(t *testing.T) {
+	_, err := resolveEntrypoint(func() (string, error) { return filepath.Join(t.TempDir(), "missing"), nil })
+	if err == nil || !strings.Contains(err.Error(), "resolve executable symlinks") {
+		t.Fatalf("error = %v, want symlink resolution failure", err)
+	}
+}
+
+func TestResolveEntrypointNormalizesRelativeExecutablePath(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "native", "ruk")
+	link := filepath.Join(root, "bin", "ruk")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Chdir(root)
+	got, err := resolveEntrypoint(func() (string, error) { return filepath.Join("bin", "ruk"), nil })
+	if err != nil {
+		t.Fatalf("resolveEntrypoint() error = %v", err)
+	}
+	want, err := filepath.Abs(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("resolved entrypoint = %q, want absolute %q", got, want)
 	}
 }
 

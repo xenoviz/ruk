@@ -580,10 +580,28 @@ func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
 			t.Fatalf("replacement script contains unsafe %q: %s", forbidden, script)
 		}
 	}
-	for _, required := range []string{"copy /Y", "move /Y", "timeout /t 1 /nobreak", "findstr /X"} {
+	for _, required := range []string{"copy /Y", "move /Y", "timeout /t 1 /nobreak", "findstr /X", "rollbackAttempts=0", "rollbackAttempts+=1", "if not errorlevel 1 goto rollback_succeeded", "GEQ 120 goto rollback_failed"} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("replacement script lacks %q: %s", required, script)
 		}
+	}
+	rollback := strings.Index(script, ":rollback")
+	failure := strings.Index(script, ":rollback_failed")
+	if rollback < 0 || failure < 0 || failure <= rollback {
+		t.Fatalf("replacement script has malformed rollback labels: %s", script)
+	}
+	rollbackBlock := script[rollback:failure]
+	if !strings.Contains(rollbackBlock, "if not errorlevel 1 goto rollback_succeeded") || !strings.Contains(rollbackBlock, "GEQ 120 goto rollback_failed") || !strings.Contains(rollbackBlock, "goto rollback") {
+		t.Fatalf("rollback is not bounded and retryable: %s", rollbackBlock)
+	}
+	if strings.Contains(script[rollback:], "del /Q \"C:\\bin\\.ruk.exe.new.backup\"") {
+		t.Fatalf("failure path deletes the known-good backup: %s", script)
+	}
+	if !strings.Contains(script, ":rollback_failed") {
+		t.Fatalf("replacement script lacks bounded rollback failure label: %s", script)
+	}
+	if strings.Index(script, "set /A rollbackAttempts=0") > strings.Index(script, ":wait") {
+		t.Fatalf("rollback counter is initialized after the wait loop: %s", script)
 	}
 }
 

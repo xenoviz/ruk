@@ -1080,6 +1080,7 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 	backup := candidate + ".backup"
 	quote := func(value string) string { return `"` + value + `"` }
 	script := "@echo off\r\n" +
+		"set /A rollbackAttempts=0\r\n" +
 		":wait\r\n" +
 		"copy /Y " + quote(executable) + " " + quote(backup) + " >NUL 2>NUL\r\n" +
 		"if errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)\r\n" +
@@ -1088,7 +1089,12 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 		quote(executable) + " --version | findstr /X \"" + version + "\" >NUL || goto rollback\r\n" +
 		"del /Q " + quote(backup) + " >NUL 2>NUL\r\n" +
 		"del /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 0\r\n" +
-		":rollback\r\nmove /Y " + quote(backup) + " " + quote(executable) + " >NUL\r\n:fail\r\ndel /Q " + quote(candidate) + " >NUL 2>NUL\r\ndel /Q " + quote(backup) + " >NUL 2>NUL\r\ndel /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 1\r\n"
+		":rollback\r\nset /A rollbackAttempts+=1\r\n" +
+		"move /Y " + quote(backup) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
+		"if not errorlevel 1 goto rollback_succeeded\r\n" +
+		"if %rollbackAttempts% GEQ 120 goto rollback_failed\r\n" +
+		"timeout /t 1 /nobreak >NUL\r\ngoto rollback\r\n" +
+		":rollback_succeeded\r\n:rollback_failed\r\ndel /Q " + quote(candidate) + " >NUL 2>NUL\r\ndel /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 1\r\n"
 	return helper, script, nil
 }
 

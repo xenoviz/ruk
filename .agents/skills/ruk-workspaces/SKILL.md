@@ -67,7 +67,8 @@ shell helper, and it does not claim to allocate a PTY or ConPTY. A leaderless or
 unverifiable process record fails closed rather than signaling a reusable
 numeric ID. Non-interactive shell input keeps EOF observable and forwards
 interrupts to its tracked process group. Commit intended work before exit so
-normal release can succeed. Release integrity-validates recorded dependency projections:
+normal release can succeed. Release integrity-validates recorded dependency
+projections inside the same workspace lock used by assigned synchronization:
 unchanged projections stay warm, while modified projections are discarded and
 rebuilt from the package store before the next assigned command. Warm capacity
 counts only projections whose dependency inputs and integrity fingerprint still

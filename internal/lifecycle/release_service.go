@@ -86,6 +86,11 @@ type ReleaseOptions struct {
 	RequireExpiredBy       string
 	ExpectedUpdatedAt      string
 	PreservedProjections   []string
+	// PreservedProjectionReader is evaluated after the workspace handoff lock
+	// has been acquired and the assignment has been re-read. It lets callers
+	// derive projection paths from a current state snapshot without racing an
+	// assigned sync that uses the same fence.
+	PreservedProjectionReader func(context.Context, state.WorkspaceRecord) ([]string, error)
 
 	// handoffLockHeld is set only by GC after it has acquired the exact
 	// workspace handoff lock. It keeps forced recovery from recursively
@@ -189,6 +194,15 @@ func (service *ReleaseService) ReleaseAssignment(ctx context.Context, assignment
 			}
 		}
 
+		preservedProjections := append([]string(nil), options.PreservedProjections...)
+		if options.PreservedProjectionReader != nil {
+			var projectionErr error
+			preservedProjections, projectionErr = options.PreservedProjectionReader(ctx, lockedWorkspace)
+			if projectionErr != nil {
+				return projectionErr
+			}
+		}
+
 		returning, beginErr := service.lifecycle.BeginWorkspaceReturnWithOptions(ctx, assignmentID, ReturnOptions{
 			RequireExpiredBy:       options.RequireExpiredBy,
 			AcquisitionOperationID: options.AcquisitionOperationID,
@@ -202,7 +216,7 @@ func (service *ReleaseService) ReleaseAssignment(ctx context.Context, assignment
 		if cleanupErr != nil {
 			return service.cancelRelease(ctx, assignmentID, cleanupErr)
 		}
-		if gitErr := service.options.Git.ResetCleanReturn(ctx, returning.Path, options.Force, append([]string(nil), options.PreservedProjections...)); gitErr != nil {
+		if gitErr := service.options.Git.ResetCleanReturn(ctx, returning.Path, options.Force, append([]string(nil), preservedProjections...)); gitErr != nil {
 			gitErr = service.relockAfterGitFailure(ctx, returning.Path, gitErr)
 			return service.cancelRelease(ctx, assignmentID, gitErr)
 		}
