@@ -315,6 +315,20 @@ type Guard struct {
 // guard. A missing or replaced lock is already released from this guard's view.
 func (guard *Guard) Release() error {
 	if guard.releasedPath != "" {
+		owner, valid, err := readOwner(guard.releasedPath)
+		if errors.Is(err, os.ErrNotExist) {
+			guard.releasedPath = ""
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read released lock owner %s: %w", guard.path, err)
+		}
+		if !valid || owner.Token != guard.token {
+			// This tombstone may contain a replacement owner moved by a raced
+			// release. Never remove it, and never retry cleanup against it.
+			guard.releasedPath = ""
+			return fmt.Errorf("refusing to clean released lock %s: owner token changed", guard.path)
+		}
 		if err := os.RemoveAll(guard.releasedPath); err != nil {
 			return fmt.Errorf("cleanup released lock %s: %w", guard.path, err)
 		}
@@ -357,9 +371,11 @@ func (guard *Guard) Release() error {
 		// the canonical path is still absent; never overwrite a newer owner.
 		if _, statErr := os.Stat(guard.path); errors.Is(statErr, os.ErrNotExist) {
 			if restoreErr := os.Rename(releasedPath, guard.path); restoreErr != nil {
+				guard.releasedPath = ""
 				return errors.Join(fmt.Errorf("verify released lock %s: %w", guard.path, verifyErr), restoreErr)
 			}
 		}
+		guard.releasedPath = ""
 		return fmt.Errorf("verify released lock %s: %w", guard.path, verifyErr)
 	}
 	if err := os.RemoveAll(releasedPath); err != nil {
@@ -383,7 +399,13 @@ func cleanupReleasedTombstones(path string) {
 		if !strings.HasPrefix(entry.Name(), prefix) {
 			continue
 		}
-		_ = os.RemoveAll(filepath.Join(parent, entry.Name()))
+		tombstone := filepath.Join(parent, entry.Name())
+		suffix := strings.TrimPrefix(entry.Name(), prefix)
+		owner, valid, err := readOwner(tombstone)
+		if suffix == "" || err != nil || !valid || releaseToken(owner.Token) != suffix {
+			continue
+		}
+		_ = os.RemoveAll(tombstone)
 	}
 }
 

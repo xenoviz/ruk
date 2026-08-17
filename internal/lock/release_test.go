@@ -52,11 +52,51 @@ func TestGuardReleaseDoesNotMoveWhenReleasedPathIsOccupied(t *testing.T) {
 	}
 }
 
+func TestGuardReleaseRetryNeverDeletesMismatchedTombstone(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "pool.lock")
+	releasedPath := path + ".released-" + releaseToken("replacement")
+	if err := os.MkdirAll(releasedPath, 0o700); err != nil {
+		t.Fatalf("create released lock: %v", err)
+	}
+	if err := writeOwner(releasedPath, Owner{PID: 43, Hostname: "host", Token: "replacement", CreatedAt: "2026-01-01T00:00:00.000Z"}); err != nil {
+		t.Fatalf("write replacement owner: %v", err)
+	}
+	guard := &Guard{path: path, token: "original", releasedPath: releasedPath}
+	if err := guard.Release(); err == nil {
+		t.Fatal("Release unexpectedly cleaned a mismatched tombstone")
+	}
+	if _, err := os.Stat(releasedPath); err != nil {
+		t.Fatalf("replacement tombstone was removed: %v", err)
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatalf("second Release returned an error after abandoning mismatched tombstone: %v", err)
+	}
+	if _, err := os.Stat(releasedPath); err != nil {
+		t.Fatalf("replacement tombstone was removed on retry: %v", err)
+	}
+}
+
 func TestCleanupReleasedTombstonesLeavesCanonicalAndUnrelatedEntries(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "pool.lock")
-	if err := os.MkdirAll(path+".released-deadbeef", 0o700); err != nil {
-		t.Fatalf("create released tombstone: %v", err)
+	matching := path + ".released-" + releaseToken("token")
+	if err := os.MkdirAll(matching, 0o700); err != nil {
+		t.Fatalf("create matching tombstone: %v", err)
+	}
+	if err := writeOwner(matching, Owner{PID: 42, Hostname: "host", Token: "token", CreatedAt: "2026-01-01T00:00:00.000Z"}); err != nil {
+		t.Fatalf("write matching owner: %v", err)
+	}
+	mismatched := path + ".released-deadbeef"
+	if err := os.MkdirAll(mismatched, 0o700); err != nil {
+		t.Fatalf("create mismatched tombstone: %v", err)
+	}
+	if err := writeOwner(mismatched, Owner{PID: 43, Hostname: "host", Token: "other", CreatedAt: "2026-01-01T00:00:00.000Z"}); err != nil {
+		t.Fatalf("write mismatched owner: %v", err)
+	}
+	malformed := path + ".released-" + releaseToken("malformed")
+	if err := os.MkdirAll(malformed, 0o700); err != nil {
+		t.Fatalf("create malformed tombstone: %v", err)
 	}
 	unrelated := filepath.Join(root, "other.lock.released-deadbeef")
 	if err := os.MkdirAll(unrelated, 0o700); err != nil {
@@ -69,8 +109,14 @@ func TestCleanupReleasedTombstonesLeavesCanonicalAndUnrelatedEntries(t *testing.
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("canonical lock was touched: %v", err)
 	}
-	if _, err := os.Stat(path + ".released-deadbeef"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(matching); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("matching tombstone remains: %v", err)
+	}
+	if _, err := os.Stat(mismatched); err != nil {
+		t.Fatalf("mismatched tombstone was touched: %v", err)
+	}
+	if _, err := os.Stat(malformed); err != nil {
+		t.Fatalf("malformed tombstone was touched: %v", err)
 	}
 	if _, err := os.Stat(unrelated); err != nil {
 		t.Fatalf("unrelated tombstone was touched: %v", err)
