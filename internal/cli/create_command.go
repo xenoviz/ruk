@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/xenoviz/ruk/internal/git"
 )
@@ -52,6 +53,8 @@ type CreateCommand struct {
 	Sync       CreateSyncOperation
 	Fence      CreateLifecycleFence
 }
+
+const createRecoveryTimeout = 30 * time.Second
 
 // CreateCommandOptions configures the injected create seams.
 type CreateCommandOptions struct {
@@ -157,7 +160,12 @@ func (command *CreateCommand) Run(ctx context.Context, input CreateCommandInput)
 			return err
 		}
 		cleanupAfterFailure := func(cause error) error {
-			cleanupErr := command.Workspace.Remove(ctx, destination, true)
+			// Preparation cleanup must still run when the operation was canceled,
+			// but it must not be allowed to wait indefinitely for a broken Git
+			// operation. Keep the original cause as the returned error below.
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), createRecoveryTimeout)
+			cleanupErr := command.Workspace.Remove(cleanupCtx, destination, true)
+			cancelCleanup()
 			if cleanupErr != nil {
 				return fmt.Errorf("workspace preparation failed and cleanup also failed for %s: %w", destination, errors.Join(cause, cleanupErr))
 			}

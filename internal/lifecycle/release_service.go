@@ -394,7 +394,9 @@ func (service *ReleaseService) relockAfterGitFailure(ctx context.Context, worksp
 	if !ok {
 		return gitErr
 	}
-	if relockErr := relocker.Lock(ctx, workspacePath); relockErr != nil {
+	recoveryCtx, cancel := acquisitionRecoveryContext(ctx)
+	defer cancel()
+	if relockErr := relocker.Lock(recoveryCtx, workspacePath); relockErr != nil {
 		return errors.Join(gitErr, fmt.Errorf("relock worktree %s after failed cleanup: %w", workspacePath, relockErr))
 	}
 	return gitErr
@@ -404,7 +406,9 @@ func (service *ReleaseService) cancelRelease(ctx context.Context, assignmentID s
 	if cause == nil {
 		cause = errors.New("release failed")
 	}
-	_, cancelErr := service.lifecycle.CancelWorkspaceReturn(ctx, assignmentID, cause.Error())
+	recoveryCtx, cancel := acquisitionRecoveryContext(ctx)
+	defer cancel()
+	_, cancelErr := service.lifecycle.CancelWorkspaceReturn(recoveryCtx, assignmentID, cause.Error())
 	if cancelErr != nil {
 		return errors.Join(cause, fmt.Errorf("restore assignment ownership: %w", cancelErr))
 	}

@@ -17,7 +17,10 @@ type releaseStore struct {
 	failFinish error
 }
 
-func (store *releaseStore) Update(_ context.Context, mutate func(*state.State) error) error {
+func (store *releaseStore) Update(ctx context.Context, mutate func(*state.State) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if store.failFinish != nil {
 		for _, workspace := range store.current.Workspaces {
 			if workspace.Lifecycle == state.LifecycleReturning && len(workspace.Processes) == 0 {
@@ -39,10 +42,16 @@ type releaseProcesses struct {
 	existsCalls int
 	calls       int
 	err         error
+	cancel      context.CancelFunc
+	cancelled   bool
 }
 
 func (processes *releaseProcesses) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
 	processes.existsCalls++
+	if processes.cancel != nil && !processes.cancelled {
+		processes.cancel()
+		processes.cancelled = true
+	}
 	if processes.err != nil {
 		return false, processes.err
 	}
@@ -248,6 +257,23 @@ func TestReleaseServiceGitFailureRollsBackAndRelocks(t *testing.T) {
 	}
 	if len(git.paths) != 1 || git.paths[0] != path || assignmentFromStore(t, store, assignmentID).Lifecycle != state.LifecycleAssigned {
 		t.Fatalf("Git failure rollback was incomplete: paths=%#v workspace=%#v", git.paths, assignmentFromStore(t, store, assignmentID))
+	}
+}
+
+func TestReleaseServiceCanceledCleanupRestoresAssignmentWithRecoveryContext(t *testing.T) {
+	store, service, assignmentID, _ := newReleaseFixture(t, nil)
+	addTrackedProcess(t, store, assignmentID)
+	ctx, cancel := context.WithCancel(context.Background())
+	processes := &releaseProcesses{exists: []bool{false}, cancel: cancel}
+	release := newReleaseService(service, store, processes, &releaseGit{}, &releasePorts{})
+
+	_, err := release.ReleaseAssignment(ctx, assignmentID, lifecycle.ReleaseOptions{})
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled cleanup error = %v, want original cancellation", err)
+	}
+	workspace := assignmentFromStore(t, store, assignmentID)
+	if workspace.Lifecycle != state.LifecycleAssigned || workspace.Assignment == nil || workspace.Failure == nil {
+		t.Fatalf("canceled cleanup did not restore assignment ownership: %#v", workspace)
 	}
 }
 

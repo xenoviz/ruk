@@ -367,6 +367,28 @@ func TestSelectShellEnvironmentPrecedenceAndFallback(t *testing.T) {
 	}
 }
 
+func TestSelectShellWindowsEnvironmentNamesAreCaseInsensitive(t *testing.T) {
+	if got, _ := cli.SelectShell(map[string]string{
+		"Ruk_Shell": "/ruk-shell",
+		"sHeLl":     "/shell",
+		"cOmSpEc":   "cmd",
+	}, "windows"); got != "/ruk-shell" {
+		t.Fatalf("case-insensitive RUK_SHELL selection = %q", got)
+	}
+	if got, _ := cli.SelectShell(map[string]string{"sHeLl": "/shell", "cOmSpEc": "cmd"}, "windows"); got != "/shell" {
+		t.Fatalf("case-insensitive SHELL selection = %q", got)
+	}
+	if got, _ := cli.SelectShell(map[string]string{"cOmSpEc": "cmd"}, "windows"); got != "cmd" {
+		t.Fatalf("case-insensitive COMSPEC selection = %q", got)
+	}
+}
+
+func TestSelectShellNonWindowsEnvironmentNamesRemainCaseSensitive(t *testing.T) {
+	if got, _ := cli.SelectShell(map[string]string{"Ruk_Shell": "/ruk-shell"}, "linux"); got != "/bin/sh" {
+		t.Fatalf("case-sensitive non-Windows fallback = %q", got)
+	}
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false

@@ -3,6 +3,8 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +13,10 @@ import (
 	"github.com/xenoviz/ruk/internal/cli"
 	"github.com/xenoviz/ruk/internal/git"
 )
+
+type acquireOutputWriter struct{ err error }
+
+func (writer acquireOutputWriter) Write([]byte) (int, error) { return 0, writer.err }
 
 func routingRepository() git.Repository {
 	return git.Repository{Root: "/repo", CommonDir: "/repo/.git", PrimaryRoot: "/repo", PrimaryCheckout: true}
@@ -138,6 +144,47 @@ func TestApplicationRoutesAcquireReleaseAndWritesEachOutputOnce(t *testing.T) {
 				t.Fatalf("discoveries=%d stdout=%q, want one JSON record", *discoveries, stdout.String())
 			}
 		})
+	}
+}
+
+func TestApplicationAcquireOutputFailureReturnsRetainedAssignmentRecovery(t *testing.T) {
+	outputErr := errors.New("stdout closed")
+	application, discoveries := routingApplication(nil, func(options *cli.Options) {
+		options.Stdout = acquireOutputWriter{err: outputErr}
+		options.Acquire = func(_ context.Context, _ git.Repository, _ cli.AcquireInput) (cli.AcquireResult, error) {
+			return cli.AcquireResult{
+				AcquireRecord: cli.AcquireRecord{
+					AssignmentID: "assignment-opaque",
+					Path:         "/repo-agent-task",
+					ExpiresAt:    "2026-08-16T13:00:00Z",
+				},
+				Output: `{"status":"assigned"}` + "\n",
+			}, nil
+		}
+	})
+
+	code, err := application.Run(context.Background(), []string{"acquire", "agent/task", "--json"})
+	if code != 1 || err == nil || !errors.Is(err, outputErr) {
+		t.Fatalf("Run=%d, %v, want retained output failure", code, err)
+	}
+	var retained *cli.RetainedAssignmentError
+	if !errors.As(err, &retained) {
+		t.Fatalf("error=%v, want retained assignment metadata", err)
+	}
+	if retained.AssignmentID != "assignment-opaque" || retained.Path != "/repo-agent-task" || retained.ExpiresAt != "2026-08-16T13:00:00Z" {
+		t.Fatalf("retained=%#v, want exact acquire record", retained)
+	}
+
+	var record cli.ErrorRecord
+	if err := json.Unmarshal([]byte(cli.FormatJSONError(err)), &record); err != nil {
+		t.Fatalf("JSON error: %v", err)
+	}
+	if record.Code != cli.ResourceBusyCode || !record.Retryable || record.AssignmentID != retained.AssignmentID ||
+		record.Path != retained.Path || record.ExpiresAt != retained.ExpiresAt || record.Recovery != "ruk release assignment-opaque" {
+		t.Fatalf("JSON record=%#v, want retained recovery metadata", record)
+	}
+	if *discoveries != 1 {
+		t.Fatalf("discoveries=%d, want 1", *discoveries)
 	}
 }
 

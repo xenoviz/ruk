@@ -13,13 +13,14 @@ import (
 )
 
 type createWorkspaceStub struct {
-	created bool
-	removed bool
-	path    string
-	branch  string
-	start   string
-	detach  bool
-	remove  error
+	created       bool
+	removed       bool
+	path          string
+	branch        string
+	start         string
+	detach        bool
+	remove        error
+	removeContext context.Context
 }
 
 type failingCreateWriter struct{ err error }
@@ -32,8 +33,9 @@ func (stub *createWorkspaceStub) Create(_ context.Context, path, branch, start s
 	return nil
 }
 
-func (stub *createWorkspaceStub) Remove(_ context.Context, path string, force bool) error {
+func (stub *createWorkspaceStub) Remove(ctx context.Context, path string, force bool) error {
 	stub.removed = true
+	stub.removeContext = ctx
 	if !force {
 		return errors.New("cleanup was not forced")
 	}
@@ -41,6 +43,29 @@ func (stub *createWorkspaceStub) Remove(_ context.Context, path string, force bo
 		return errors.New("cleanup path changed")
 	}
 	return stub.remove
+}
+
+func TestCreateCommandRollbackUsesBoundedRecoveryContextAfterCancellation(t *testing.T) {
+	workspace := &createWorkspaceStub{}
+	ctx, cancel := context.WithCancel(context.Background())
+	command := createTestCommand(workspace, func(syncCtx context.Context, _ CreateSyncRequest) (SyncCommandResult, error) {
+		cancel()
+		return SyncCommandResult{}, syncCtx.Err()
+	})
+
+	_, err := command.Run(ctx, CreateCommandInput{Repository: createTestRepository(t), Branch: "agent/canceled"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v, want original cancellation", err)
+	}
+	if !workspace.removed || workspace.removeContext == nil {
+		t.Fatalf("workspace=%#v, want recovery cleanup", workspace)
+	}
+	if err := workspace.removeContext.Err(); err != nil {
+		t.Fatalf("recovery context error=%v, want active context", err)
+	}
+	if _, ok := workspace.removeContext.Deadline(); !ok {
+		t.Fatal("recovery cleanup context has no bounded deadline")
+	}
 }
 
 func createTestRepository(t *testing.T) git.Repository {

@@ -368,7 +368,12 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 			return 1, err
 		}
 		if _, err := io.WriteString(application.stdout, result.Output); err != nil {
-			return 1, fmt.Errorf("write acquire result: %w", err)
+			return 1, NewRetainedAssignmentError(
+				result.AssignmentID,
+				result.Path,
+				result.ExpiresAt,
+				fmt.Errorf("write acquire result: %w", err),
+			)
 		}
 		return 0, nil
 	}

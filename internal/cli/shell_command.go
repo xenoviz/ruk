@@ -264,18 +264,33 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 // SelectShell applies the documented environment precedence and platform
 // fallback without assuming util-linux script or another PTY helper.
 func SelectShell(environment map[string]string, platform string) (string, error) {
-	for _, name := range []string{"RUK_SHELL", "SHELL", "COMSPEC"} {
-		if value := strings.TrimSpace(environment[name]); value != "" {
-			return value, nil
-		}
-	}
 	if platform == "" {
 		platform = runtime.GOOS
+	}
+	for _, name := range []string{"RUK_SHELL", "SHELL", "COMSPEC"} {
+		if value := strings.TrimSpace(shellEnvironmentValue(environment, name, platform == "windows")); value != "" {
+			return value, nil
+		}
 	}
 	if platform == "windows" {
 		return "cmd.exe", nil
 	}
 	return "/bin/sh", nil
+}
+
+func shellEnvironmentValue(environment map[string]string, name string, caseInsensitive bool) string {
+	if value, ok := environment[name]; ok {
+		return value
+	}
+	if !caseInsensitive {
+		return ""
+	}
+	for key, value := range environment {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+	return ""
 }
 
 func retainedShellError(acquired AcquireResult, cause error) error {
