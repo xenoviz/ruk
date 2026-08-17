@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 
@@ -34,7 +35,7 @@ func (child *runnerChild) Signal(signal os.Signal) error {
 }
 
 type runnerSpawner struct {
-	child   *runnerChild
+	child   processpkg.Child
 	request processpkg.SpawnRequest
 	stdout  string
 	stderr  string
@@ -215,6 +216,39 @@ func TestRunnerCompletesHandoffBeforeWaitingForChild(t *testing.T) {
 	}
 }
 
+func TestRunnerCancellationRetainsWhenWaitStatusOrBoundaryIsUncertain(t *testing.T) {
+	waitErr := errors.New("wait status unavailable")
+	boundaryErr := errors.New("job boundary did not drain")
+	child := &cancellationRunnerChild{
+		pid:      78,
+		status:   processpkg.ExitStatus{Code: -1, Err: waitErr, BoundaryError: boundaryErr},
+		released: make(chan struct{}),
+	}
+	runner := processpkg.Runner{
+		Spawner:   &runnerSpawner{child: child},
+		Describer: runnerDescriber{record: state.TrackedProcessRecord{PID: 78, StartedAt: "started", GroupID: int64Pointer(78)}},
+		Cleaner:   cancellationRunnerCleaner{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := runner.Run(ctx, []string{"installer"}, processpkg.RunOptions{
+		Mode: processpkg.Detached, SuperviseCancellation: true,
+		Register: func(context.Context, state.TrackedProcessRecord) error {
+			cancel()
+			return nil
+		},
+	})
+	if err == nil {
+		t.Fatal("Run succeeded after uncertain cancellation cleanup")
+	}
+	var unsafeErr *processpkg.ProcessCleanupUnsafeError
+	if !errors.As(err, &unsafeErr) {
+		t.Fatalf("error = %T %v, want ProcessCleanupUnsafeError", err, err)
+	}
+	if !errors.Is(err, waitErr) || !errors.Is(err, boundaryErr) {
+		t.Fatalf("error = %v, want wait and boundary causes", err)
+	}
+}
+
 func TestRunnerPropagatesForegroundTerminalBoundary(t *testing.T) {
 	t.Parallel()
 	child := &runnerChild{pid: 13, status: processpkg.ExitStatus{Code: 0}}
@@ -337,8 +371,8 @@ func TestRunnerPostSpawnDescriptionFailureCleanupIsIdentityFenced(t *testing.T) 
 			if result.PID != 77 {
 				t.Fatalf("result PID = %d, want 77", result.PID)
 			}
-			if !test.wantCleanup && result.Record.StartedAt != "" {
-				t.Fatalf("unverified record = %#v", result.Record)
+			if !test.wantCleanup && (result.Record.StartedAt != processpkg.UnverifiedIdentityMarker || result.Record.PID != 77) {
+				t.Fatalf("unverified recovery record = %#v", result.Record)
 			}
 		})
 	}
@@ -363,7 +397,7 @@ func TestRunnerValidationFailureDoesNotSignalUnverifiedDetachedGroup(t *testing.
 	if cleaner.calls != 0 {
 		t.Fatalf("cleanup calls = %d, want 0 for unverified group", cleaner.calls)
 	}
-	if result.PID != 88 || result.Record.StartedAt != "" {
+	if result.PID != 88 || result.Record.StartedAt != processpkg.UnverifiedIdentityMarker || result.Record.PID != 88 {
 		t.Fatalf("retained result = %#v", result)
 	}
 }
@@ -444,6 +478,35 @@ func boolInt(value bool) int {
 type releaseProbeForRunner struct {
 	states []lock.ProcessState
 	index  int
+}
+
+type cancellationRunnerChild struct {
+	pid      int
+	status   processpkg.ExitStatus
+	released chan struct{}
+	once     sync.Once
+}
+
+func (child *cancellationRunnerChild) PID() int { return child.pid }
+
+func (child *cancellationRunnerChild) Wait() processpkg.ExitStatus {
+	<-child.released
+	return child.status
+}
+
+func (child *cancellationRunnerChild) Signal(os.Signal) error {
+	child.once.Do(func() { close(child.released) })
+	return nil
+}
+
+type cancellationRunnerCleaner struct{}
+
+func (cancellationRunnerCleaner) Cleanup(_ context.Context, child processpkg.Child, _ state.TrackedProcessRecord) error {
+	return child.Signal(syscall.SIGKILL)
+}
+
+func (cancellationRunnerCleaner) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	return false, nil
 }
 
 func (probe *releaseProbeForRunner) Inspect(context.Context, int) (lock.ProcessState, error) {

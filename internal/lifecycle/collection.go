@@ -29,6 +29,9 @@ func (service *Service) BeginWorkspaceCollection(ctx context.Context, workspaceP
 		if workspace.UpdatedAt != expectedUpdatedAt {
 			return fmt.Errorf("Workspace %s changed before collection", resolved)
 		}
+		if len(workspace.Processes) != 0 {
+			return fmt.Errorf("Workspace %s still has tracked processes", resolved)
+		}
 		if !abandonedPreparation && workspace.OperationID != nil {
 			result = cloneWorkspace(workspace)
 			return nil
@@ -40,6 +43,59 @@ func (service *Service) BeginWorkspaceCollection(ctx context.Context, workspaceP
 		}
 		operationID := service.newID()
 		workspace.OperationID = &operationID
+		workspace.UpdatedAt = timestamp(service.now())
+		current.Workspaces[key] = workspace
+		result = cloneWorkspace(workspace)
+		return nil
+	})
+	if err != nil {
+		return state.WorkspaceRecord{}, err
+	}
+	return result, nil
+}
+
+// RemoveUnassignedProcess removes one exact tracked process from a failed or
+// abandoned-preparation workspace. The lifecycle and operation fences are
+// checked inside the state transaction so GC cannot remove a record belonging
+// to a newer workspace operation.
+func (service *Service) RemoveUnassignedProcess(ctx context.Context, workspacePath string, expectedLifecycle state.WorkspaceLifecycle, expectedOperationID *string, expectedUpdatedAt string, pid int64, startedAt string) (state.WorkspaceRecord, error) {
+	resolved, key, err := collectionKey(workspacePath)
+	if err != nil {
+		return state.WorkspaceRecord{}, err
+	}
+	if expectedLifecycle != state.LifecyclePreparing && expectedLifecycle != state.LifecycleFailed {
+		return state.WorkspaceRecord{}, errors.New("workspace is not an unassigned preparation or failed workspace")
+	}
+	var result state.WorkspaceRecord
+	err = service.store.Update(ctx, func(current *state.State) error {
+		workspace, exists := current.Workspaces[key]
+		if !exists {
+			return fmt.Errorf("Workspace %s is not managed", resolved)
+		}
+		if workspace.Lifecycle != expectedLifecycle {
+			return fmt.Errorf("Workspace %s changed before process cleanup", resolved)
+		}
+		if workspace.Assignment != nil {
+			return fmt.Errorf("Workspace %s is assigned", resolved)
+		}
+		if workspace.UpdatedAt != expectedUpdatedAt {
+			return fmt.Errorf("Workspace %s changed before process cleanup", resolved)
+		}
+		if !sameCollectionOperation(workspace.OperationID, expectedOperationID) {
+			return errors.New("Workspace operation changed before process cleanup")
+		}
+		index := -1
+		for candidate := range workspace.Processes {
+			tracked := workspace.Processes[candidate]
+			if tracked.PID == pid && tracked.StartedAt == startedAt {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 {
+			return fmt.Errorf("Process %d with identity %s is not tracked", pid, startedAt)
+		}
+		workspace.Processes = append(workspace.Processes[:index], workspace.Processes[index+1:]...)
 		workspace.UpdatedAt = timestamp(service.now())
 		current.Workspaces[key] = workspace
 		result = cloneWorkspace(workspace)
@@ -124,4 +180,11 @@ func collectionKey(workspacePath string) (string, string, error) {
 		return "", "", err
 	}
 	return resolved, key, nil
+}
+
+func sameCollectionOperation(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

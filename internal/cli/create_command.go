@@ -199,12 +199,12 @@ func (command *CreateCommand) Run(ctx context.Context, input CreateCommandInput)
 			}{
 				Status: status, Fingerprint: result.Fingerprint, Mode: result.Mode, Path: result.Path,
 			}); err != nil {
-				return cleanupAfterFailure(fmt.Errorf("encode create result: %w", err))
+				return fmt.Errorf("encode create result: %w", err)
 			}
 			result.Output = output.String()
 			if input.Output != nil {
 				if _, err := io.WriteString(input.Output, result.Output); err != nil {
-					return cleanupAfterFailure(fmt.Errorf("write create result: %w", err))
+					return fmt.Errorf("write create result: %w", err)
 				}
 			}
 			return nil
@@ -220,7 +220,7 @@ func (command *CreateCommand) Run(ctx context.Context, input CreateCommandInput)
 		result.Output = fmt.Sprintf("%s for %s (%s).\n%s\n", verb, fingerprint, syncResult.Mode, destination)
 		if input.Output != nil {
 			if _, err := io.WriteString(input.Output, result.Output); err != nil {
-				return cleanupAfterFailure(fmt.Errorf("write create result: %w", err))
+				return fmt.Errorf("write create result: %w", err)
 			}
 		}
 		return nil

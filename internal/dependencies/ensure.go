@@ -219,6 +219,7 @@ func ensureLocked(ctx context.Context, input EnsureInput, root, key string, stor
 		}
 	}
 
+	installer = configureInstallerProcessTracking(installer, store, key, root, snapshot, now)
 	if _, err := installer.Prepare(ctx, root, details.Manager); err != nil {
 		return EnsureResult{}, err
 	}
@@ -273,6 +274,116 @@ func ensureLocked(ctx context.Context, input EnsureInput, root, key string, stor
 		return EnsureResult{}, err
 	}
 	return EnsureResult{Fingerprint: details.Fingerprint, Mode: mode}, nil
+}
+
+func configureInstallerProcessTracking(installer InstallerBackend, store StateStore, key, root string, snapshot *state.State, now func() time.Time) InstallerBackend {
+	if installer == nil || store == nil || snapshot == nil {
+		return installer
+	}
+	workspace, ok := snapshot.Workspaces[key]
+	if !ok || workspace.Path != root {
+		return installer
+	}
+	var assignmentID, operationID string
+	switch workspace.Lifecycle {
+	case state.LifecycleAssigned:
+		if workspace.Assignment == nil {
+			return installer
+		}
+		assignmentID = workspace.Assignment.ID
+	case state.LifecyclePreparing:
+		if workspace.OperationID == nil || *workspace.OperationID == "" {
+			return installer
+		}
+		operationID = *workspace.OperationID
+	default:
+		return installer
+	}
+	register := func(ctx context.Context, record state.TrackedProcessRecord) error {
+		return store.Update(ctx, func(current *state.State) error {
+			if current == nil {
+				return errors.New("dependency state store returned nil state")
+			}
+			workspace, exists := current.Workspaces[key]
+			if !exists || workspace.Path != root {
+				return errors.New("workspace is unavailable for installer process tracking")
+			}
+			if assignmentID != "" {
+				if workspace.Lifecycle != state.LifecycleAssigned || workspace.Assignment == nil || workspace.Assignment.ID != assignmentID {
+					return errors.New("assigned workspace fence changed during installer process tracking")
+				}
+			} else if workspace.Lifecycle != state.LifecyclePreparing || workspace.OperationID == nil || *workspace.OperationID != operationID {
+				return errors.New("preparing workspace fence changed during installer process tracking")
+			}
+			for _, tracked := range workspace.Processes {
+				if tracked.PID == record.PID {
+					if tracked.StartedAt == record.StartedAt {
+						return nil
+					}
+					return fmt.Errorf("installer process %d is already tracked", record.PID)
+				}
+			}
+			workspace.Processes = append(workspace.Processes, record)
+			workspace.UpdatedAt = nextWorkspaceUpdatedAt(workspace.UpdatedAt, now)
+			current.Workspaces[key] = workspace
+			return nil
+		})
+	}
+	remove := func(ctx context.Context, record state.TrackedProcessRecord) error {
+		return store.Update(ctx, func(current *state.State) error {
+			if current == nil {
+				return errors.New("dependency state store returned nil state")
+			}
+			workspace, exists := current.Workspaces[key]
+			if !exists || workspace.Path != root {
+				return errors.New("workspace is unavailable for installer process cleanup")
+			}
+			if assignmentID != "" {
+				if workspace.Lifecycle != state.LifecycleAssigned || workspace.Assignment == nil || workspace.Assignment.ID != assignmentID {
+					return errors.New("assigned workspace fence changed during installer process cleanup")
+				}
+			} else if workspace.Lifecycle != state.LifecyclePreparing || workspace.OperationID == nil || *workspace.OperationID != operationID {
+				return errors.New("preparing workspace fence changed during installer process cleanup")
+			}
+			for index, tracked := range workspace.Processes {
+				if tracked.PID == record.PID && tracked.StartedAt == record.StartedAt {
+					workspace.Processes = append(workspace.Processes[:index], workspace.Processes[index+1:]...)
+					workspace.UpdatedAt = nextWorkspaceUpdatedAt(workspace.UpdatedAt, now)
+					current.Workspaces[key] = workspace
+					return nil
+				}
+			}
+			return fmt.Errorf("installer process %d with identity %s is not tracked", record.PID, record.StartedAt)
+		})
+	}
+
+	switch configured := installer.(type) {
+	case Installer:
+		configured.RegisterProcess = register
+		configured.RemoveProcess = remove
+		return configured
+	case *Installer:
+		if configured == nil {
+			return installer
+		}
+		copy := *configured
+		copy.RegisterProcess = register
+		copy.RemoveProcess = remove
+		return &copy
+	default:
+		return installer
+	}
+}
+
+func nextWorkspaceUpdatedAt(previous string, now func() time.Time) string {
+	observed := time.Now().UTC().Truncate(time.Millisecond)
+	if now != nil {
+		observed = now().UTC().Truncate(time.Millisecond)
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, previous); err == nil && !observed.After(parsed) {
+		observed = parsed.UTC().Truncate(time.Millisecond).Add(time.Millisecond)
+	}
+	return observed.Format("2006-01-02T15:04:05.000Z")
 }
 
 func dependencyFiles(ctx context.Context, root string, input EnsureInput) ([]string, error) {

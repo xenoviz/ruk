@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+const worktreeRelockTimeout = 30 * time.Second
 
 // WorkspaceFileSystem is the filesystem seam used when authorizing a
 // worktree path. Evaluating links matters here: a lexical path below the
@@ -174,13 +177,22 @@ func (service *WorkspaceService) SafeRemove(ctx context.Context, destination str
 		return err
 	}
 	if err := service.git.RemoveWorktree(ctx, service.repositoryRoot, destination, force); err != nil {
-		relockErr := service.git.LockWorktree(ctx, service.repositoryRoot, destination)
+		cleanupCtx, cancel := boundedCleanupContext(ctx)
+		defer cancel()
+		relockErr := service.git.LockWorktree(cleanupCtx, service.repositoryRoot, destination)
 		if relockErr != nil {
 			return errors.Join(err, fmt.Errorf("relock worktree %s after failed removal: %w", destination, relockErr))
 		}
 		return err
 	}
 	return nil
+}
+
+func boundedCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), worktreeRelockTimeout)
 }
 
 // Remove is the safe removal operation used by lifecycle cleanup.

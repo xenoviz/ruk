@@ -46,14 +46,23 @@ type GCPathCanonicalizer func(context.Context, string) (string, error)
 // GCServiceOptions configures GC's state, lock, release, Git, and tree-state
 // seams. LocksRoot normally comes from state.StorePaths(commonDir).Locks.
 type GCServiceOptions struct {
-	Reader       GCStateReader
-	Lifecycle    *Service
-	Release      GCReleaseOperation
+	Reader    GCStateReader
+	Lifecycle *Service
+	Release   GCReleaseOperation
+	// Processes is used only to recover tracked processes on unassigned
+	// preparing/failed workspaces. Assigned workspaces continue through the
+	// normal release service, preserving its ownership and handoff behavior.
+	Processes    ReleaseProcesser
 	Git          GCWorkspaceGit
 	TreeState    GCTreeStateDeleter
 	Locker       ReleaseLocker
 	LocksRoot    string
 	Canonicalize GCPathCanonicalizer
+
+	// ProcessDrainTimeout and ProcessPollInterval bound forced process
+	// termination verification. Zero values select the release defaults.
+	ProcessDrainTimeout time.Duration
+	ProcessPollInterval time.Duration
 }
 
 // GCOptions controls one plan or apply operation.
@@ -313,6 +322,17 @@ func (service *GCService) currentCandidate(ctx context.Context, options GCOption
 }
 
 func (service *GCService) collectWorkspace(ctx context.Context, workspace state.WorkspaceRecord, candidate GcCandidate) error {
+	if workspace.Assignment == nil && (workspace.Lifecycle == state.LifecyclePreparing || workspace.Lifecycle == state.LifecycleFailed) {
+		var err error
+		workspace, err = service.drainUnassignedProcesses(ctx, workspace)
+		if err != nil {
+			return err
+		}
+		workspace, err = service.revalidateUnassignedWorkspace(ctx, workspace)
+		if err != nil {
+			return err
+		}
+	}
 	collecting, err := service.options.Lifecycle.BeginWorkspaceCollection(ctx, workspace.Path, workspace.UpdatedAt)
 	if err != nil {
 		return err
@@ -347,6 +367,100 @@ func (service *GCService) collectWorkspace(ctx context.Context, workspace state.
 	}
 	_ = candidate
 	return nil
+}
+
+// drainUnassignedProcesses proves that every exact persisted process identity
+// is gone, force-terminating live processes before removing their records. It
+// runs while the caller holds the workspace handoff lock, and every durable
+// removal is fenced by the lifecycle operation and the latest UpdatedAt.
+func (service *GCService) drainUnassignedProcesses(ctx context.Context, workspace state.WorkspaceRecord) (state.WorkspaceRecord, error) {
+	if len(workspace.Processes) == 0 {
+		return workspace, nil
+	}
+	if service.options.Processes == nil {
+		return state.WorkspaceRecord{}, errors.New("lifecycle: GC process manager is not configured")
+	}
+	current := cloneWorkspace(workspace)
+	for _, record := range append([]state.TrackedProcessRecord(nil), workspace.Processes...) {
+		alive, err := service.options.Processes.Exists(ctx, record)
+		if err != nil {
+			return state.WorkspaceRecord{}, fmt.Errorf("inspect tracked process %d during GC: %w", record.PID, err)
+		}
+		if alive {
+			if _, err := service.options.Processes.Terminate(ctx, record, true); err != nil {
+				return state.WorkspaceRecord{}, fmt.Errorf("force terminate tracked process %d during GC: %w", record.PID, err)
+			}
+			if err := service.waitForGCProcessDrain(ctx, record); err != nil {
+				return state.WorkspaceRecord{}, fmt.Errorf("verify tracked process %d termination during GC: %w", record.PID, err)
+			}
+		}
+		updated, err := service.options.Lifecycle.RemoveUnassignedProcess(ctx, current.Path, current.Lifecycle, current.OperationID, current.UpdatedAt, record.PID, record.StartedAt)
+		if err != nil {
+			return state.WorkspaceRecord{}, fmt.Errorf("remove tracked process %d during GC: %w", record.PID, err)
+		}
+		current = updated
+	}
+	return current, nil
+}
+
+func (service *GCService) waitForGCProcessDrain(ctx context.Context, record state.TrackedProcessRecord) error {
+	timeout := service.options.ProcessDrainTimeout
+	if timeout <= 0 {
+		timeout = defaultProcessDrainTimeout
+	}
+	interval := service.options.ProcessPollInterval
+	if interval <= 0 {
+		interval = defaultProcessPollInterval
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		alive, err := service.options.Processes.Exists(waitCtx, record)
+		if err != nil {
+			return err
+		}
+		if !alive {
+			return nil
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-waitCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return &ProcessDrainError{PID: record.PID, Alive: true, Cause: waitCtx.Err()}
+		case <-timer.C:
+		}
+	}
+}
+
+// revalidateUnassignedWorkspace detects any state change after process
+// records were drained and before BeginWorkspaceCollection publishes the
+// collection fence. A stale or uncertain record fails closed before Git is
+// inspected or mutated.
+func (service *GCService) revalidateUnassignedWorkspace(ctx context.Context, expected state.WorkspaceRecord) (state.WorkspaceRecord, error) {
+	current, err := service.options.Reader.Read(ctx)
+	if err != nil {
+		return state.WorkspaceRecord{}, err
+	}
+	key, err := state.TreeKey(expected.Path)
+	if err != nil {
+		return state.WorkspaceRecord{}, err
+	}
+	workspace, ok := current.Workspaces[key]
+	if !ok || workspace.Path != expected.Path {
+		return state.WorkspaceRecord{}, errors.New("workspace changed before collection")
+	}
+	if workspace.Lifecycle != expected.Lifecycle || workspace.Assignment != nil || len(workspace.Processes) != 0 || workspace.UpdatedAt != expected.UpdatedAt || !sameCollectionOperation(workspace.OperationID, expected.OperationID) {
+		return state.WorkspaceRecord{}, errors.New("workspace changed before collection")
+	}
+	return cloneWorkspace(workspace), nil
 }
 
 func (service *GCService) restoreCollection(ctx context.Context, path, operationID string, cause error, unlocked bool) error {

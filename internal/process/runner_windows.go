@@ -98,7 +98,14 @@ func spawnWindowsProcess(ctx context.Context, request SpawnRequest) (Child, erro
 		// process behind while an empty job is closed.
 		killErr := command.Process.Kill()
 		_ = job.Close()
-		_ = command.Wait()
+		waited, waitErr := waitCommandAfterCleanup(command)
+		if !waited {
+			record := unverifiedProcessRecord(command.Process.Pid, request.Mode, append([]string{request.Command}, request.Args...))
+			return nil, errors.Join(
+				fmt.Errorf("process: assign child %d to Windows job: %w; terminate exact child: %v", command.Process.Pid, err, killErr),
+				&ProcessCleanupUnsafeError{PID: command.Process.Pid, Mode: request.Mode, Record: record, Cause: waitErr},
+			)
+		}
 		if killErr != nil {
 			return nil, fmt.Errorf("process: assign child %d to Windows job: %w; terminate exact child: %v", command.Process.Pid, err, killErr)
 		}
@@ -111,13 +118,33 @@ func spawnWindowsProcess(ctx context.Context, request SpawnRequest) (Child, erro
 		terminateErr := job.Terminate()
 		killErr := command.Process.Kill()
 		_ = job.Close()
-		_ = command.Wait()
+		waited, waitErr := waitCommandAfterCleanup(command)
+		if !waited {
+			record := unverifiedProcessRecord(command.Process.Pid, request.Mode, append([]string{request.Command}, request.Args...))
+			return nil, errors.Join(
+				fmt.Errorf("process: resume child %d after Windows job assignment: %w; terminate job: %v; terminate exact child: %v", command.Process.Pid, err, terminateErr, killErr),
+				&ProcessCleanupUnsafeError{PID: command.Process.Pid, Mode: request.Mode, Record: record, Cause: waitErr},
+			)
+		}
 		if terminateErr != nil || killErr != nil {
 			return nil, fmt.Errorf("process: resume child %d after Windows job assignment: %w; terminate job: %v; terminate exact child: %v", command.Process.Pid, err, terminateErr, killErr)
 		}
 		return nil, fmt.Errorf("process: resume child %d after Windows job assignment: %w", command.Process.Pid, err)
 	}
 	return &windowsManagedChild{command: command, job: job, ctx: ctx}, nil
+}
+
+func waitCommandAfterCleanup(command *exec.Cmd) (bool, error) {
+	result := make(chan error, 1)
+	go func() { result <- command.Wait() }()
+	waitCtx, cancelWait := boundedCleanupContext(context.Background())
+	defer cancelWait()
+	select {
+	case <-result:
+		return true, nil
+	case <-waitCtx.Done():
+		return false, fmt.Errorf("process: Windows child wait after cleanup did not complete: %w", waitCtx.Err())
+	}
 }
 
 type windowsManagedChild struct {
@@ -134,14 +161,40 @@ func (child *windowsManagedChild) Wait() ExitStatus {
 	child.waitOnce.Do(func() {
 		waitErr := child.command.Wait()
 		child.status = processExitStatus(child.command.ProcessState, waitErr)
-		if emptyErr := child.job.WaitEmpty(child.ctx); child.status.Err == nil && emptyErr != nil {
-			child.status.Err = emptyErr
+		// Waiting for the leader is deliberately unbounded: a live command must
+		// not be killed merely because it has run for a long time. Once the
+		// leader exits, however, descendants must drain within a bounded cleanup
+		// window or the owning assignment is retained for recovery.
+		emptyCtx, cancelEmpty := boundedCleanupContext(child.ctx)
+		emptyErr := waitWindowsJobEmptyBounded(child.job, emptyCtx)
+		cancelEmpty()
+		if emptyErr != nil {
+			if child.status.Err == nil {
+				child.status.Err = emptyErr
+			} else {
+				child.status.BoundaryError = errors.Join(child.status.BoundaryError, emptyErr)
+			}
 		}
-		if closeErr := child.job.Close(); child.status.Err == nil && closeErr != nil {
-			child.status.Err = closeErr
+		if closeErr := child.job.Close(); closeErr != nil {
+			if child.status.Err == nil {
+				child.status.Err = closeErr
+			} else {
+				child.status.BoundaryError = errors.Join(child.status.BoundaryError, closeErr)
+			}
 		}
 	})
 	return child.status
+}
+
+func waitWindowsJobEmptyBounded(job *windowsJob, ctx context.Context) error {
+	result := make(chan error, 1)
+	go func() { result <- job.WaitEmpty(ctx) }()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("process: Windows Job Object descendants did not drain: %w", ctx.Err())
+	}
 }
 
 func (child *windowsManagedChild) Signal(signal os.Signal) error {

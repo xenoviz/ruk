@@ -64,6 +64,14 @@ type RuntimeDefaultsOptions struct {
 	PrimaryCheckoutFence PrimaryCheckoutFence
 }
 
+type runtimeExecutionOwnership uint8
+
+const (
+	runtimeExecutionOwnershipUnknown runtimeExecutionOwnership = iota
+	runtimeExecutionOwnershipRetained
+	runtimeExecutionOwnershipReleased
+)
+
 // NewRuntimeDefaults constructs fail-closed production routes. It does not
 // discover a repository or mutate state until one of the returned routes runs.
 func NewRuntimeDefaults(options RuntimeDefaultsOptions) (RuntimeDefaults, error) {
@@ -337,10 +345,18 @@ func runtimeGC(ctx context.Context, repository git.Repository, options lifecycle
 	if err != nil {
 		return lifecycle.GCResult{}, err
 	}
+	processFactory := runtimeOptions.Mutations.ReleaseProcesses
+	if processFactory == nil {
+		processFactory = func() lifecycle.ReleaseProcesser { return processpkg.NewNativeProcessManager() }
+	}
+	processes := processFactory()
+	if processes == nil {
+		return lifecycle.GCResult{}, errors.New("native GC process adapter is unavailable")
+	}
 	paths := state.StorePaths(repository.CommonDir)
 	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{
 		Reader: store, Lifecycle: service, Release: release, Git: workspace,
-		TreeState: stateTreeDeleter{store: store}, Locker: locker, LocksRoot: paths.Locks,
+		Processes: processes, TreeState: stateTreeDeleter{store: store}, Locker: locker, LocksRoot: paths.Locks,
 		Canonicalize: func(_ context.Context, path string) (string, error) { return canonicalRuntimePath(path) },
 	})
 	return gc.Run(ctx, options)
@@ -548,16 +564,29 @@ func runtimeExec(ctx context.Context, input ExecRouteInput, now func() time.Time
 	if acquired.AssignmentID == "" || acquired.Path == "" {
 		return 1, errors.New("acquire returned an incomplete assignment")
 	}
-	return runtimeExecute(ctx, input.Repository, input.CWD, input.Command, true, input.AllowSharedCheckout, acquired.AssignmentID, now, newID, mutations.Sync, options, acquired.Path)
+	code, err, expiresAt, ownership := runtimeExecuteWithExpiry(ctx, input.Repository, input.CWD, input.Command, true, input.AllowSharedCheckout, acquired.AssignmentID, now, newID, mutations.Sync, options, acquired.Path)
+	if err != nil {
+		return code, runtimeExecutionError(acquired, expiresAt, ownership, err)
+	}
+	return code, nil
 }
 
 func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, command []string, execMode, allowShared bool, assignmentID string, now func() time.Time, newID func() string, syncRoute SyncRouteOperation, options RuntimeDefaultsOptions, paths ...string) (int, error) {
+	code, err, _, _ := runtimeExecuteWithExpiry(ctx, repository, cwd, command, execMode, allowShared, assignmentID, now, newID, syncRoute, options, paths...)
+	return code, err
+}
+
+// runtimeExecuteWithExpiry returns the latest durable assignment expiry along
+// with the execution result. Activity keepers may renew the assignment while
+// the child is running, so retained errors must use that post-operation value
+// instead of the expiry returned by the initial acquire.
+func runtimeExecuteWithExpiry(ctx context.Context, repository git.Repository, cwd string, command []string, execMode, allowShared bool, assignmentID string, now func() time.Time, newID func() string, syncRoute SyncRouteOperation, options RuntimeDefaultsOptions, paths ...string) (int, error, string, runtimeExecutionOwnership) {
 	if strings.TrimSpace(cwd) == "" {
-		return 1, errors.New("execution working directory must not be empty")
+		return 1, errors.New("execution working directory must not be empty"), "", runtimeExecutionOwnershipUnknown
 	}
 	store, locker, service, err := runtimeState(ctx, repository, now, newID)
 	if err != nil {
-		return 1, err
+		return 1, err, "", runtimeExecutionOwnershipUnknown
 	}
 	workspacePath := repository.Root
 	if len(paths) > 0 && paths[0] != "" {
@@ -566,28 +595,28 @@ func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, 
 	if assignmentID == "" {
 		snapshot, readErr := store.Read(ctx)
 		if readErr != nil {
-			return 1, readErr
+			return 1, readErr, "", runtimeExecutionOwnershipUnknown
 		}
 		key, keyErr := state.TreeKey(workspacePath)
 		if keyErr != nil {
-			return 1, keyErr
+			return 1, keyErr, "", runtimeExecutionOwnershipUnknown
 		}
 		workspace, managed := snapshot.Workspaces[key]
 		if !managed {
 			if syncRoute == nil {
-				return 1, errors.New("sync command is not configured")
+				return 1, errors.New("sync command is not configured"), "", runtimeExecutionOwnershipUnknown
 			}
 			repo := repository
 			repo.Root = workspacePath
 			if _, syncErr := syncRoute(ctx, SyncCommandInput{Repository: repo, GuardSharedCheckout: false, AllowSharedCheckout: allowShared, Emit: false}); syncErr != nil {
-				return 1, syncErr
+				return 1, syncErr, "", runtimeExecutionOwnershipUnknown
 			}
 			current, currentErr := store.Read(ctx)
 			if currentErr != nil {
-				return 1, currentErr
+				return 1, currentErr, "", runtimeExecutionOwnershipUnknown
 			}
 			if _, becameManaged := current.Workspaces[key]; becameManaged {
-				return 1, fmt.Errorf("Workspace %s became managed during dependency synchronization", workspacePath)
+				return 1, fmt.Errorf("Workspace %s became managed during dependency synchronization", workspacePath), "", runtimeExecutionOwnershipUnknown
 			}
 			runner := options.ExecuteRunner
 			if runner.Spawner == nil {
@@ -597,15 +626,15 @@ func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, 
 				Dir: workspacePath, Env: os.Environ(), Mode: processpkg.Attached,
 				Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 			})
-			return result.ExitCode, runErr
+			return result.ExitCode, runErr, "", runtimeExecutionOwnershipUnknown
 		}
 		if workspace.Assignment == nil || workspace.Lifecycle != state.LifecycleAssigned || workspace.OperationID != nil {
-			return 1, fmt.Errorf("Workspace %s is not assigned", workspacePath)
+			return 1, fmt.Errorf("Workspace %s is not assigned", workspacePath), "", runtimeExecutionOwnershipUnknown
 		}
 		assignmentID = workspace.Assignment.ID
 	}
 	if syncRoute == nil {
-		return 1, errors.New("sync command is not configured")
+		return 1, errors.New("sync command is not configured"), "", runtimeExecutionOwnershipUnknown
 	}
 	baseRepository := repository
 	baseRepository.Root = workspacePath
@@ -649,16 +678,16 @@ func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, 
 	environment := os.Environ()
 	snapshot, err := store.Read(ctx)
 	if err != nil {
-		return 1, err
+		return 1, err, "", runtimeExecutionOwnershipUnknown
 	}
 	key, err := state.TreeKey(workspacePath)
 	if err != nil {
-		return 1, err
+		return 1, err, "", runtimeExecutionOwnershipUnknown
 	}
 	if workspace, ok := snapshot.Workspaces[key]; ok && workspace.Assignment != nil {
 		additions, envErr := ports.BuildEnvironment(workspace.Assignment.Ports)
 		if envErr != nil {
-			return 1, envErr
+			return 1, envErr, "", runtimeExecutionOwnershipUnknown
 		}
 		for name, value := range additions {
 			environment = append(environment, name+"="+value)
@@ -674,7 +703,38 @@ func runtimeExecute(ctx context.Context, repository git.Repository, cwd string, 
 	}
 	defer stopSignals()
 	result, err := execute.Execute(ctx, ExecuteInput{AssignmentID: assignmentID, WorkspacePath: workspacePath, Command: command, Env: environment, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Mode: processpkg.Detached, Exec: execMode, Signals: signals})
-	return result.ExitCode, err
+	expiresAt := ""
+	ownership := runtimeExecutionOwnershipUnknown
+	if assignmentID != "" {
+		if current, readErr := store.Read(context.WithoutCancel(ctx)); readErr == nil {
+			ownership = runtimeExecutionOwnershipReleased
+			if currentWorkspace, ok := current.Workspaces[key]; ok && currentWorkspace.Assignment != nil && currentWorkspace.Assignment.ID == assignmentID {
+				expiresAt = currentWorkspace.Assignment.ExpiresAt
+				ownership = runtimeExecutionOwnershipRetained
+			}
+		}
+		if result.Released {
+			ownership = runtimeExecutionOwnershipReleased
+		}
+	}
+	return result.ExitCode, err, expiresAt, ownership
+}
+
+func retainedRuntimeExecutionError(acquired AcquireResult, expiresAt string, err error) error {
+	if expiresAt == "" {
+		expiresAt = acquired.ExpiresAt
+	}
+	if retained := RetainedAssignmentFailure(acquired.AssignmentID, acquired.Path, expiresAt, err); retained != nil {
+		return retained
+	}
+	return err
+}
+
+func runtimeExecutionError(acquired AcquireResult, expiresAt string, ownership runtimeExecutionOwnership, err error) error {
+	if ownership == runtimeExecutionOwnershipReleased {
+		return err
+	}
+	return retainedRuntimeExecutionError(acquired, expiresAt, err)
 }
 
 func runtimeManagedSignals() (<-chan os.Signal, func()) {

@@ -10,10 +10,13 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/xenoviz/ruk/internal/lock"
 	"github.com/xenoviz/ruk/internal/state"
 )
+
+const processCleanupTimeout = 30 * time.Second
 
 // ProcessMode describes whether a managed child is attached to the caller or
 // owns a separately signalable process group.
@@ -104,11 +107,17 @@ type RunOptions struct {
 	Env                []string
 	Mode               ProcessMode
 	ForegroundTerminal bool
-	Stdin              io.Reader
-	Stdout             io.Writer
-	Stderr             io.Writer
-	CaptureLimit       int
-	Register           RegisterFunc
+	// SuperviseCancellation keeps the spawned child context alive while the
+	// caller context is observed separately. On cancellation, Runner uses the
+	// native cleaner to terminate the full process boundary, waits for the
+	// leader, and verifies detached descendants have drained before returning.
+	// Callers must retain their owning resource when this proof fails.
+	SuperviseCancellation bool
+	Stdin                 io.Reader
+	Stdout                io.Writer
+	Stderr                io.Writer
+	CaptureLimit          int
+	Register              RegisterFunc
 	// HandoffComplete is called after registration succeeds, or after failed
 	// registration cleanup has settled. Managed callers use it to release the
 	// workspace handoff lock before Runner waits for a long-lived child.
@@ -259,6 +268,10 @@ func (runner Runner) Run(ctx context.Context, command []string, options RunOptio
 	}
 	stdout := NewTailBuffer(limit)
 	stderr := NewTailBuffer(limit)
+	operationCtx := ctx
+	if options.SuperviseCancellation {
+		operationCtx = context.WithoutCancel(ctx)
+	}
 	request := SpawnRequest{
 		Command: command[0], Args: append([]string(nil), command[1:]...),
 		Dir: options.Dir, Env: append([]string(nil), options.Env...), Mode: options.Mode,
@@ -267,7 +280,7 @@ func (runner Runner) Run(ctx context.Context, command []string, options RunOptio
 		Stdout:             outputWriter(stdout, options.Stdout),
 		Stderr:             outputWriter(stderr, options.Stderr),
 	}
-	child, err := runner.Spawner.Spawn(ctx, request)
+	child, err := runner.Spawner.Spawn(operationCtx, request)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -277,57 +290,69 @@ func (runner Runner) Run(ctx context.Context, command []string, options RunOptio
 	pid := child.PID()
 	if pid <= 0 {
 		cause := errors.New("process: spawner returned a child with an invalid PID")
-		cleanupErr := runner.cleanupUnknownChild(ctx, child, options.Mode, state.TrackedProcessRecord{}, cause, nil, command)
+		cleanupErr := runner.cleanupUnknownChild(ctx, child, options.Mode, state.TrackedProcessRecord{}, cause, nil)
 		if options.HandoffComplete != nil {
 			options.HandoffComplete()
 		}
 		return RunResult{Started: true}, &ProcessSetupError{Cause: cause, Cleanup: cleanupErr}
 	}
-	record, err := runner.Describer.Describe(ctx, pid, options.Mode, command)
+	identityCtx, cancelIdentity := boundedCleanupContext(ctx)
+	record, err := runner.Describer.Describe(identityCtx, pid, options.Mode, command)
+	cancelIdentity()
 	if err != nil {
 		// A describer error makes any returned record untrusted. Do not use a
 		// partial identity to signal a possibly reused PID.
-		return runner.postSpawnFailure(ctx, child, options.Mode, state.TrackedProcessRecord{}, err, stdout, stderr, options.Register, command, options.HandoffComplete)
+		return runner.postSpawnFailure(operationCtx, child, options.Mode, state.TrackedProcessRecord{}, err, stdout, stderr, options.Register, command, options.HandoffComplete)
 	}
 	if err := validateRunnerRecord(record, pid, options.Mode); err != nil {
-		return runner.postSpawnFailure(ctx, child, options.Mode, state.TrackedProcessRecord{}, err, stdout, stderr, options.Register, command, options.HandoffComplete)
+		return runner.postSpawnFailure(operationCtx, child, options.Mode, state.TrackedProcessRecord{}, err, stdout, stderr, options.Register, command, options.HandoffComplete)
 	}
 	if options.Register != nil {
-		if err := options.Register(ctx, record); err != nil {
+		registerCtx, cancelRegister := boundedCleanupContext(ctx)
+		registerErr := options.Register(registerCtx, record)
+		cancelRegister()
+		if registerErr != nil {
 			cleanupErr := error(nil)
 			if runner.Cleaner == nil {
 				cleanupErr = errors.New("process: registration cleanup is unavailable")
 			} else {
-				cleanupCtx := context.WithoutCancel(ctx)
+				cleanupCtx, cancelCleanup := boundedCleanupContext(ctx)
+				defer cancelCleanup()
 				cleanupErr = runner.Cleaner.Cleanup(cleanupCtx, child, record)
 			}
 			if cleanupErr == nil {
 				// Successful cleanup must reap the child before this handoff fails.
-				status := child.Wait()
-				cleanupErr = waitStatusError(status)
-				if cleanupErr == nil && status.BoundaryError != nil {
-					cleanupErr = status.BoundaryError
+				status, waitErr := waitChildAfterCleanup(ctx, child)
+				cleanupErr = waitErr
+				if cleanupErr == nil {
+					cleanupErr = errors.Join(waitStatusError(status), status.BoundaryError)
+				}
+				if cleanupErr != nil {
+					cleanupErr = cancellationSafetyError(child, record, options.Mode, cleanupErr)
 				}
 				if cleanupErr == nil && options.Mode == Detached {
 					verifier, ok := runner.Cleaner.(ProcessCleanupVerifier)
 					if !ok {
-						cleanupErr = errors.New("process: detached registration cleanup cannot verify descendants drained")
+						cleanupErr = cancellationSafetyError(child, record, options.Mode, errors.New("process: detached registration cleanup cannot verify descendants drained"))
 					} else {
-						alive, verifyErr := verifier.Exists(context.WithoutCancel(ctx), record)
+						verifyCtx, cancelVerify := boundedCleanupContext(ctx)
+						alive, verifyErr := verifier.Exists(verifyCtx, record)
+						cancelVerify()
 						if verifyErr != nil {
-							cleanupErr = fmt.Errorf("process: verify detached registration cleanup: %w", verifyErr)
+							cleanupErr = cancellationSafetyError(child, record, options.Mode, fmt.Errorf("process: verify detached registration cleanup: %w", verifyErr))
 						} else if alive {
-							cleanupErr = errors.New("process: detached registration cleanup left descendants running")
+							cleanupErr = cancellationSafetyError(child, record, options.Mode, errors.New("process: detached registration cleanup left descendants running"))
 						}
 					}
 				}
 			} else {
 				retainAfterCleanupFailure(child)
+				cleanupErr = cancellationSafetyError(child, record, options.Mode, cleanupErr)
 			}
 			if options.HandoffComplete != nil {
 				options.HandoffComplete()
 			}
-			return RunResult{PID: child.PID(), Started: true, Record: record, Stdout: stdout.String(), Stderr: stderr.String()}, &RegistrationError{Register: err, Cleanup: cleanupErr}
+			return RunResult{PID: child.PID(), Started: true, Record: record, Stdout: stdout.String(), Stderr: stderr.String()}, &RegistrationError{Register: registerErr, Cleanup: cleanupErr}
 		}
 		if options.HandoffComplete != nil {
 			options.HandoffComplete()
@@ -336,15 +361,146 @@ func (runner Runner) Run(ctx context.Context, command []string, options RunOptio
 		// There is no durable registration callback to define the handoff.
 		options.HandoffComplete()
 	}
-	status := child.Wait()
+	status, supervisionErr := runner.waitSupervised(ctx, child, record, options)
 	result := RunResult{
 		PID: child.PID(), Started: true, ExitCode: normalizeExitCode(status), Signal: status.Signal,
 		Stdout: stdout.String(), Stderr: stderr.String(), Record: record,
 	}
+	if supervisionErr != nil {
+		return result, supervisionErr
+	}
 	if waitErr := waitStatusError(status); waitErr != nil || status.BoundaryError != nil {
-		return result, errors.Join(waitErr, status.BoundaryError)
+		cause := errors.Join(waitErr, status.BoundaryError)
+		return result, cancellationSafetyError(child, record, options.Mode, cause)
 	}
 	return result, nil
+}
+
+func (runner Runner) waitSupervised(ctx context.Context, child Child, record state.TrackedProcessRecord, options RunOptions) (ExitStatus, error) {
+	if !options.SuperviseCancellation {
+		return child.Wait(), nil
+	}
+
+	waitResult := make(chan ExitStatus, 1)
+	go func() { waitResult <- child.Wait() }()
+	select {
+	case status := <-waitResult:
+		verifyCtx, cancelVerify := boundedCleanupContext(ctx)
+		verifyErr := runner.verifyDetachedTree(verifyCtx, record, options)
+		cancelVerify()
+		if verifyErr != nil {
+			verifyErr = errors.Join(verifyErr, waitStatusError(status), status.BoundaryError)
+			safetyErr := cancellationSafetyError(child, record, options.Mode, verifyErr)
+			if ctx.Err() != nil {
+				return status, errors.Join(ctx.Err(), safetyErr)
+			}
+			return status, safetyErr
+		}
+		if ctx.Err() != nil {
+			if waitErr := errors.Join(waitStatusError(status), status.BoundaryError); waitErr != nil {
+				return status, errors.Join(ctx.Err(), cancellationSafetyError(child, record, options.Mode, waitErr))
+			}
+			return status, ctx.Err()
+		}
+		return status, nil
+	case <-ctx.Done():
+		cleanupCtx, cancelCleanup := boundedCleanupContext(ctx)
+		cleanupErr := runner.cleanupCancelledChild(cleanupCtx, child, record, options.Mode)
+		cancelCleanup()
+		if cleanupErr != nil {
+			// Do not block the caller when the native boundary cannot be proven
+			// safe. The owning workspace must remain retained for recovery.
+			return ExitStatus{}, errors.Join(ctx.Err(), cancellationSafetyError(child, record, options.Mode, cleanupErr))
+		}
+		waitCtx, cancelWait := boundedCleanupContext(ctx)
+		var status ExitStatus
+		select {
+		case status = <-waitResult:
+			cancelWait()
+		case <-waitCtx.Done():
+			cancelWait()
+			return ExitStatus{}, errors.Join(ctx.Err(), cancellationSafetyError(child, record, options.Mode, fmt.Errorf("process: wait after cancellation cleanup did not complete: %w", waitCtx.Err())))
+		}
+		verifyCtx, cancelVerify := boundedCleanupContext(ctx)
+		verifyErr := runner.verifyDetachedTree(verifyCtx, record, options)
+		cancelVerify()
+		waitErr := errors.Join(waitStatusError(status), status.BoundaryError)
+		if verifyErr != nil || waitErr != nil {
+			verifyCause := error(nil)
+			if verifyErr != nil {
+				verifyCause = fmt.Errorf("process: verify cancellation cleanup: %w", verifyErr)
+			}
+			return status, errors.Join(ctx.Err(), cancellationSafetyError(child, record, options.Mode, errors.Join(verifyCause, waitErr)))
+		}
+		return status, ctx.Err()
+	}
+}
+
+func boundedCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), processCleanupTimeout)
+}
+
+// waitChildAfterCleanup gives a child a bounded window to report its final
+// status after the native boundary has been cleaned. The wait goroutine owns
+// the eventual reap when the window expires; callers must retain the owning
+// assignment because safety could not be proven in time.
+func waitChildAfterCleanup(ctx context.Context, child Child) (ExitStatus, error) {
+	waitResult := make(chan ExitStatus, 1)
+	go func() { waitResult <- child.Wait() }()
+	waitCtx, cancelWait := boundedCleanupContext(ctx)
+	defer cancelWait()
+	select {
+	case status := <-waitResult:
+		return status, nil
+	case <-waitCtx.Done():
+		return ExitStatus{}, fmt.Errorf("process: wait after cleanup did not complete: %w", waitCtx.Err())
+	}
+}
+
+func (runner Runner) verifyDetachedTree(ctx context.Context, record state.TrackedProcessRecord, options RunOptions) error {
+	if options.Mode != Detached {
+		return nil
+	}
+	verifier, ok := runner.Cleaner.(ProcessCleanupVerifier)
+	if !ok {
+		return errors.New("process: cancellation cleanup cannot verify descendants drained")
+	}
+	alive, err := verifier.Exists(ctx, record)
+	if err != nil {
+		return fmt.Errorf("process: verify detached process tree: %w", err)
+	}
+	if alive {
+		return errors.New("process: detached process tree still has descendants")
+	}
+	return nil
+}
+
+func cancellationSafetyError(child Child, record state.TrackedProcessRecord, mode ProcessMode, cause error) error {
+	return &ProcessCleanupUnsafeError{PID: child.PID(), Mode: mode, Record: record, Cause: cause}
+}
+
+func (runner Runner) cleanupCancelledChild(ctx context.Context, child Child, record state.TrackedProcessRecord, mode ProcessMode) error {
+	if runner.Cleaner == nil {
+		return errors.New("process: cancellation cleanup is unavailable")
+	}
+	if !cleanupRecordUsable(record, child.PID(), mode) {
+		cleaner, ok := runner.Cleaner.(ProcessUnknownCleaner)
+		if !ok {
+			return errors.New("process: cancellation cleanup identity is unavailable")
+		}
+		drained, err := cleaner.CleanupUnknown(ctx, child, mode, record)
+		if err != nil {
+			return err
+		}
+		if !drained {
+			return errors.New("process: cancellation cleanup did not prove the child tree drained")
+		}
+		return nil
+	}
+	return runner.Cleaner.Cleanup(ctx, child, record)
 }
 
 func (runner Runner) postSpawnFailure(
@@ -360,7 +516,9 @@ func (runner Runner) postSpawnFailure(
 ) (RunResult, error) {
 	result := RunResult{PID: child.PID(), Started: true, Record: record, Stdout: stdout.String(), Stderr: stderr.String()}
 	if !cleanupRecordUsable(record, child.PID(), mode) {
-		cleanupErr := runner.cleanupUnknownChild(ctx, child, mode, record, errors.New("process identity or group boundary is unavailable"), register, command)
+		sentinel := unverifiedProcessRecord(child.PID(), mode, command)
+		result.Record = sentinel
+		cleanupErr := runner.cleanupUnknownChild(ctx, child, mode, sentinel, errors.New("process identity or group boundary is unavailable"), register)
 		if handoffComplete != nil {
 			handoffComplete()
 		}
@@ -370,29 +528,37 @@ func (runner Runner) postSpawnFailure(
 	if runner.Cleaner == nil {
 		cleanupErr = errors.New("process: post-spawn cleanup is unavailable")
 	} else {
-		cleanupErr = runner.Cleaner.Cleanup(context.WithoutCancel(ctx), child, record)
+		cleanupCtx, cancelCleanup := boundedCleanupContext(ctx)
+		cleanupErr = runner.Cleaner.Cleanup(cleanupCtx, child, record)
+		cancelCleanup()
 	}
 	if cleanupErr == nil {
-		status := child.Wait()
-		cleanupErr = waitStatusError(status)
-		if cleanupErr == nil && status.BoundaryError != nil {
-			cleanupErr = status.BoundaryError
+		status, waitErr := waitChildAfterCleanup(ctx, child)
+		cleanupErr = waitErr
+		if cleanupErr == nil {
+			cleanupErr = errors.Join(waitStatusError(status), status.BoundaryError)
+		}
+		if cleanupErr != nil {
+			cleanupErr = cancellationSafetyError(child, record, mode, cleanupErr)
 		}
 		if cleanupErr == nil && mode == Detached {
 			verifier, ok := runner.Cleaner.(ProcessCleanupVerifier)
 			if !ok {
-				cleanupErr = errors.New("process: detached cleanup cannot verify descendants drained")
+				cleanupErr = cancellationSafetyError(child, record, mode, errors.New("process: detached cleanup cannot verify descendants drained"))
 			} else {
-				alive, verifyErr := verifier.Exists(context.WithoutCancel(ctx), record)
+				verifyCtx, cancelVerify := boundedCleanupContext(ctx)
+				alive, verifyErr := verifier.Exists(verifyCtx, record)
+				cancelVerify()
 				if verifyErr != nil {
-					cleanupErr = fmt.Errorf("process: verify detached cleanup: %w", verifyErr)
+					cleanupErr = cancellationSafetyError(child, record, mode, fmt.Errorf("process: verify detached cleanup: %w", verifyErr))
 				} else if alive {
-					cleanupErr = errors.New("process: detached cleanup left descendants running")
+					cleanupErr = cancellationSafetyError(child, record, mode, errors.New("process: detached cleanup left descendants running"))
 				}
 			}
 		}
 	} else {
 		retainAfterCleanupFailure(child)
+		cleanupErr = cancellationSafetyError(child, record, mode, cleanupErr)
 	}
 	if handoffComplete != nil {
 		handoffComplete()
@@ -406,12 +572,13 @@ func (runner Runner) postSpawnFailure(
 // PID/identity remains the authority for later recovery.
 func retainAfterCleanupFailure(child Child) { go child.Wait() }
 
-func (runner Runner) cleanupUnknownChild(ctx context.Context, child Child, mode ProcessMode, record state.TrackedProcessRecord, cause error, register RegisterFunc, command []string) error {
+func (runner Runner) cleanupUnknownChild(ctx context.Context, child Child, mode ProcessMode, record state.TrackedProcessRecord, cause error, register RegisterFunc) error {
 	unsafeErr := &ProcessCleanupUnsafeError{PID: child.PID(), Mode: mode, Record: record, Cause: cause}
+	cleanupCtx, cancelCleanup := boundedCleanupContext(ctx)
+	defer cancelCleanup()
 	var sentinelErr error
 	if register != nil {
-		sentinel := unverifiedProcessRecord(child.PID(), mode, command)
-		if err := register(context.WithoutCancel(ctx), sentinel); err != nil {
+		if err := register(cleanupCtx, record); err != nil {
 			sentinelErr = fmt.Errorf("persist unverified process sentinel: %w", err)
 		}
 	}
@@ -420,7 +587,7 @@ func (runner Runner) cleanupUnknownChild(ctx context.Context, child Child, mode 
 		retainAfterCleanupFailure(child)
 		return errors.Join(unsafeErr, sentinelErr)
 	}
-	drained, cleanupErr := cleaner.CleanupUnknown(context.WithoutCancel(ctx), child, mode, record)
+	drained, cleanupErr := cleaner.CleanupUnknown(cleanupCtx, child, mode, record)
 	if cleanupErr != nil || !drained {
 		if cleanupErr == nil {
 			cleanupErr = errors.New("process: child boundary did not prove tree drained")
@@ -428,7 +595,10 @@ func (runner Runner) cleanupUnknownChild(ctx context.Context, child Child, mode 
 		retainAfterCleanupFailure(child)
 		return errors.Join(unsafeErr, cleanupErr, sentinelErr)
 	}
-	status := child.Wait()
+	status, waitErr := waitChildAfterCleanup(ctx, child)
+	if waitErr != nil {
+		return errors.Join(unsafeErr, waitErr, sentinelErr)
+	}
 	if waitErr := waitStatusError(status); waitErr != nil || status.BoundaryError != nil {
 		return errors.Join(unsafeErr, waitErr, status.BoundaryError, sentinelErr)
 	}

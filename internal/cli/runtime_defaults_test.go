@@ -24,6 +24,43 @@ type runtimeDefaultsWarmWorktree struct {
 
 type runtimeShellTerminalStub struct{ called bool }
 
+func TestRetainedRuntimeExecutionErrorUsesCurrentAssignmentExpiry(t *testing.T) {
+	acquired := AcquireResult{AcquireRecord: AcquireRecord{
+		AssignmentID: "assignment-exec",
+		Path:         "/workspace/execution",
+		ExpiresAt:    "2026-08-17T00:00:00.000Z",
+	}}
+	cause := &processpkg.ProcessCleanupUnsafeError{PID: 42, Cause: errors.New("identity unavailable")}
+	err := retainedRuntimeExecutionError(acquired, "2026-08-17T00:30:00.000Z", cause)
+	var retained *RetainedAssignmentError
+	if !errors.As(err, &retained) {
+		t.Fatalf("error = %T %v, want retained assignment metadata", err, err)
+	}
+	if retained.AssignmentID != acquired.AssignmentID || retained.Path != acquired.Path || retained.ExpiresAt != "2026-08-17T00:30:00.000Z" {
+		t.Fatalf("retained = %#v, want current assignment metadata", retained)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("retained error does not preserve process cause: %v", err)
+	}
+}
+
+func TestRuntimeExecutionErrorDoesNotClaimRetentionAfterReleasedPreChildFailure(t *testing.T) {
+	acquired := AcquireResult{AcquireRecord: AcquireRecord{
+		AssignmentID: "assignment-exec",
+		Path:         "/workspace/execution",
+		ExpiresAt:    "2026-08-17T00:00:00.000Z",
+	}}
+	cause := &processpkg.ProcessCleanupUnsafeError{PID: 42, Cause: errors.New("dependency process cleanup failed")}
+	err := runtimeExecutionError(acquired, acquired.ExpiresAt, runtimeExecutionOwnershipReleased, cause)
+	var retained *RetainedAssignmentError
+	if errors.As(err, &retained) {
+		t.Fatalf("released pre-child failure was wrapped as retained: %#v", retained)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("released pre-child failure lost its cause: %v", err)
+	}
+}
+
 func (stub *runtimeShellTerminalStub) Run(context.Context, ShellTerminalRequest) (ShellTerminalResult, error) {
 	stub.called = true
 	return ShellTerminalResult{DescendantsDrained: true}, nil

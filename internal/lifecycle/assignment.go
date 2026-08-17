@@ -141,6 +141,12 @@ func (service *Service) MarkAssigned(ctx context.Context, workspacePath, prepara
 // RetainAssignmentAfterAcquisitionFailure clears an acquisition marker while
 // preserving the exact assignment for a later, ID-fenced recovery or release.
 func (service *Service) RetainAssignmentAfterAcquisitionFailure(ctx context.Context, assignmentID, acquisitionOperationID, failure string) (state.WorkspaceRecord, error) {
+	return service.RetainAssignmentAfterAcquisitionFailureWithProcess(ctx, assignmentID, acquisitionOperationID, failure, nil)
+}
+
+// RetainAssignmentAfterAcquisitionFailureWithProcess atomically preserves an
+// unsafe installer boundary with the exact assignment recovery transition.
+func (service *Service) RetainAssignmentAfterAcquisitionFailureWithProcess(ctx context.Context, assignmentID, acquisitionOperationID, failure string, retained *state.TrackedProcessRecord) (state.WorkspaceRecord, error) {
 	if failure == "" {
 		return state.WorkspaceRecord{}, errors.New("failure must not be empty")
 	}
@@ -156,7 +162,12 @@ func (service *Service) RetainAssignmentAfterAcquisitionFailure(ctx context.Cont
 		if workspace.OperationID == nil || *workspace.OperationID != acquisitionOperationID {
 			return errors.New("Acquisition operation does not match")
 		}
-		now := timestamp(service.now())
+		if retained != nil {
+			if err := appendRetainedProcess(&workspace, *retained); err != nil {
+				return err
+			}
+		}
+		now := nextWorkspaceTimestamp(workspace.UpdatedAt, service.now())
 		workspace.OperationID = nil
 		workspace.UpdatedAt = now
 		workspace.Failure = &failure

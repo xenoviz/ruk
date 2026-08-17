@@ -58,6 +58,11 @@ versioning.
   start requested leases after preparation, serialize reusable capacity with
   warm and GC, preserve fail-closed Linux identities, and bound Windows update
   replacement waits without discarding recovery artifacts.
+- Supervise dependency installers with native process groups and Windows jobs,
+  retain exact process records across canceled preparation, let fenced GC drain
+  only identity-matching installer trees, and use microsecond kernel process
+  identities on macOS. Windows cleanup performs a final bounded leaderless-tree
+  drain without signaling newly discovered reusable PIDs.
 
 ## 0.1.2 - 2026-08-08
 

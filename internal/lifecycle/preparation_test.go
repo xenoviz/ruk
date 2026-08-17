@@ -110,3 +110,27 @@ func TestPreparationFailureRetainsReason(t *testing.T) {
 		t.Fatalf("Failure = %#v", failed.Failure)
 	}
 }
+
+func TestPreparationFailureAtomicallyRetainsUnsafeProcess(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStore()
+	service := lifecycle.New(store, lifecycle.Options{
+		Now:   func() time.Time { return time.Date(2026, time.January, 1, 0, 1, 0, 0, time.UTC) },
+		NewID: func() string { return preparationID },
+	})
+	workspacePath := filepath.Join(t.TempDir(), "workspace")
+	if _, err := service.BeginPreparation(context.Background(), workspacePath, "agent/test"); err != nil {
+		t.Fatal(err)
+	}
+	record := state.TrackedProcessRecord{PID: 42, StartedAt: "native:42", Command: []string{"installer"}}
+	failed, err := service.MarkFailedRetainingProcess(context.Background(), workspacePath, preparationID, "installer cleanup unsafe", &record)
+	if err != nil {
+		t.Fatalf("MarkFailedRetainingProcess returned an error: %v", err)
+	}
+	if failed.Lifecycle != state.LifecycleFailed || len(failed.Processes) != 1 || failed.Processes[0].PID != 42 || failed.Processes[0].StartedAt != "native:42" {
+		t.Fatalf("failed workspace = %#v, want exact retained process", failed)
+	}
+	if failed.UpdatedAt != "2026-01-01T00:01:00.001Z" {
+		t.Fatalf("failed UpdatedAt = %q, want monotonic recovery fence", failed.UpdatedAt)
+	}
+}

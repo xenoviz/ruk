@@ -203,6 +203,32 @@ func TestWorkspaceServiceRelocksAfterFailedRemoval(t *testing.T) {
 	}
 }
 
+func TestWorkspaceServiceRelockSurvivesCanceledParentWithBoundedCleanupContext(t *testing.T) {
+	runner := &fakeRunner{results: map[string]rukgit.CommandResult{}}
+	service, _, managedRoot := newWorkspaceService(t, runner)
+	destination := filepath.Join(managedRoot, "task")
+	runner.results["worktree unlock "+destination] = rukgit.CommandResult{}
+	runner.results["worktree remove --force "+destination] = rukgit.CommandResult{ExitCode: 1, Stderr: "fatal: busy"}
+	runner.results["worktree lock --reason ruk pool "+destination] = rukgit.CommandResult{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := service.SafeRemove(ctx, destination, true)
+	if err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("SafeRemove error = %v, want removal failure", err)
+	}
+	if len(runner.contexts) != 3 {
+		t.Fatalf("recorded %d command contexts, want unlock/remove/relock", len(runner.contexts))
+	}
+	relockContext := runner.contexts[2]
+	if relockContext.Err() != nil {
+		t.Fatalf("relock context error = %v, want active cleanup context", relockContext.Err())
+	}
+	if _, ok := relockContext.Deadline(); !ok {
+		t.Fatal("relock context has no bounded deadline")
+	}
+}
+
 func TestWorkspaceServiceRemoveAndPruneSucceeds(t *testing.T) {
 	runner := &fakeRunner{results: map[string]rukgit.CommandResult{}}
 	service, _, managedRoot := newWorkspaceService(t, runner)

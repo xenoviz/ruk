@@ -47,6 +47,33 @@ type gcTestGit struct {
 	lock      int
 }
 
+type gcTestProcesses struct {
+	exists   []bool
+	existsAt int
+	force    []bool
+	err      error
+}
+
+func (processes *gcTestProcesses) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	if processes.err != nil {
+		return false, processes.err
+	}
+	if len(processes.exists) == 0 {
+		return false, nil
+	}
+	index := processes.existsAt
+	if index >= len(processes.exists) {
+		index = len(processes.exists) - 1
+	}
+	processes.existsAt++
+	return processes.exists[index], nil
+}
+
+func (processes *gcTestProcesses) Terminate(_ context.Context, _ state.TrackedProcessRecord, force bool) (bool, error) {
+	processes.force = append(processes.force, force)
+	return true, nil
+}
+
 func (git *gcTestGit) IsWorktree(context.Context, string) (bool, error) { return git.worktree, nil }
 func (git *gcTestGit) Unlock(context.Context, string) error {
 	git.unlock++
@@ -253,6 +280,69 @@ func TestGCServiceTreeStateFailureRetainsFenceForRetry(t *testing.T) {
 	}
 }
 
+func TestGCServiceDrainsTrackedProcessBeforeCollectingFailedWorkspace(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 2, 0, 0, 0, time.UTC)
+	workspace := gcWorkspaceForService("/pool/failed-process", state.LifecycleFailed, nil, nil, "2026-01-01T00:00:00.000Z")
+	workspace.Processes = []state.TrackedProcessRecord{{PID: 42, StartedAt: "native:42"}}
+	store, service := gcFixture(t, now, workspace)
+	processes := &gcTestProcesses{exists: []bool{true, false}}
+	git := &gcTestGit{}
+	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{
+		Reader: store, Lifecycle: service, Processes: processes, Git: git, TreeState: &gcTestTreeState{},
+		Locker: &gcTestLocker{}, LocksRoot: t.TempDir(), ProcessDrainTimeout: time.Second,
+	})
+
+	result, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true})
+	if err != nil {
+		t.Fatalf("failed workspace recovery returned an error: %v", err)
+	}
+	if len(result.Removed) != 1 || len(processes.force) != 1 || !processes.force[0] || git.remove != 0 {
+		t.Fatalf("recovery result/process/git calls = %#v/%#v/%d", result, processes.force, git.remove)
+	}
+	if len(store.current.Workspaces) != 0 {
+		t.Fatalf("workspace was not collected after process drain: %#v", store.current.Workspaces)
+	}
+}
+
+func TestGCServiceTrackedProcessUncertaintyFailsClosed(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 2, 0, 0, 0, time.UTC)
+	workspace := gcWorkspaceForService("/pool/uncertain-process", state.LifecycleFailed, nil, nil, "2026-01-01T00:00:00.000Z")
+	workspace.Processes = []state.TrackedProcessRecord{{PID: 42, StartedAt: "native:42"}}
+	store, service := gcFixture(t, now, workspace)
+	git := &gcTestGit{}
+	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{
+		Reader: store, Lifecycle: service, Processes: &gcTestProcesses{err: errors.New("identity unavailable")}, Git: git,
+		TreeState: &gcTestTreeState{}, Locker: &gcTestLocker{}, LocksRoot: t.TempDir(),
+	})
+
+	if _, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true}); err == nil || !strings.Contains(err.Error(), "identity unavailable") {
+		t.Fatalf("uncertain process result = %v", err)
+	}
+	if git.unlock != 0 || git.remove != 0 || len(workspaceAtPathForGC(t, store, workspace.Path).Processes) != 1 {
+		t.Fatalf("uncertain process was not failed closed: git=%#v workspace=%#v", git, workspaceAtPathForGC(t, store, workspace.Path))
+	}
+}
+
+func TestGCServiceTrackedProcessDrainTimeoutFailsClosed(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 2, 0, 0, 0, time.UTC)
+	workspace := gcWorkspaceForService("/pool/live-process", state.LifecyclePreparing, stringPointerForGC("prepare-operation"), nil, "2026-01-01T00:00:00.000Z")
+	workspace.Processes = []state.TrackedProcessRecord{{PID: 42, StartedAt: "native:42"}}
+	store, service := gcFixture(t, now, workspace)
+	git := &gcTestGit{}
+	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{
+		Reader: store, Lifecycle: service, Processes: &gcTestProcesses{exists: []bool{true}}, Git: git,
+		TreeState: &gcTestTreeState{}, Locker: &gcTestLocker{}, LocksRoot: t.TempDir(),
+		ProcessDrainTimeout: time.Millisecond, ProcessPollInterval: time.Millisecond,
+	})
+
+	if _, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true}); err == nil || !strings.Contains(err.Error(), "did not drain") {
+		t.Fatalf("live process timeout result = %v", err)
+	}
+	if git.unlock != 0 || git.remove != 0 || len(workspaceAtPathForGC(t, store, workspace.Path).Processes) != 1 {
+		t.Fatalf("live process was not failed closed: git=%#v workspace=%#v", git, workspaceAtPathForGC(t, store, workspace.Path))
+	}
+}
+
 func gcFixture(t *testing.T, now time.Time, workspaces ...state.WorkspaceRecord) (*gcServiceStore, *lifecycle.Service) {
 	t.Helper()
 	store := &gcServiceStore{current: &state.State{Version: state.CurrentVersion, Trees: map[string]state.TreeRecord{}, Workspaces: map[string]state.WorkspaceRecord{}, Metrics: state.EmptyMetrics()}}
@@ -284,4 +374,8 @@ func workspaceAtPathForGC(t *testing.T, store *gcServiceStore, path string) stat
 		t.Fatalf("workspace %s is missing", path)
 	}
 	return workspace
+}
+
+func stringPointerForGC(value string) *string {
+	return &value
 }

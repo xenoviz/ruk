@@ -22,6 +22,10 @@ type createWorkspaceStub struct {
 	remove  error
 }
 
+type failingCreateWriter struct{ err error }
+
+func (writer failingCreateWriter) Write([]byte) (int, error) { return 0, writer.err }
+
 func (stub *createWorkspaceStub) Create(_ context.Context, path, branch, start string, detach bool) error {
 	stub.created = true
 	stub.path, stub.branch, stub.start, stub.detach = path, branch, start, detach
@@ -141,6 +145,28 @@ func TestCreateCommandJSONEmitsOneSyncRecordWithoutHumanDestination(t *testing.T
 	}
 	if strings.Contains(output.String(), "Dependencies") || strings.Contains(output.String(), "\n"+result.Path+"\n") {
 		t.Fatalf("JSON output contains human progress: %q", output.String())
+	}
+}
+
+func TestCreateCommandDoesNotRemovePreparedWorkspaceWhenOutputFails(t *testing.T) {
+	for _, jsonMode := range []bool{false, true} {
+		t.Run(map[bool]string{false: "human", true: "json"}[jsonMode], func(t *testing.T) {
+			workspace := &createWorkspaceStub{}
+			command := createTestCommand(workspace, func(context.Context, CreateSyncRequest) (SyncCommandResult, error) {
+				return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
+			})
+			outputErr := errors.New("output closed")
+			_, err := command.Run(context.Background(), CreateCommandInput{
+				Repository: createTestRepository(t), Branch: "agent/output-failure", JSON: jsonMode,
+				Output: failingCreateWriter{err: outputErr},
+			})
+			if !errors.Is(err, outputErr) || !strings.Contains(err.Error(), "write create result") {
+				t.Fatalf("error=%v, want output failure", err)
+			}
+			if !workspace.created || workspace.removed {
+				t.Fatalf("workspace state=%#v, output failure must preserve prepared workspace", workspace)
+			}
+		})
 	}
 }
 

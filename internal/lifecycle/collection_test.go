@@ -2,6 +2,7 @@ package lifecycle_test
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,3 +96,90 @@ func TestAbandonedPreparationBecomesFailedBeforeCollection(t *testing.T) {
 		t.Fatalf("collecting workspace = %#v", collecting)
 	}
 }
+
+func TestWorkspaceCollectionRefusesTrackedProcessesBeforePublishingFence(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	service := lifecycle.New(store, lifecycle.Options{
+		Now:   func() time.Time { return time.Date(2026, time.January, 1, 2, 0, 0, 0, time.UTC) },
+		NewID: func() string { return "collection-operation" },
+	})
+	workspacePath := t.TempDir()
+	key, err := state.TreeKey(workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedAt := "2026-01-01T01:00:00.000Z"
+	store.current.Workspaces[key] = state.WorkspaceRecord{
+		Path: workspacePath, Managed: true, Branch: "agent/test", Lifecycle: state.LifecycleFailed,
+		Processes: []state.TrackedProcessRecord{{PID: 42, StartedAt: "native:42"}}, CreatedAt: updatedAt, UpdatedAt: updatedAt,
+		Failure: collectionFailurePointer("installer cleanup is unresolved"),
+	}
+
+	if _, err := service.BeginWorkspaceCollection(context.Background(), workspacePath, updatedAt); err == nil || !strings.Contains(err.Error(), "tracked processes") {
+		t.Fatalf("BeginWorkspaceCollection error = %v, want tracked-process refusal", err)
+	}
+	if store.current.Workspaces[key].OperationID != nil {
+		t.Fatalf("collection fence was published despite tracked processes: %#v", store.current.Workspaces[key])
+	}
+}
+
+func TestMarkFailedRetainsTrackedPreparationProcess(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	service := lifecycle.New(store, lifecycle.Options{
+		Now:   func() time.Time { return time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC) },
+		NewID: func() string { return preparationID },
+	})
+	workspacePath := filepath.Join(t.TempDir(), "workspace")
+	if _, err := service.BeginPreparation(context.Background(), workspacePath, "agent/test"); err != nil {
+		t.Fatalf("BeginPreparation returned an error: %v", err)
+	}
+	key, err := state.TreeKey(workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := store.current.Workspaces[key]
+	workspace.Processes = []state.TrackedProcessRecord{{PID: 42, StartedAt: "native:42"}}
+	store.current.Workspaces[key] = workspace
+
+	failed, err := service.MarkFailed(context.Background(), workspacePath, preparationID, "installer cleanup is unresolved")
+	if err != nil {
+		t.Fatalf("MarkFailed returned an error: %v", err)
+	}
+	if failed.Lifecycle != state.LifecycleFailed || len(failed.Processes) != 1 || failed.Processes[0].PID != 42 {
+		t.Fatalf("failed workspace = %#v, want tracked process retained", failed)
+	}
+}
+
+func TestMarkAvailableRefusesTrackedPreparationProcess(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	service := lifecycle.New(store, lifecycle.Options{
+		Now:   func() time.Time { return time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC) },
+		NewID: func() string { return preparationID },
+	})
+	workspacePath := filepath.Join(t.TempDir(), "workspace")
+	if _, err := service.BeginPreparation(context.Background(), workspacePath, "agent/test"); err != nil {
+		t.Fatalf("BeginPreparation returned an error: %v", err)
+	}
+	key, err := state.TreeKey(workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := store.current.Workspaces[key]
+	workspace.Processes = []state.TrackedProcessRecord{{PID: 42, StartedAt: "native:42"}}
+	store.current.Workspaces[key] = workspace
+
+	if _, err := service.MarkAvailable(context.Background(), workspacePath, preparationID); err == nil || !strings.Contains(err.Error(), "tracked processes") {
+		t.Fatalf("MarkAvailable error = %v, want tracked-process refusal", err)
+	}
+	if store.current.Workspaces[key].Lifecycle != state.LifecyclePreparing {
+		t.Fatalf("workspace lifecycle = %s, want preparing", store.current.Workspaces[key].Lifecycle)
+	}
+}
+
+func collectionFailurePointer(value string) *string { return &value }

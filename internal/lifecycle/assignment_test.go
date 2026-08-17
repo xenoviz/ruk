@@ -324,7 +324,8 @@ func TestAcquisitionHandoffFencesAndRecoveryPreserveRenewal(t *testing.T) {
 	}
 
 	now = now.Add(time.Minute)
-	retained, err := service.RetainAssignmentAfterAcquisitionFailure(context.Background(), assignmentID, acquisitionID, "installer failed")
+	processRecord := state.TrackedProcessRecord{PID: 42, StartedAt: "native:42", Command: []string{"installer"}}
+	retained, err := service.RetainAssignmentAfterAcquisitionFailureWithProcess(context.Background(), assignmentID, acquisitionID, "installer failed", &processRecord)
 	if err != nil {
 		t.Fatalf("RetainAssignmentAfterAcquisitionFailure returned an error: %v", err)
 	}
@@ -333,6 +334,9 @@ func TestAcquisitionHandoffFencesAndRecoveryPreserveRenewal(t *testing.T) {
 	}
 	if retained.Assignment == nil || retained.Assignment.ExpiresAt != "2026-01-01T05:00:00.000Z" {
 		t.Fatalf("retained renewal was overwritten: %#v", retained.Assignment)
+	}
+	if len(retained.Processes) != 1 || retained.Processes[0].PID != 42 || retained.Processes[0].StartedAt != "native:42" {
+		t.Fatalf("retained processes = %#v, want exact installer record", retained.Processes)
 	}
 	if _, err := service.BeginWorkspaceReturn(context.Background(), assignmentID); err != nil {
 		t.Fatalf("retained assignment was not retryable: %v", err)

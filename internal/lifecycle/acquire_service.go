@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/xenoviz/ruk/internal/dependencies"
 	"github.com/xenoviz/ruk/internal/lock"
+	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
 )
 
@@ -98,6 +100,8 @@ type AcquisitionService struct {
 	lockPath      func(string) string
 	cleanup       func(context.Context, string, bool) error
 }
+
+const acquisitionRecoveryTimeout = 30 * time.Second
 
 // NewAcquisitionService constructs an acquisition orchestrator. Lifecycle is
 // required because all ownership and handoff changes must pass through its
@@ -578,17 +582,19 @@ func (service *AcquisitionService) failAssigned(ctx context.Context, assignmentI
 	if cause == nil {
 		cause = errors.New("acquisition failed")
 	}
+	recoveryCtx, cancel := acquisitionRecoveryContext(ctx)
+	defer cancel()
 	// Never clean a tree after ownership has crossed the immutable fence. A
 	// delayed failure may belong to an old handoff; leaving its marker for
 	// fenced recovery is safer than mutating a newer owner's workspace.
-	if fenceErr := service.verifyAssignment(ctx, assignmentID, operationID); fenceErr != nil {
+	if fenceErr := service.verifyAssignment(recoveryCtx, assignmentID, operationID); fenceErr != nil {
 		return errors.Join(cause, fenceErr)
 	}
 	cleanupErr := error(nil)
-	if cleanup && service.cleanup != nil {
-		cleanupErr = service.cleanup(ctx, path, true)
+	if cleanup && service.cleanup != nil && !processCleanupUnsafe(cause) {
+		cleanupErr = service.cleanup(recoveryCtx, path, true)
 	}
-	retained, retainErr := service.lifecycle.RetainAssignmentAfterAcquisitionFailure(ctx, assignmentID, operationID, failureText(cause, cleanupErr))
+	retained, retainErr := service.lifecycle.RetainAssignmentAfterAcquisitionFailureWithProcess(recoveryCtx, assignmentID, operationID, failureText(cause, cleanupErr), unsafeProcessRecord(cause))
 	if retainErr != nil {
 		return errors.Join(cause, cleanupErr, retainErr)
 	}
@@ -605,16 +611,60 @@ func (service *AcquisitionService) failAssigned(ctx context.Context, assignmentI
 	return recovery
 }
 
+func acquisitionRecoveryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), acquisitionRecoveryTimeout)
+}
+
 func (service *AcquisitionService) failPreparation(ctx context.Context, path, operationID string, cleanup bool, cause error) error {
 	if cause == nil {
 		cause = errors.New("acquisition failed")
 	}
+	recoveryCtx, cancel := acquisitionRecoveryContext(ctx)
+	defer cancel()
 	cleanupErr := error(nil)
-	if cleanup && service.cleanup != nil {
-		cleanupErr = service.cleanup(ctx, path, false)
+	if cleanup && service.cleanup != nil && !processCleanupUnsafe(cause) {
+		cleanupErr = service.cleanup(recoveryCtx, path, false)
 	}
-	_, markErr := service.lifecycle.MarkFailed(ctx, path, operationID, failureText(cause, cleanupErr))
+	_, markErr := service.lifecycle.MarkFailedRetainingProcess(recoveryCtx, path, operationID, failureText(cause, cleanupErr), unsafeProcessRecord(cause))
 	return errors.Join(cause, cleanupErr, markErr)
+}
+
+func processCleanupUnsafe(cause error) bool {
+	if cause == nil {
+		return false
+	}
+	var unsafeCleanup *processpkg.ProcessCleanupUnsafeError
+	if errors.As(cause, &unsafeCleanup) {
+		return true
+	}
+	var unavailable *processpkg.IdentityUnavailableError
+	if errors.As(cause, &unavailable) {
+		return true
+	}
+	var registration *processpkg.RegistrationError
+	if errors.As(cause, &registration) {
+		return registration.Cleanup != nil
+	}
+	var setup *processpkg.ProcessSetupError
+	return errors.As(cause, &setup) && setup.Cleanup != nil
+}
+
+func unsafeProcessRecord(cause error) *state.TrackedProcessRecord {
+	if cause == nil {
+		return nil
+	}
+	var unsafeCleanup *processpkg.ProcessCleanupUnsafeError
+	if !errors.As(cause, &unsafeCleanup) {
+		return nil
+	}
+	record := unsafeCleanup.Record
+	if record.PID <= 0 || record.StartedAt == "" {
+		return nil
+	}
+	return &record
 }
 
 func (service *AcquisitionService) failFreshAssigned(ctx context.Context, assigned state.WorkspaceRecord, cleanup bool, cause error) error {

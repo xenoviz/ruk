@@ -159,9 +159,15 @@ process record, so a recently exited child cannot remain falsely active.
 Windows registration cleanup terminates the new process tree only with a verified
 leader identity and otherwise retains ownership while descendants remain or the
 leader PID is reused.
+Windows release and GC also perform a bounded final descendant drain after the
+exact leader exits. Newly observed or leaderless processes are never signaled
+from a PID-only snapshot; they retain the workspace when they do not exit.
 Linux identities include the boot time and raw kernel start ticks. Older
 timestamp identities remain compatible for conservative lock-liveness checks,
 but never authorize signaling when an exact native identity cannot be proven.
+macOS identities use the kernel process start time at microsecond precision.
+Legacy `ps` timestamps remain useful only for conservative liveness checks and
+never authorize signaling when the native identity is unavailable.
 Abort cleanup follows the same fail-closed rule for attached children and
 detached groups. If the original leader identity or surviving descendants
 cannot be verified, or any termination safety check refuses the signal, the
@@ -181,6 +187,10 @@ closed. The Go runtime does not launch util-linux `script`, PowerShell, or a
 shell helper to provide this boundary, and this adapter does not allocate a PTY
 or ConPTY. Detached managed commands explicitly forward wrapper interrupt and
 termination signals to their tracked process group or job.
+Dependency installers use the same native process boundary. Their exact process
+identity is persisted before installation proceeds, cancellation waits are
+bounded, and an unverifiable surviving installer keeps the workspace fenced
+rather than allowing Git cleanup underneath it.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
@@ -214,6 +224,11 @@ recovery restores its acquisition marker. Failed removal is re-locked before a
 workspace becomes available, and post-removal state remains retryable and is
 excluded from available-capacity statistics and warm counts. Forced-expiry
 release uses the handoff lock before it changes workspace state.
+Failed or abandoned preparations may retain exact installer process records.
+Applied GC drains those recorded native process boundaries under the workspace
+fence, removes only identity-matching records, and revalidates the updated state
+before any Git mutation. An uncertain identity or incomplete termination fails
+closed and leaves the recovery record intact.
 Warm validation, reusable-slot reservation, and garbage collection share a
 pool-maintenance lock so capacity cannot be removed or claimed after being
 reported as available. Acquisition releases that pool lock before dependency

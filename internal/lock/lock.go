@@ -47,7 +47,7 @@ type ProcessState struct {
 
 // IdentityMatch describes compatibility between a persisted process identity
 // and a fresh native observation. Legacy POSIX identities are second-rounded
-// timestamps; they remain liveness-compatible with a Linux raw-tick identity,
+// timestamps; they remain liveness-compatible with a native raw identity,
 // but are never an exact fence for signaling or termination.
 type IdentityMatch uint8
 
@@ -64,10 +64,14 @@ func CompareIdentity(expected, observed string) IdentityMatch {
 	if expected == observed {
 		return IdentityExact
 	}
-	if (isLegacyPOSIXIdentity(expected) && strings.HasPrefix(observed, "linux:")) || (isLegacyPOSIXIdentity(observed) && strings.HasPrefix(expected, "linux:")) {
+	if isLegacyPOSIXIdentity(expected) && isNativeIdentity(observed) || isLegacyPOSIXIdentity(observed) && isNativeIdentity(expected) {
 		return IdentityLegacyCompatible
 	}
 	return IdentityMismatch
+}
+
+func isNativeIdentity(value string) bool {
+	return strings.HasPrefix(value, "linux:") || strings.HasPrefix(value, "darwin:")
 }
 
 func isLegacyPOSIXIdentity(value string) bool {

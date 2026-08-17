@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/xenoviz/ruk/internal/git"
+	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
 )
 
@@ -30,6 +31,20 @@ type ensureInstaller func(context.Context, string, PackageManager) (InstallResul
 
 func (installer ensureInstaller) Prepare(ctx context.Context, root string, manager PackageManager) (InstallResult, error) {
 	return installer(ctx, root, manager)
+}
+
+type ensureTrackingSupervisor struct {
+	record state.TrackedProcessRecord
+	err    error
+}
+
+func (supervisor ensureTrackingSupervisor) Run(ctx context.Context, _ []string, options processpkg.RunOptions) (processpkg.RunResult, error) {
+	if options.Register != nil {
+		if err := options.Register(ctx, supervisor.record); err != nil {
+			return processpkg.RunResult{Record: supervisor.record}, err
+		}
+	}
+	return processpkg.RunResult{Record: supervisor.record}, supervisor.err
 }
 
 func newEnsureFixture(t *testing.T) (EnsureInput, *ensureMemoryStore, string) {
@@ -85,6 +100,38 @@ func TestEnsureDependenciesPreparesAndPublishesProjectionMetadata(t *testing.T) 
 	}
 	if store.state.Metrics.Preparations != 1 || store.state.Metrics.PreparationSkips != 0 {
 		t.Fatalf("metrics = %#v", store.state.Metrics)
+	}
+}
+
+func TestEnsureDependenciesRetainsUnsafePreparingInstallerProcess(t *testing.T) {
+	input, store, root := newEnsureFixture(t)
+	key, err := state.TreeKey(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID := "preparation-operation"
+	store.state.Workspaces[key] = state.WorkspaceRecord{
+		Path: root, Managed: true, Branch: "agent/test", Lifecycle: state.LifecyclePreparing,
+		OperationID: &operationID, Processes: []state.TrackedProcessRecord{},
+		CreatedAt: "2026-01-01T00:00:00.000Z", UpdatedAt: "2026-01-01T00:00:00.000Z",
+	}
+	record := state.TrackedProcessRecord{PID: 42, StartedAt: "native:42", Command: []string{"installer"}}
+	input.Installer = Installer{
+		Supervisor: ensureTrackingSupervisor{
+			record: record,
+			err:    &processpkg.ProcessCleanupUnsafeError{PID: 42, Mode: processpkg.Detached, Record: record, Cause: errors.New("descendants remain")},
+		},
+	}
+
+	if _, err := EnsureDependencies(context.Background(), input); err == nil {
+		t.Fatal("EnsureDependencies succeeded despite unsafe installer cleanup")
+	}
+	workspace := store.state.Workspaces[key]
+	if len(workspace.Processes) != 1 || workspace.Processes[0].PID != record.PID || workspace.Processes[0].StartedAt != record.StartedAt {
+		t.Fatalf("preparing workspace processes = %#v, want durable installer record", workspace.Processes)
+	}
+	if workspace.UpdatedAt != "2026-01-01T00:00:00.001Z" {
+		t.Fatalf("workspace UpdatedAt = %q, want monotonic process-record fence", workspace.UpdatedAt)
 	}
 }
 

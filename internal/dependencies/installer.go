@@ -6,13 +6,19 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
+	processpkg "github.com/xenoviz/ruk/internal/process"
+	"github.com/xenoviz/ruk/internal/state"
 )
 
-const defaultDiagnosticLimit = 4096
+const (
+	defaultDiagnosticLimit  = 4096
+	installerCleanupTimeout = 30 * time.Second
+)
 
 // CommandRequest is the process-independent description of one installer
 // command. Keeping this request as data makes dependency preparation easy to
@@ -40,6 +46,13 @@ type CommandResult struct {
 // CommandRunner is the operating-system seam for dependency preparation.
 // Implementations must not mutate the request slices.
 type CommandRunner func(context.Context, CommandRequest) (CommandResult, error)
+
+// ProcessSupervisor is the native process boundary used by the default
+// installer runner. Keeping it injectable lets orchestration tests inspect
+// supervision options without launching a package manager.
+type ProcessSupervisor interface {
+	Run(context.Context, []string, processpkg.RunOptions) (processpkg.RunResult, error)
+}
 
 // InstallResult exposes the command and bounded diagnostics from a successful
 // or failed install. Diagnostics are always tails, so a package manager cannot
@@ -77,6 +90,9 @@ func (err *DependencyPreparationError) Unwrap() error {
 // the same 4 KiB tail used by the process package.
 type Installer struct {
 	Runner          CommandRunner
+	Supervisor      ProcessSupervisor
+	RegisterProcess processpkg.RegisterFunc
+	RemoveProcess   func(context.Context, state.TrackedProcessRecord) error
 	DiagnosticLimit int
 	Environment     []string
 	Stdin           io.Reader
@@ -250,7 +266,9 @@ func (installer Installer) runner() CommandRunner {
 	if installer.Runner != nil {
 		return installer.Runner
 	}
-	return OSCommandRunner
+	return func(ctx context.Context, request CommandRequest) (CommandResult, error) {
+		return runNativeInstallerCommand(ctx, request, installer.Supervisor, installer.RegisterProcess, installer.RemoveProcess)
+	}
 }
 
 func (installer Installer) environment() []string {
@@ -303,13 +321,20 @@ func tail(value string, limit int) string {
 }
 
 // OSCommandRunner executes a package manager without a shell and captures
-// bounded output. Context cancellation is returned as the cause so callers
-// can still use errors.Is(err, context.Canceled/DeadlineExceeded).
+// bounded output. The native process supervisor owns a detached process
+// group/job, so cancellation terminates and verifies the complete installer
+// tree before this function returns. Context cancellation is returned as the
+// cause so callers can still use errors.Is(err, context.Canceled/DeadlineExceeded).
 func OSCommandRunner(ctx context.Context, request CommandRequest) (CommandResult, error) {
+	return runNativeInstallerCommand(ctx, request, nil, nil, nil)
+}
+
+func runNativeInstallerCommand(ctx context.Context, request CommandRequest, supervisor ProcessSupervisor, register processpkg.RegisterFunc, remove func(context.Context, state.TrackedProcessRecord) error) (CommandResult, error) {
 	stdout := newTailWriter(defaultDiagnosticLimit)
 	stderr := newTailWriter(defaultDiagnosticLimit)
-	var stdoutTarget io.Writer = stdout
-	var stderrTarget io.Writer = stderr
+	var stdoutTarget io.Writer
+	var stderrTarget io.Writer
+	var stdin io.Reader
 	if request.InheritStdio {
 		if request.Stdout == nil {
 			request.Stdout = os.Stdout
@@ -319,35 +344,100 @@ func OSCommandRunner(ctx context.Context, request CommandRequest) (CommandResult
 		}
 		stdoutTarget = io.MultiWriter(request.Stdout, stdout)
 		stderrTarget = io.MultiWriter(request.Stderr, stderr)
-	}
-	command := exec.CommandContext(ctx, request.Command, request.Args...)
-	command.Dir = request.Dir
-	command.Env = append([]string(nil), request.Env...)
-	if err := configureInstallerCommand(command); err != nil {
-		return CommandResult{}, err
-	}
-	if request.InheritStdio {
-		command.Stdin = request.Stdin
-		if command.Stdin == nil {
-			command.Stdin = os.Stdin
+		stdin = request.Stdin
+		if stdin == nil {
+			stdin = os.Stdin
 		}
 	}
-	command.Stdout = stdoutTarget
-	command.Stderr = stderrTarget
-	err := command.Run()
-	result := CommandResult{Stdout: stdout.String(), Stderr: stderr.String()}
+	if supervisor == nil {
+		supervisor = processpkg.NewRunner()
+	}
+	command := append([]string{request.Command}, request.Args...)
+	registered := false
+	registerProcess := register
+	if registerProcess != nil {
+		registerProcess = func(registerCtx context.Context, record state.TrackedProcessRecord) error {
+			if err := register(registerCtx, record); err != nil {
+				return err
+			}
+			registered = true
+			return nil
+		}
+	}
+	result, err := supervisor.Run(ctx, command, processpkg.RunOptions{
+		Dir: request.Dir, Env: append([]string(nil), request.Env...), Mode: processpkg.Detached,
+		SuperviseCancellation: true, Stdin: stdin, Stdout: stdoutTarget, Stderr: stderrTarget,
+		CaptureLimit: defaultDiagnosticLimit, Register: registerProcess,
+	})
+	commandResult := CommandResult{Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode}
+	recoveryRecord := result.Record
+	if recoveryRecord.PID <= 0 || recoveryRecord.StartedAt == "" {
+		var unsafeCleanup *processpkg.ProcessCleanupUnsafeError
+		if errors.As(err, &unsafeCleanup) {
+			recoveryRecord = unsafeCleanup.Record
+		}
+	}
+	// If native registration failed and cleanup could not prove the tree gone,
+	// make one bounded idempotent attempt to persist the exact recovery record.
+	// This closes the gap between a transient state-write failure and the
+	// acquisition failure transition that deliberately leaves the process alive.
+	if !registered && register != nil && processRunNeedsRetention(err) && recoveryRecord.PID > 0 && recoveryRecord.StartedAt != "" {
+		retainCtx, cancelRetain := installerCleanupContext(ctx)
+		retainErr := register(retainCtx, recoveryRecord)
+		cancelRetain()
+		if retainErr != nil {
+			err = errors.Join(err, fmt.Errorf("persist installer recovery record: %w", retainErr))
+		} else {
+			registered = true
+		}
+	}
+	if registered && remove != nil && !processRunNeedsRetention(err) {
+		removeCtx, cancelRemove := installerCleanupContext(ctx)
+		removeErr := remove(removeCtx, result.Record)
+		cancelRemove()
+		if removeErr != nil {
+			unsafeErr := &processpkg.ProcessCleanupUnsafeError{
+				PID: result.PID, Mode: processpkg.Detached, Record: result.Record,
+				Cause: fmt.Errorf("remove installer process record: %w", removeErr),
+			}
+			err = errors.Join(err, unsafeErr)
+		}
+	}
+	if err != nil {
+		return commandResult, err
+	}
+	return commandResult, nil
+}
+
+func installerCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), installerCleanupTimeout)
+}
+
+func processRunNeedsRetention(err error) bool {
 	if err == nil {
-		return result, nil
+		return false
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return result, ctxErr
+	var unsafeCleanup *processpkg.ProcessCleanupUnsafeError
+	if errors.As(err, &unsafeCleanup) {
+		return true
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		result.ExitCode = exitErr.ExitCode()
-		return result, nil
+	var waitFailure *processpkg.ProcessWaitError
+	if errors.As(err, &waitFailure) {
+		return true
 	}
-	return result, err
+	var unavailable *processpkg.IdentityUnavailableError
+	if errors.As(err, &unavailable) {
+		return true
+	}
+	var registration *processpkg.RegistrationError
+	if errors.As(err, &registration) {
+		return registration.Cleanup != nil
+	}
+	var setup *processpkg.ProcessSetupError
+	return errors.As(err, &setup) && setup.Cleanup != nil
 }
 
 type tailWriter struct {

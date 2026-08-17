@@ -248,6 +248,65 @@ func TestAcquireCleanupFailureRetainsReusableAssignmentForRecovery(t *testing.T)
 	}
 }
 
+func TestAcquireCanceledPreparationRetainsAssignmentMetadata(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStore()
+	path := addAvailableWorkspace(t, store, "canceled", "2026-01-01T00:00:00.000Z", nil, state.LifecycleAvailable)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prepareErr := errors.New("dependency preparation canceled")
+	service := acquisitionTestService(t, store, []string{assignmentID, acquisitionID}, &acquisitionWorktreeFake{}, func(context.Context, string) (dependencies.EnsureResult, error) {
+		cancel()
+		return dependencies.EnsureResult{}, errors.Join(prepareErr, context.Canceled)
+	}, acquisitionPortsFake{}, acquisitionLockFake{}, nil)
+
+	_, err := service.Acquire(ctx, lifecycle.AcquireInput{
+		Assignment: lifecycle.AssignmentInput{Owner: "agent", Hostname: "host", ExpiresAt: time.Date(2026, time.January, 1, 8, 0, 0, 0, time.UTC)},
+		Branch:     "agent/canceled",
+	})
+	if err == nil || !errors.Is(err, context.Canceled) || !errors.Is(err, prepareErr) {
+		t.Fatalf("Acquire error = %v, want cancellation and preparation causes", err)
+	}
+	var retained *lifecycle.RetainedAssignmentError
+	if !errors.As(err, &retained) {
+		t.Fatalf("Acquire error type = %T, want retained assignment metadata", err)
+	}
+	if retained.AssignmentID != assignmentID || retained.Path != path || retained.ExpiresAt != "2026-01-01T08:00:00.000Z" || retained.Recovery != "ruk release "+assignmentID {
+		t.Fatalf("retained metadata = %#v", retained)
+	}
+	key, _ := state.TreeKey(path)
+	workspace := store.current.Workspaces[key]
+	if workspace.OperationID != nil || workspace.Failure == nil || workspace.Lifecycle != state.LifecycleAssigned {
+		t.Fatalf("canceled assignment state = %#v, want retained without operation fence", workspace)
+	}
+}
+
+func TestAcquireCanceledFreshPreparationMarksFailureWithRecoveryContext(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStore()
+	path := filepath.Join(t.TempDir(), "canceled-fresh")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prepareErr := errors.New("fresh preparation canceled")
+	service := acquisitionTestService(t, store, []string{preparationID}, &acquisitionWorktreeFake{}, func(context.Context, string) (dependencies.EnsureResult, error) {
+		cancel()
+		return dependencies.EnsureResult{}, errors.Join(prepareErr, context.Canceled)
+	}, acquisitionPortsFake{}, acquisitionLockFake{}, nil)
+
+	_, err := service.Acquire(ctx, lifecycle.AcquireInput{
+		Assignment: lifecycle.AssignmentInput{Owner: "agent", Hostname: "host", ExpiresAt: time.Date(2026, time.January, 1, 8, 0, 0, 0, time.UTC)},
+		Branch:     "agent/canceled-fresh", WorkspacePath: path,
+	})
+	if err == nil || !errors.Is(err, context.Canceled) || !errors.Is(err, prepareErr) {
+		t.Fatalf("Acquire error = %v, want cancellation and preparation causes", err)
+	}
+	key, _ := state.TreeKey(path)
+	workspace := store.current.Workspaces[key]
+	if workspace.Lifecycle != state.LifecycleFailed || workspace.OperationID != nil || workspace.Failure == nil {
+		t.Fatalf("canceled fresh workspace = %#v, want failed without operation fence", workspace)
+	}
+}
+
 func TestAcquireSkipsConcurrentOwnershipChangeAndUsesFreshWorktree(t *testing.T) {
 	t.Parallel()
 	store := newMemoryStore()

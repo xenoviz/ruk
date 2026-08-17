@@ -136,6 +136,13 @@ updates are monotonic with explicit renewal. If heartbeat-triggered process
 cleanup cannot verify the original detached leader or rule out surviving
 descendants, Ruk reports retryable resource contention and retains the exact
 assignment for recovery.
+Managed dependency installers use the same native POSIX process-group or
+Windows Job Object supervision and never launch PowerShell. If cancellation or
+registration cleanup cannot prove that the exact installer tree is gone, keep
+the returned workspace fenced. Applied GC drains only the persisted,
+identity-matching installer record before collecting an unassigned failed or
+abandoned preparation; it fails closed when identity or termination is
+uncertain.
 Completion timestamps are clamped to the latest renewal, and nested heartbeat
 failures remain retryable `RESOURCE_BUSY` errors in JSON output.
 

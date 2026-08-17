@@ -7,6 +7,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	processpkg "github.com/xenoviz/ruk/internal/process"
+	"github.com/xenoviz/ruk/internal/state"
 )
 
 func TestInstallerHumanModeTeesStdioAndKeepsBoundedTails(t *testing.T) {
@@ -43,6 +46,137 @@ func TestInstallerMachineReadableModeSuppressesStdio(t *testing.T) {
 	}
 	if request.InheritStdio || request.Stdout != nil || request.Stderr != nil || request.Stdin != nil {
 		t.Fatalf("machine-readable request leaked stdio = %#v", request)
+	}
+}
+
+type installerSupervisorStub struct {
+	command []string
+	options processpkg.RunOptions
+}
+
+func (stub *installerSupervisorStub) Run(_ context.Context, command []string, options processpkg.RunOptions) (processpkg.RunResult, error) {
+	stub.command = append([]string(nil), command...)
+	stub.options = options
+	return processpkg.RunResult{Stdout: "installed\n"}, nil
+}
+
+func TestInstallerDefaultRunnerUsesNativeTreeSupervision(t *testing.T) {
+	root := t.TempDir()
+	supervisor := &installerSupervisorStub{}
+	installer := Installer{Supervisor: supervisor}
+	result, err := installer.Prepare(context.Background(), root, PackageManager{
+		Name: "custom", Command: []string{"custom-installer", "install", "--frozen"}, DependencyMode: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Prepare returned an error: %v", err)
+	}
+	if result.Stdout != "installed\n" {
+		t.Fatalf("installer output = %q, want supervisor output", result.Stdout)
+	}
+	if !reflect.DeepEqual(supervisor.command, []string{"custom-installer", "install", "--frozen"}) {
+		t.Fatalf("supervisor command = %#v", supervisor.command)
+	}
+	if supervisor.options.Mode != processpkg.Detached || !supervisor.options.SuperviseCancellation {
+		t.Fatalf("supervisor options = %#v, want detached cancellation supervision", supervisor.options)
+	}
+	if supervisor.options.Dir != root || supervisor.options.CaptureLimit != defaultDiagnosticLimit {
+		t.Fatalf("supervisor directory/limit = %q/%d", supervisor.options.Dir, supervisor.options.CaptureLimit)
+	}
+}
+
+func TestProcessRunNeedsRetentionForUncertainWait(t *testing.T) {
+	err := &processpkg.ProcessWaitError{Cause: errors.New("wait status unavailable")}
+	if !processRunNeedsRetention(err) {
+		t.Fatal("uncertain wait failure must retain the installer process record")
+	}
+}
+
+type installerRemovalSupervisor struct{}
+
+func (installerRemovalSupervisor) Run(_ context.Context, _ []string, options processpkg.RunOptions) (processpkg.RunResult, error) {
+	groupID := int64(42)
+	record := state.TrackedProcessRecord{PID: 42, StartedAt: "native:42", GroupID: &groupID}
+	if options.Register != nil {
+		if err := options.Register(context.Background(), record); err != nil {
+			return processpkg.RunResult{PID: 42, Started: true, Record: record}, err
+		}
+	}
+	return processpkg.RunResult{PID: 42, Started: true, Record: record}, nil
+}
+
+type installerUnsafeRegistrationSupervisor struct{}
+
+func (installerUnsafeRegistrationSupervisor) Run(ctx context.Context, _ []string, options processpkg.RunOptions) (processpkg.RunResult, error) {
+	groupID := int64(43)
+	record := state.TrackedProcessRecord{PID: 43, StartedAt: processpkg.UnverifiedIdentityMarker, GroupID: &groupID}
+	if options.Register != nil {
+		_ = options.Register(ctx, record)
+	}
+	return processpkg.RunResult{PID: 43, Started: true, Record: record}, &processpkg.ProcessCleanupUnsafeError{
+		PID: 43, Mode: processpkg.Detached, Record: record, Cause: errors.New("installer descendants remain"),
+	}
+}
+
+func TestInstallerRetriesRecoveryRecordAfterUnsafeRegistrationFailure(t *testing.T) {
+	calls := 0
+	var persisted state.TrackedProcessRecord
+	_, err := runNativeInstallerCommand(context.Background(), CommandRequest{Command: "installer"}, installerUnsafeRegistrationSupervisor{}, func(_ context.Context, record state.TrackedProcessRecord) error {
+		calls++
+		if calls == 1 {
+			return errors.New("transient state write failure")
+		}
+		persisted = record
+		return nil
+	}, nil)
+	if err == nil {
+		t.Fatal("unsafe supervised installer unexpectedly succeeded")
+	}
+	if calls != 2 || persisted.PID != 43 || persisted.StartedAt != processpkg.UnverifiedIdentityMarker {
+		t.Fatalf("registration calls = %d, persisted = %#v, want exact bounded recovery retry", calls, persisted)
+	}
+}
+
+type installerUnsafeSpawnSupervisor struct{}
+
+func (installerUnsafeSpawnSupervisor) Run(context.Context, []string, processpkg.RunOptions) (processpkg.RunResult, error) {
+	record := state.TrackedProcessRecord{PID: 44, StartedAt: processpkg.UnverifiedIdentityMarker, Command: []string{"installer"}}
+	return processpkg.RunResult{}, &processpkg.ProcessCleanupUnsafeError{
+		PID: 44, Mode: processpkg.Detached, Record: record, Cause: errors.New("Windows child wait remained unsafe"),
+	}
+}
+
+func TestInstallerPersistsRecoveryRecordFromUnsafeSpawnError(t *testing.T) {
+	var persisted state.TrackedProcessRecord
+	_, err := runNativeInstallerCommand(context.Background(), CommandRequest{Command: "installer"}, installerUnsafeSpawnSupervisor{}, func(_ context.Context, record state.TrackedProcessRecord) error {
+		persisted = record
+		return nil
+	}, nil)
+	if err == nil {
+		t.Fatal("unsafe spawn unexpectedly succeeded")
+	}
+	if persisted.PID != 44 || persisted.StartedAt != processpkg.UnverifiedIdentityMarker {
+		t.Fatalf("persisted = %#v, want unsafe spawn recovery sentinel", persisted)
+	}
+}
+
+func TestInstallerRemovalFailureIsBoundedAndRetained(t *testing.T) {
+	removalErr := errors.New("state lock unavailable")
+	var removalDeadline bool
+	result, err := runNativeInstallerCommand(context.Background(), CommandRequest{Command: "installer"}, installerRemovalSupervisor{}, func(context.Context, state.TrackedProcessRecord) error {
+		return nil
+	}, func(ctx context.Context, _ state.TrackedProcessRecord) error {
+		_, removalDeadline = ctx.Deadline()
+		return removalErr
+	})
+	if result.ExitCode != 0 {
+		t.Fatalf("result = %#v, want successful child status", result)
+	}
+	if err == nil || !errors.Is(err, removalErr) || !removalDeadline {
+		t.Fatalf("error = %v, deadline = %v, want bounded retained removal failure", err, removalDeadline)
+	}
+	var unsafe *processpkg.ProcessCleanupUnsafeError
+	if !errors.As(err, &unsafe) || unsafe.PID != 42 {
+		t.Fatalf("error = %T %v, want retained process cleanup metadata", err, err)
 	}
 }
 

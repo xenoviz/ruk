@@ -295,7 +295,7 @@ func validWorkspace(workspace WorkspaceRecord) bool {
 	} else if workspace.Failure != nil {
 		return false
 	}
-	if !assigned && len(workspace.Processes) != 0 {
+	if !assigned && workspace.Lifecycle != LifecyclePreparing && workspace.Lifecycle != LifecycleFailed && len(workspace.Processes) != 0 {
 		return false
 	}
 	return validProcesses(workspace.Processes)

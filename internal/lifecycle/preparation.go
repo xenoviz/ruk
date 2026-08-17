@@ -90,18 +90,25 @@ func (service *Service) BeginPreparation(ctx context.Context, workspacePath, bra
 
 // MarkAvailable completes one preparation and publishes the worktree as pool capacity.
 func (service *Service) MarkAvailable(ctx context.Context, workspacePath, operationID string) (state.WorkspaceRecord, error) {
-	return service.finishPreparation(ctx, workspacePath, operationID, "")
+	return service.finishPreparation(ctx, workspacePath, operationID, "", nil)
 }
 
 // MarkFailed retains a failed preparation for safe inspection and garbage collection.
 func (service *Service) MarkFailed(ctx context.Context, workspacePath, operationID, failure string) (state.WorkspaceRecord, error) {
+	return service.MarkFailedRetainingProcess(ctx, workspacePath, operationID, failure, nil)
+}
+
+// MarkFailedRetainingProcess atomically records an unsafe installer boundary
+// while transitioning preparation to failed. This is the lifecycle fallback
+// when the installer's earlier registration writes could not be completed.
+func (service *Service) MarkFailedRetainingProcess(ctx context.Context, workspacePath, operationID, failure string, retained *state.TrackedProcessRecord) (state.WorkspaceRecord, error) {
 	if failure == "" {
 		return state.WorkspaceRecord{}, errors.New("failure must not be empty")
 	}
-	return service.finishPreparation(ctx, workspacePath, operationID, failure)
+	return service.finishPreparation(ctx, workspacePath, operationID, failure, retained)
 }
 
-func (service *Service) finishPreparation(ctx context.Context, workspacePath, operationID, failure string) (state.WorkspaceRecord, error) {
+func (service *Service) finishPreparation(ctx context.Context, workspacePath, operationID, failure string, retained *state.TrackedProcessRecord) (state.WorkspaceRecord, error) {
 	resolved, err := filepath.Abs(filepath.Clean(workspacePath))
 	if err != nil {
 		return state.WorkspaceRecord{}, fmt.Errorf("resolve workspace path: %w", err)
@@ -122,7 +129,15 @@ func (service *Service) finishPreparation(ctx context.Context, workspacePath, op
 		if workspace.OperationID == nil || *workspace.OperationID != operationID {
 			return errors.New("Preparation operation does not match")
 		}
-		now := timestamp(service.now())
+		now := nextWorkspaceTimestamp(workspace.UpdatedAt, service.now())
+		if failure == "" && len(workspace.Processes) != 0 {
+			return errors.New("workspace still has tracked processes")
+		}
+		if retained != nil {
+			if err := appendRetainedProcess(&workspace, *retained); err != nil {
+				return err
+			}
+		}
 		workspace.OperationID = nil
 		workspace.UpdatedAt = now
 		if failure == "" {

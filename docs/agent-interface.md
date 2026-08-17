@@ -106,6 +106,11 @@ graceful termination or the worktree is dirty. `--force` force-kills surviving
 tracked process trees and discards tracked and untracked changes.
 Failed acquisition cleanup restores assigned ownership so the fenced workspace
 can be discovered and recovered.
+Dependency installers are tracked with the same native process identity rules
+as managed commands. If cancellation cannot prove that the installer tree is
+gone, Ruk keeps the assigned, failed, or preparing workspace fenced and reports
+a retryable cleanup failure. Applied GC can later drain that exact recorded
+process tree before collecting an unassigned failed preparation.
 Ordinary release is rejected while an acquisition handoff marker is active.
 Tracked, untracked, and ignored files are removed before a workspace enters the
 pool, except dependency projections recorded and integrity-validated by Ruk.

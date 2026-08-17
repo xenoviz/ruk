@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/xenoviz/ruk/internal/lock"
@@ -36,6 +37,11 @@ type windowsTreeTerminator struct {
 	probe lock.ProcessProbe
 	table ProcessTable
 }
+
+const (
+	windowsTreeDrainTimeout = 5 * time.Second
+	windowsTreePollInterval = 50 * time.Millisecond
+)
 
 func (terminator windowsTreeTerminator) TerminateTree(ctx context.Context, record state.TrackedProcessRecord, force bool) (bool, error) {
 	if terminator.probe == nil || terminator.table == nil {
@@ -115,8 +121,100 @@ func (terminator windowsTreeTerminator) TerminateTree(ctx context.Context, recor
 			return false, closeErr
 		}
 	}
+	// TerminateProcess is asynchronous. If the exact leader is still alive,
+	// leave the normal release drain/force escalation in control. Once the
+	// leader has exited, no new child can be safely signaled from a snapshot:
+	// its parent PID may already have been reused. Instead, observe the complete
+	// leaderless tree until it drains and fail closed if it does not.
+	leaderAfter, inspectErr := terminator.probe.Inspect(ctx, int(record.PID))
+	if inspectErr != nil {
+		return false, processUnavailable(int(record.PID), inspectErr)
+	}
+	if leaderAfter.Alive {
+		if !leaderAfter.IdentityKnown || !exactIdentityMatch(record.StartedAt, leaderAfter.Identity) {
+			return false, processUnavailable(int(record.PID), errors.New("process identity changed after termination"))
+		}
+		return true, nil
+	}
+	if err := waitForWindowsTreeDrain(ctx, terminator.probe, terminator.table, record); err != nil {
+		return false, err
+	}
 	_ = force // Windows has no portable graceful signal; TerminateProcess is native and tree-fenced.
 	return true, nil
+}
+
+// waitForWindowsTreeDrain observes descendants after the exact leader has
+// exited. It intentionally never signals a process discovered only after the
+// original snapshot: a numeric parent PID is not an identity fence once the
+// leader is gone. A remaining or reused process therefore retains the owning
+// workspace instead of risking a PID-reuse kill.
+func waitForWindowsTreeDrain(ctx context.Context, probe lock.ProcessProbe, table ProcessTable, record state.TrackedProcessRecord) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if probe == nil || table == nil {
+		return processUnavailable(int(record.PID), errors.New("Windows final tree-drain dependency is unavailable"))
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, windowsTreeDrainTimeout)
+	defer cancel()
+	for {
+		if err := waitCtx.Err(); err != nil {
+			return processUnavailable(int(record.PID), fmt.Errorf("Windows descendant tree did not drain: %w", err))
+		}
+		leader, err := probe.Inspect(waitCtx, int(record.PID))
+		if err != nil {
+			return processUnavailable(int(record.PID), err)
+		}
+		if leader.Alive {
+			if !leader.IdentityKnown || !exactIdentityMatch(record.StartedAt, leader.Identity) {
+				return processUnavailable(int(record.PID), errors.New("tracked leader identity changed during final drain"))
+			}
+			return processUnavailable(int(record.PID), errors.New("tracked leader remained alive during final drain"))
+		}
+		entries, err := table.Snapshot(waitCtx)
+		if err != nil {
+			return processUnavailable(int(record.PID), err)
+		}
+		if len(descendantPIDsAfterLeaderExit(entries, int(record.PID))) == 0 {
+			return nil
+		}
+		timer := time.NewTimer(windowsTreePollInterval)
+		select {
+		case <-waitCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
+		}
+	}
+}
+
+func descendantPIDsAfterLeaderExit(entries []Entry, root int) []int {
+	children := make(map[int][]int)
+	for _, entry := range entries {
+		if entry.PID > 0 && entry.ParentPID > 0 {
+			children[entry.ParentPID] = append(children[entry.ParentPID], entry.PID)
+		}
+	}
+	seen := map[int]bool{root: true}
+	result := make([]int, 0)
+	queue := []int{root}
+	for len(queue) > 0 {
+		parent := queue[0]
+		queue = queue[1:]
+		for _, child := range children[parent] {
+			if seen[child] {
+				continue
+			}
+			seen[child] = true
+			result = append(result, child)
+			queue = append(queue, child)
+		}
+	}
+	return result
 }
 
 func descendantPIDs(entries []Entry, root int) []int {
