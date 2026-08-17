@@ -220,6 +220,45 @@ func TestDirectoryLockRecoversDeadOwnerByAtomicRename(t *testing.T) {
 	}
 }
 
+func TestDirectoryLockDoesNotRecoverCanonicalSymlink(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	root := t.TempDir()
+	target := filepath.Join(root, "real.lock")
+	lockPath := filepath.Join(root, "state.lock")
+	writeOwner(t, target, lockpkg.Owner{
+		PID: 72, Hostname: "host-a", Token: "live-token", CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano),
+	})
+	if err := os.Symlink(target, lockPath); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	locker := newTestLocker(t, lockpkg.Config{
+		Now:      func() time.Time { return now },
+		PID:      41,
+		Hostname: "host-a",
+		Token:    func() string { return "new-token" },
+		Options:  lockpkg.Options{Timeout: time.Millisecond, Stale: time.Millisecond},
+		Sleep: func(context.Context, time.Duration) error {
+			now = now.Add(time.Millisecond)
+			return nil
+		},
+	})
+
+	_, err := locker.Acquire(context.Background(), lockPath)
+	var timeout *lockpkg.TimeoutError
+	if !errors.As(err, &timeout) {
+		t.Fatalf("Acquire error = %v, want TimeoutError", err)
+	}
+	info, err := os.Lstat(lockPath)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("canonical lock = %#v, %v; symlink was recovered", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "owner.json")); err != nil {
+		t.Fatalf("symlink target lock was removed: %v", err)
+	}
+}
+
 func TestDirectoryLockGivesIncompleteOwnerOneSecondGrace(t *testing.T) {
 	t.Parallel()
 

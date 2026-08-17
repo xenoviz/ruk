@@ -242,7 +242,7 @@ func (locker *DirectoryLocker) Acquire(ctx context.Context, path string) (*Guard
 }
 
 func (locker *DirectoryLocker) recoverAbandoned(ctx context.Context, path string) (bool, error) {
-	stat, err := os.Stat(path)
+	stat, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
 	}
@@ -251,6 +251,12 @@ func (locker *DirectoryLocker) recoverAbandoned(ctx context.Context, path string
 			return false, nil
 		}
 		return false, fmt.Errorf("inspect lock %s: %w", path, err)
+	}
+	// A symlink at the canonical lock path is not an owned lock directory.
+	// Never follow or rename it: doing so could leave the target lock in place
+	// while allowing a second owner to acquire the link's path.
+	if stat.Mode()&os.ModeSymlink != 0 {
+		return false, nil
 	}
 	age := locker.now().Sub(stat.ModTime())
 	if age <= locker.options.Stale {
@@ -334,6 +340,16 @@ func (guard *Guard) Release() error {
 		}
 		guard.releasedPath = ""
 		return nil
+	}
+	stat, err := os.Lstat(guard.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect lock owner %s: %w", guard.path, err)
+	}
+	if stat.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to release symlink lock %s", guard.path)
 	}
 	owner, valid, err := readOwner(guard.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -441,6 +457,13 @@ func writeOwner(path string, owner Owner) error {
 }
 
 func readOwner(path string) (Owner, bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return Owner{}, false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return Owner{}, false, fmt.Errorf("lock path %s is a symlink", path)
+	}
 	data, err := os.ReadFile(filepath.Join(path, "owner.json"))
 	if err != nil {
 		return Owner{}, false, err

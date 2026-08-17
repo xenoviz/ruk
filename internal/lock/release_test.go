@@ -52,6 +52,36 @@ func TestGuardReleaseDoesNotMoveWhenReleasedPathIsOccupied(t *testing.T) {
 	}
 }
 
+func TestGuardReleaseRefusesCanonicalSymlinkReplacement(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "pool.lock")
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatalf("create lock: %v", err)
+	}
+	if err := writeOwner(path, Owner{PID: 42, Hostname: "host", Token: "token", CreatedAt: "2026-01-01T00:00:00.000Z"}); err != nil {
+		t.Fatalf("write owner: %v", err)
+	}
+	target := path + ".replacement-target"
+	if err := os.Rename(path, target); err != nil {
+		t.Fatalf("move original lock: %v", err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+
+	err := (&Guard{path: path, token: "token"}).Release()
+	if err == nil {
+		t.Fatal("Release unexpectedly followed canonical symlink")
+	}
+	info, statErr := os.Lstat(path)
+	if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("canonical replacement = %#v, %v; symlink was removed", info, statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(target, "owner.json")); statErr != nil {
+		t.Fatalf("replacement target was removed: %v", statErr)
+	}
+}
+
 func TestGuardReleaseRetryNeverDeletesMismatchedTombstone(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "pool.lock")
