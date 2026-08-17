@@ -21,6 +21,8 @@ type createWorkspaceStub struct {
 	detach        bool
 	remove        error
 	removeContext context.Context
+	removeErr     error
+	removeBounded bool
 }
 
 type failingCreateWriter struct{ err error }
@@ -36,6 +38,8 @@ func (stub *createWorkspaceStub) Create(_ context.Context, path, branch, start s
 func (stub *createWorkspaceStub) Remove(ctx context.Context, path string, force bool) error {
 	stub.removed = true
 	stub.removeContext = ctx
+	stub.removeErr = ctx.Err()
+	_, stub.removeBounded = ctx.Deadline()
 	if !force {
 		return errors.New("cleanup was not forced")
 	}
@@ -60,10 +64,10 @@ func TestCreateCommandRollbackUsesBoundedRecoveryContextAfterCancellation(t *tes
 	if !workspace.removed || workspace.removeContext == nil {
 		t.Fatalf("workspace=%#v, want recovery cleanup", workspace)
 	}
-	if err := workspace.removeContext.Err(); err != nil {
-		t.Fatalf("recovery context error=%v, want active context", err)
+	if workspace.removeErr != nil {
+		t.Fatalf("recovery context error during Remove=%v, want active context", workspace.removeErr)
 	}
-	if _, ok := workspace.removeContext.Deadline(); !ok {
+	if !workspace.removeBounded {
 		t.Fatal("recovery cleanup context has no bounded deadline")
 	}
 }
