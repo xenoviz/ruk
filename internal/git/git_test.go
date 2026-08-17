@@ -11,14 +11,19 @@ import (
 )
 
 type fakeRunner struct {
-	results  map[string]git.CommandResult
-	calls    [][]string
-	contexts []context.Context
+	results             map[string]git.CommandResult
+	calls               [][]string
+	contexts            []context.Context
+	contextErrors       []error
+	contextHasDeadlines []bool
 }
 
 func (runner *fakeRunner) call(ctx context.Context, _ string, args []string) (git.CommandResult, error) {
 	runner.calls = append(runner.calls, append([]string(nil), args...))
 	runner.contexts = append(runner.contexts, ctx)
+	runner.contextErrors = append(runner.contextErrors, ctx.Err())
+	_, hasDeadline := ctx.Deadline()
+	runner.contextHasDeadlines = append(runner.contextHasDeadlines, hasDeadline)
 	result, ok := runner.results[strings.Join(args, " ")]
 	if !ok {
 		return git.CommandResult{ExitCode: 1, Stderr: "unexpected command"}, nil

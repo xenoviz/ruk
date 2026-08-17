@@ -4,8 +4,26 @@ package process
 
 import (
 	"encoding/binary"
+	"reflect"
 	"testing"
 )
+
+func TestDarwinKinfoProcMIBUsesNumericPID(t *testing.T) {
+	got, err := darwinKinfoProcMIB(1234)
+	if err != nil {
+		t.Fatalf("darwinKinfoProcMIB returned an error: %v", err)
+	}
+	want := []int32{darwinCTLKern, darwinKernProc, darwinKernProcPID, 1234}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MIB = %v, want %v", got, want)
+	}
+}
+
+func TestDarwinKinfoProcMIBRejectsInvalidPID(t *testing.T) {
+	if mib, err := darwinKinfoProcMIB(0); err == nil || mib != nil {
+		t.Fatalf("darwinKinfoProcMIB(0) = %v, %v; want error", mib, err)
+	}
+}
 
 func TestParseDarwinStartTimeUsesMicroseconds(t *testing.T) {
 	first := make([]byte, darwinTimevalSize)

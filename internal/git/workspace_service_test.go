@@ -220,11 +220,10 @@ func TestWorkspaceServiceRelockSurvivesCanceledParentWithBoundedCleanupContext(t
 	if len(runner.contexts) != 3 {
 		t.Fatalf("recorded %d command contexts, want unlock/remove/relock", len(runner.contexts))
 	}
-	relockContext := runner.contexts[2]
-	if relockContext.Err() != nil {
-		t.Fatalf("relock context error = %v, want active cleanup context", relockContext.Err())
+	if runner.contextErrors[2] != nil {
+		t.Fatalf("relock context error during invocation = %v, want active cleanup context", runner.contextErrors[2])
 	}
-	if _, ok := relockContext.Deadline(); !ok {
+	if !runner.contextHasDeadlines[2] {
 		t.Fatal("relock context has no bounded deadline")
 	}
 }
