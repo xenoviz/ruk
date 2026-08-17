@@ -113,9 +113,18 @@ func runtimeShell(ctx context.Context, input ShellRouteInput, now func() time.Ti
 	if mutations.Acquire == nil || mutations.Release == nil {
 		return ShellResult{}, errors.New("shell lifecycle operations are not configured")
 	}
-	store, locker, lifecycleService, err := runtimeState(ctx, input.Repository, now, newID)
-	if err != nil {
-		return ShellResult{}, err
+	var store *state.Store
+	var locker *lock.DirectoryLocker
+	var lifecycleService *lifecycle.Service
+	// Fully injected shell seams do not need native state or process identity.
+	// Keep constructing the production state bundle whenever either the native
+	// terminal or the native activity runner is still required.
+	if options.ShellTerminal == nil || options.ExecuteActivity == nil {
+		var err error
+		store, locker, lifecycleService, err = runtimeState(ctx, input.Repository, now, newID)
+		if err != nil {
+			return ShellResult{}, err
+		}
 	}
 	terminal := options.ShellTerminal
 	stopShellSignals := func() {}

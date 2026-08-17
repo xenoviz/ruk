@@ -263,43 +263,68 @@ func (service *AcquisitionService) acquireWithPoolGuard(ctx context.Context, inp
 		}
 		candidate, selectErr := service.selectAvailable(ctx, input)
 		if selectErr != nil {
-			return AcquisitionResult{}, errors.Join(selectErr, poolGuard.Release())
+			return AcquisitionResult{}, errors.Join(selectErr, releaseAcquisitionGuard(ctx, poolGuard))
 		}
 		if candidate == nil {
 			return service.releasePoolAndAcquireFresh(ctx, input, poolGuard)
 		}
 		workspaceGuard, lockErr := service.acquireWorkspaceGuard(ctx, candidate.Path)
 		if lockErr != nil {
-			return AcquisitionResult{}, errors.Join(lockErr, poolGuard.Release())
+			return AcquisitionResult{}, errors.Join(lockErr, releaseAcquisitionGuard(ctx, poolGuard))
 		}
 		assigned, reserveErr := service.reserveReserved(ctx, input, *candidate)
 		if reserveErr != nil {
-			workspaceReleaseErr := workspaceGuard.Release()
+			workspaceReleaseErr := releaseAcquisitionGuard(ctx, workspaceGuard)
 			if errors.Is(reserveErr, errReservationChanged) {
-				poolReleaseErr := poolGuard.Release()
+				poolReleaseErr := releaseAcquisitionGuard(ctx, poolGuard)
 				if workspaceReleaseErr != nil || poolReleaseErr != nil {
 					return AcquisitionResult{}, errors.Join(reserveErr, workspaceReleaseErr, poolReleaseErr)
 				}
 				continue
 			}
-			return AcquisitionResult{}, errors.Join(reserveErr, workspaceReleaseErr, poolGuard.Release())
+			return AcquisitionResult{}, errors.Join(reserveErr, workspaceReleaseErr, releaseAcquisitionGuard(ctx, poolGuard))
 		}
-		if releaseErr := poolGuard.Release(); releaseErr != nil {
+		if releaseErr := releaseAcquisitionGuard(ctx, poolGuard); releaseErr != nil {
 			recoveryErr := service.failAssigned(ctx, assigned.Assignment.ID, *assigned.OperationID, assigned.Path, false, fmt.Errorf("pool maintenance lock release failed: %w", releaseErr))
-			workspaceReleaseErr := workspaceGuard.Release()
+			workspaceReleaseErr := releaseAcquisitionGuard(ctx, workspaceGuard)
 			return AcquisitionResult{}, errors.Join(recoveryErr, workspaceReleaseErr)
 		}
 		result, handoffErr := service.completeReserved(ctx, input, *candidate, assigned)
-		return result, acquisitionReleaseFailure(result, handoffErr, workspaceGuard.Release())
+		return result, acquisitionReleaseFailure(result, handoffErr, releaseAcquisitionGuard(ctx, workspaceGuard))
 	}
 	return AcquisitionResult{}, errors.New("available workspace changed during acquisition; retry")
 }
 
 func (service *AcquisitionService) releasePoolAndAcquireFresh(ctx context.Context, input AcquireInput, guard *lock.Guard) (AcquisitionResult, error) {
-	if err := guard.Release(); err != nil {
+	if err := releaseAcquisitionGuard(ctx, guard); err != nil {
 		return AcquisitionResult{}, err
 	}
 	return service.acquireFresh(ctx, input)
+}
+
+const acquisitionGuardReleaseAttempts = 3
+
+// releaseAcquisitionGuard makes a bounded best effort to remove a guard. A
+// transient owner-file or filesystem failure must not leave a pool lock held
+// indefinitely; callers retain the final joined error and fail closed.
+func releaseAcquisitionGuard(ctx context.Context, guard *lock.Guard) error {
+	if guard == nil {
+		return errors.New("acquisition lock guard is nil")
+	}
+	var releaseErr error
+	for attempt := 0; attempt < acquisitionGuardReleaseAttempts; attempt++ {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(releaseErr, err)
+			}
+		}
+		if err := guard.Release(); err == nil {
+			return nil
+		} else {
+			releaseErr = errors.Join(releaseErr, err)
+		}
+	}
+	return releaseErr
 }
 
 func (service *AcquisitionService) acquireWorkspaceGuard(ctx context.Context, path string) (*lock.Guard, error) {

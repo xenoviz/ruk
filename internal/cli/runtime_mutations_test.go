@@ -134,9 +134,15 @@ func TestAssignedSyncSnapshotsAssignmentAndRevalidatesBeforePreparation(t *testi
 		t.Fatal(err)
 	}
 	if err := store.Update(context.Background(), func(current *state.State) error {
+		now := "2026-08-16T12:00:00.000Z"
 		current.Workspaces[key] = state.WorkspaceRecord{
-			Path: repository.Root, Managed: true, Lifecycle: state.LifecycleAssigned,
-			Assignment: &state.AssignmentRecord{ID: "original-assignment", Ports: map[string]int64{}},
+			Path: repository.Root, Managed: true, Branch: "agent/assigned", Lifecycle: state.LifecycleAssigned,
+			Assignment: &state.AssignmentRecord{
+				ID: "00000000-0000-4000-8000-000000000101", Owner: "owner", Hostname: "host",
+				AssignedAt: now, RenewedAt: now, ExpiresAt: "2026-08-16T13:00:00.000Z", LeaseDurationMinutes: 60,
+				LastActivityAt: now, LeaseKeepers: []state.LeaseKeeperRecord{}, Ports: map[string]int64{},
+			},
+			Processes: []state.TrackedProcessRecord{}, CreatedAt: now, UpdatedAt: now,
 		}
 		return nil
 	}); err != nil {
@@ -150,13 +156,13 @@ func TestAssignedSyncSnapshotsAssignmentAndRevalidatesBeforePreparation(t *testi
 			}
 			if err := input.Ensure.Store.Update(ctx, func(current *state.State) error {
 				workspace := current.Workspaces[key]
-				workspace.Assignment.ID = "replacement-assignment"
+				workspace.Assignment.ID = "00000000-0000-4000-8000-000000000102"
 				current.Workspaces[key] = workspace
 				return nil
 			}); err != nil {
 				return SyncCommandResult{}, err
 			}
-			if err := input.Ensure.BeforePrepare(); err == nil || !strings.Contains(err.Error(), "original-assignment") {
+			if err := input.Ensure.BeforePrepare(); err == nil || !strings.Contains(err.Error(), "00000000-0000-4000-8000-000000000101") {
 				return SyncCommandResult{}, fmt.Errorf("before-prepare accepted replacement: %v", err)
 			}
 			beforeCalled = true

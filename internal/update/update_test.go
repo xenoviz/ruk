@@ -254,6 +254,9 @@ func TestStandaloneUpdateUsesResolvedEntrypointTarget(t *testing.T) {
 		Discover: func(context.Context) ([]Release, error) {
 			return []Release{testRelease("0.3.0", []byte("new"))}, nil
 		},
+		Download: func(context.Context, Asset) ([]byte, error) {
+			return []byte("new"), nil
+		},
 		Run: func(context.Context, string, []string) (CommandResult, error) {
 			return CommandResult{Stdout: "0.3.0\n"}, nil
 		},

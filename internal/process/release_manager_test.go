@@ -101,7 +101,8 @@ func TestNativeProcessManagerRetainsLiveLegacyLeaderWithoutDescendants(t *testin
 		Table: releaseTable{},
 	})
 	exists, err := manager.Exists(context.Background(), state.TrackedProcessRecord{PID: 42, StartedAt: legacy})
-	if err == nil || exists || !strings.Contains(err.Error(), "legacy process identity") {
+	var unavailable *processpkg.IdentityUnavailableError
+	if err == nil || exists || !errors.As(err, &unavailable) || unavailable.Cause == nil || !strings.Contains(unavailable.Cause.Error(), "legacy process identity") {
 		t.Fatalf("legacy leader Exists = %v, %v; want fail-closed retention", exists, err)
 	}
 }
@@ -117,7 +118,8 @@ func TestNativeProcessManagerRetainsLiveLegacyDetachedGroup(t *testing.T) {
 		Table: releaseTable{},
 	})
 	exists, err := manager.Exists(context.Background(), state.TrackedProcessRecord{PID: 42, GroupID: &group, StartedAt: legacy})
-	if err == nil || exists || !strings.Contains(err.Error(), "legacy process identity") {
+	var unavailable *processpkg.IdentityUnavailableError
+	if err == nil || exists || !errors.As(err, &unavailable) || unavailable.Cause == nil || !strings.Contains(unavailable.Cause.Error(), "legacy process identity") {
 		t.Fatalf("legacy detached Exists = %v, %v; want fail-closed retention", exists, err)
 	}
 }

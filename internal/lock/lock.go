@@ -322,10 +322,43 @@ func (guard *Guard) Release() error {
 	if !valid || owner.Token != guard.token {
 		return nil
 	}
-	if err := os.RemoveAll(guard.path); err != nil {
-		return fmt.Errorf("release lock %s: %w", guard.path, err)
+	// Move the token-verified lock directory out of the canonical path before
+	// cleanup. This makes logical release durable when recursive cleanup fails:
+	// future contenders can acquire the canonical path, while the tombstone is
+	// safe to retry or garbage-collect later. Verify the moved owner again so a
+	// replacement owner cannot be accidentally moved or removed by a stale
+	// guard racing this release.
+	releasedPath := guard.path + ".released-" + releaseToken(guard.token)
+	if err := os.Rename(guard.path, releasedPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("logically release lock %s: %w", guard.path, err)
+	}
+	movedOwner, movedValid, movedErr := readOwner(releasedPath)
+	if movedErr != nil || !movedValid || movedOwner.Token != guard.token {
+		verifyErr := movedErr
+		if verifyErr == nil {
+			verifyErr = errors.New("owner token changed or metadata is invalid")
+		}
+		// The rename raced a replacement or corrupted metadata. Restore only if
+		// the canonical path is still absent; never overwrite a newer owner.
+		if _, statErr := os.Stat(guard.path); errors.Is(statErr, os.ErrNotExist) {
+			if restoreErr := os.Rename(releasedPath, guard.path); restoreErr != nil {
+				return errors.Join(fmt.Errorf("verify released lock %s: %w", guard.path, verifyErr), restoreErr)
+			}
+		}
+		return fmt.Errorf("verify released lock %s: %w", guard.path, verifyErr)
+	}
+	if err := os.RemoveAll(releasedPath); err != nil {
+		return fmt.Errorf("cleanup released lock %s: %w", guard.path, err)
 	}
 	return nil
+}
+
+func releaseToken(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])[:20]
 }
 
 func writeOwner(path string, owner Owner) error {

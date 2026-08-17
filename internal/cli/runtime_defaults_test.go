@@ -62,6 +62,37 @@ func TestRuntimeShellUsesConfiguredActivityRunnerAroundManagedShell(t *testing.T
 	}
 }
 
+func TestRuntimeShellFullyInjectedSeamsSkipNativeStateInitialization(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	terminal := &runtimeShellTerminalStub{}
+	mutations := MutationAdapters{
+		Acquire: func(context.Context, git.Repository, AcquireInput) (AcquireResult, error) {
+			return AcquireResult{AcquireRecord: AcquireRecord{
+				Status: "assigned", AssignmentID: "assignment-shell", Path: filepath.Join(root, "workspace"),
+				ExpiresAt: "2026-08-16T13:00:00.000Z", Ports: map[string]int64{},
+			}}, nil
+		},
+		Release: func(context.Context, ReleaseInput) (ReleaseResult, error) { return ReleaseResult{}, nil },
+	}
+	activity := func(_ context.Context, _ string, operation func(context.Context) error) error {
+		// The injected runner owns cancellation policy; use a live context so the
+		// test isolates native state initialization from shell execution.
+		return operation(context.Background())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := runtimeShell(ctx, ShellRouteInput{
+		Repository: repository, Branch: "agent/shell", TTL: "30", Owner: "owner",
+		Now: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC), Stderr: io.Discard,
+	}, func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) }, func() string { return "unused" }, mutations, RuntimeDefaultsOptions{
+		ShellTerminal: terminal, ExecuteActivity: activity,
+	})
+	if err != nil || !terminal.called || !result.Released {
+		t.Fatalf("fully injected shell result/error/terminal = %#v/%v/%v", result, err, terminal.called)
+	}
+}
+
 func (worktree *runtimeDefaultsWarmWorktree) Create(_ context.Context, path, branch, start string, detach bool) error {
 	worktree.created = append(worktree.created, path+"|"+branch+"|"+start+"|"+boolText(detach))
 	return nil
