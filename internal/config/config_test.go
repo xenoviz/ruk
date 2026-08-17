@@ -113,6 +113,65 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadEnvironmentKeysAreCaseInsensitiveOnlyOnWindows(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".rukrc.json"), []byte(`{"installCommand":["npm","ci"],"dependencyMode":"managed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := map[string]string{
+		"Ruk_Install_Command": `["bun","install"]`,
+		"Ruk_Dependency_Mode": "shared",
+	}
+	loaded, err := config.LoadWithEnvironmentForOS(root, environment, "windows")
+	if err != nil {
+		t.Fatalf("Windows LoadWithEnvironmentForOS returned an error: %v", err)
+	}
+	if strings.Join(loaded.InstallCommand, " ") != "bun install" || loaded.DependencyMode == nil || *loaded.DependencyMode != config.Shared {
+		t.Fatalf("Windows loaded = %#v, want case-insensitive overrides", loaded)
+	}
+
+	loaded, err = config.LoadWithEnvironmentForOS(root, environment, "linux")
+	if err != nil {
+		t.Fatalf("Linux LoadWithEnvironmentForOS returned an error: %v", err)
+	}
+	if strings.Join(loaded.InstallCommand, " ") != "npm ci" || loaded.DependencyMode == nil || *loaded.DependencyMode != config.Managed {
+		t.Fatalf("Linux loaded = %#v, want case-sensitive environment keys", loaded)
+	}
+}
+
+func TestLoadWindowsEnvironmentKeyCollisionsAreDeterministicAndCanonicalWins(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".rukrc.json"), []byte(`{"installCommand":["npm","ci"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := config.LoadWithEnvironmentForOS(root, map[string]string{
+		"ruk_install_command": ` ["lower","install"]`,
+		"Ruk_Install_Command": ` ["mixed","install"]`,
+	}, "windows")
+	if err != nil {
+		t.Fatalf("LoadWithEnvironmentForOS returned an error: %v", err)
+	}
+	if strings.Join(loaded.InstallCommand, " ") != "mixed install" {
+		t.Fatalf("loaded command = %#v, want lexicographically first matching key", loaded.InstallCommand)
+	}
+
+	loaded, err = config.LoadWithEnvironmentForOS(root, map[string]string{
+		"ruk_install_command": ` ["lower","install"]`,
+		"RUK_INSTALL_COMMAND": ` ["canonical","install"]`,
+	}, "windows")
+	if err != nil {
+		t.Fatalf("LoadWithEnvironmentForOS canonical lookup returned an error: %v", err)
+	}
+	if strings.Join(loaded.InstallCommand, " ") != "canonical install" {
+		t.Fatalf("loaded command = %#v, want canonical key to win", loaded.InstallCommand)
+	}
+}
+
 func TestLoadEnvironmentOverridesAreNullishAndPrecedenceCompatible(t *testing.T) {
 	t.Parallel()
 

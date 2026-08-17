@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -148,6 +149,17 @@ func Load(root string) (Config, error) {
 // need deterministic override behavior. A key's presence, including an empty
 // value, is significant for dependency mode.
 func LoadWithEnvironment(root string, environment map[string]string) (Config, error) {
+	return loadWithEnvironment(root, environment, runtime.GOOS == "windows")
+}
+
+// LoadWithEnvironmentForOS is LoadWithEnvironment with an explicit platform
+// policy. It keeps environment-key behavior deterministic for embedders and
+// tests while preserving Windows' case-insensitive environment semantics.
+func LoadWithEnvironmentForOS(root string, environment map[string]string, goos string) (Config, error) {
+	return loadWithEnvironment(root, environment, goos == "windows")
+}
+
+func loadWithEnvironment(root string, environment map[string]string, caseInsensitive bool) (Config, error) {
 	file := filepath.Join(root, ".rukrc.json")
 	fileConfig, exists, err := readFileConfig(file)
 	if err != nil {
@@ -162,7 +174,7 @@ func LoadWithEnvironment(root string, environment map[string]string) (Config, er
 	}
 
 	var environmentCommand []string
-	if value, ok := environment["RUK_INSTALL_COMMAND"]; ok && value != "" {
+	if value, ok := environmentValue(environment, "RUK_INSTALL_COMMAND", caseInsensitive); ok && value != "" {
 		var err error
 		environmentCommand, err = commandFromEnvironment(value)
 		if err != nil {
@@ -184,7 +196,7 @@ func LoadWithEnvironment(root string, environment map[string]string) (Config, er
 	}
 
 	var mode *DependencyMode
-	if value, ok := environment["RUK_DEPENDENCY_MODE"]; ok {
+	if value, ok := environmentValue(environment, "RUK_DEPENDENCY_MODE", caseInsensitive); ok {
 		var err error
 		source := ".rukrc.json dependencyMode"
 		if value != "" {
@@ -207,6 +219,26 @@ func LoadWithEnvironment(root string, environment map[string]string) (Config, er
 		return Config{}, err
 	}
 	return Config{InstallCommand: command, DependencyMode: mode, SharedCheckoutPolicy: policy}, nil
+}
+
+func environmentValue(environment map[string]string, name string, caseInsensitive bool) (string, bool) {
+	if value, ok := environment[name]; ok {
+		return value, true
+	}
+	if !caseInsensitive {
+		return "", false
+	}
+	matchingKeys := make([]string, 0)
+	for key := range environment {
+		if strings.EqualFold(key, name) {
+			matchingKeys = append(matchingKeys, key)
+		}
+	}
+	if len(matchingKeys) == 0 {
+		return "", false
+	}
+	sort.Strings(matchingKeys)
+	return environment[matchingKeys[0]], true
 }
 
 func readFileConfig(file string) (map[string]json.RawMessage, bool, error) {

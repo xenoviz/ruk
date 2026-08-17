@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/xenoviz/ruk/internal/lifecycle"
 	"github.com/xenoviz/ruk/internal/lock"
@@ -72,6 +73,8 @@ type ExecuteService struct {
 	handoffLocker    ExecuteHandoffLocker
 	handoffPath      func(string) (string, error)
 }
+
+const executeRecoveryTimeout = 30 * time.Second
 
 // NewExecuteService constructs an execution service. OS/process behavior
 // remains behind process.Runner and the injected activity/release seams.
@@ -316,8 +319,9 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 	runResult, runErr := service.runner.Run(ctx, input.Command, processpkg.RunOptions{
 		Dir: input.WorkspacePath, Env: input.Env, Mode: input.Mode,
 		Stdin: input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
-		CaptureLimit:    input.CaptureLimit,
-		HandoffComplete: releaseHandoff,
+		CaptureLimit:          input.CaptureLimit,
+		SuperviseCancellation: true,
+		HandoffComplete:       releaseHandoff,
 		Register: func(registerCtx context.Context, record state.TrackedProcessRecord) error {
 			if err := service.validateAssignment(registerCtx, input.AssignmentID, input.WorkspacePath); err != nil {
 				return err
@@ -352,6 +356,12 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 	finalSignalErr := signalErr
 	trackedRecord := tracked
 	mu.Unlock()
+	postRunContext := ctx
+	cancelPostRun := func() {}
+	if ctx.Err() != nil || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		postRunContext, cancelPostRun = executeRecoveryContext(ctx)
+	}
+	defer cancelPostRun()
 	recordRemoved := trackedRecord == nil
 	if trackedRecord != nil {
 		drained := true
@@ -360,7 +370,7 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 				runErr = errors.Join(runErr, errors.New("verify detached process cleanup: process manager is unavailable"))
 				drained = false
 			} else {
-				alive, existsErr := service.processes.Exists(ctx, *trackedRecord)
+				alive, existsErr := service.processes.Exists(postRunContext, *trackedRecord)
 				if existsErr != nil {
 					runErr = errors.Join(runErr, fmt.Errorf("verify detached process %d cleanup: %w", trackedRecord.PID, existsErr))
 					drained = false
@@ -371,7 +381,7 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 			}
 		}
 		if drained {
-			if _, removeErr := service.lifecycle.RemoveAssignmentProcess(ctx, input.AssignmentID, trackedRecord.PID, trackedRecord.StartedAt); removeErr != nil {
+			if _, removeErr := service.lifecycle.RemoveAssignmentProcess(postRunContext, input.AssignmentID, trackedRecord.PID, trackedRecord.StartedAt); removeErr != nil {
 				runErr = errors.Join(runErr, removeErr)
 			} else {
 				recordRemoved = true
@@ -393,12 +403,19 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 		return runErr
 	}
 	if input.Exec && recordRemoved && processCleanupSafe(runErr) {
-		if releaseErr := service.release(ctx, input.AssignmentID); releaseErr != nil {
+		if releaseErr := service.release(postRunContext, input.AssignmentID); releaseErr != nil {
 			return errors.Join(runErr, releaseErr)
 		}
 		result.Released = true
 	}
 	return runErr
+}
+
+func executeRecoveryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), executeRecoveryTimeout)
 }
 
 func isForwardedSignal(signal os.Signal) bool {

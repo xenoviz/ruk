@@ -1,3 +1,19 @@
+import type * as fsPromises from "node:fs/promises";
+
+type LauncherFileSystem = Pick<
+  typeof fsPromises,
+  "mkdir" | "copyFile" | "writeFile" | "chmod" | "rename" | "rm"
+>;
+
+type WindowsReplacementOutput = {
+  destination: string;
+  mode?: number;
+  executable?: boolean;
+} & (
+  | { source: string; contents?: never }
+  | { contents: string; source?: never }
+);
+
 export declare const NATIVE_TARGETS: Readonly<Record<string, {
   readonly packageName: string;
   readonly platform: string;
@@ -28,6 +44,11 @@ export declare function windowsUpdateProcessID(
   environment?: Record<string, string | undefined>,
 ): number | undefined;
 
+export declare function replaceWindowsOutputs(
+  outputs: WindowsReplacementOutput[],
+  fileSystem?: LauncherFileSystem,
+): Promise<{ cleanupPending: boolean }>;
+
 export declare function installNativeLauncher(options?: {
   root?: string;
   platform?: string;
@@ -35,6 +56,7 @@ export declare function installNativeLauncher(options?: {
   libc?: string;
   commandDestination?: string;
   environment?: Record<string, string | undefined>;
+  fileSystem?: LauncherFileSystem;
   spawnReplacement?: (
     command: string,
     args: string[],
@@ -47,4 +69,5 @@ export declare function installNativeLauncher(options?: {
   sha256: string;
   installer: "bun" | "npm" | "pnpm" | "yarn";
   deferred: boolean;
+  cleanupPending: boolean;
 }>;

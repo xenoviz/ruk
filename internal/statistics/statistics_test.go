@@ -114,3 +114,54 @@ func TestMeasureDiskStatisticsCancellation(t *testing.T) {
 		t.Fatalf("MeasureDiskStatistics() error = %v, want %v", err, context.Canceled)
 	}
 }
+
+func TestMeasureDiskStatisticsCountsSymlinkedProjectionRootsAsLinkedTargets(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "store", "package")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "index.js"), []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceA := filepath.Join(root, "workspace-a")
+	workspaceB := filepath.Join(root, "workspace-b")
+	if err := os.MkdirAll(workspaceA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspaceB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(workspaceA, "node_modules")); err != nil {
+		t.Skip("symlinks are unavailable")
+	}
+	if err := os.Symlink(target, filepath.Join(workspaceB, "node_modules")); err != nil {
+		t.Skip("symlinks are unavailable")
+	}
+	keyA, err := state.TreeKey(workspaceA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := state.TreeKey(workspaceB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := state.State{
+		Trees: map[string]state.TreeRecord{
+			keyA: {Path: workspaceA, Projections: []string{"node_modules"}},
+			keyB: {Path: workspaceB, Projections: []string{"node_modules"}},
+		},
+		Workspaces: map[string]state.WorkspaceRecord{
+			keyA: {Path: workspaceA},
+			keyB: {Path: workspaceB},
+		},
+	}
+	got, err := MeasureDiskStatistics(context.Background(), snapshot, DiskOptions{Concurrency: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := DiskStatistics{LinkedTargetBytes: 5, EstimatedBytesAvoided: 5}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MeasureDiskStatistics() = %#v, want %#v", got, want)
+	}
+}

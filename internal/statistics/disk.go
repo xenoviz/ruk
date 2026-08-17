@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/xenoviz/ruk/internal/state"
@@ -182,6 +183,14 @@ func diskConcurrency(options []DiskOptions) int {
 
 func scanProjection(ctx context.Context, root string) projectionResult {
 	result := projectionResult{}
+	if info, err := os.Lstat(root); err != nil {
+		return result
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		if real, err := canonicalTarget(root); err == nil {
+			result.links = append(result.links, real)
+		}
+		return result
+	}
 	var walk func(string)
 	walk = func(directory string) {
 		if ctx.Err() != nil {
@@ -201,7 +210,7 @@ func scanProjection(ctx context.Context, root string) projectionResult {
 				continue
 			}
 			if info.Mode()&os.ModeSymlink != 0 {
-				real, err := filepath.EvalSymlinks(path)
+				real, err := canonicalTarget(path)
 				if err == nil {
 					result.links = append(result.links, real)
 				}
@@ -224,7 +233,7 @@ func entrySize(ctx context.Context, entry string, visited map[string]struct{}) i
 	if ctx.Err() != nil {
 		return 0
 	}
-	real, err := filepath.EvalSymlinks(entry)
+	real, err := canonicalTarget(entry)
 	if err != nil {
 		return 0
 	}
@@ -251,6 +260,21 @@ func entrySize(ctx context.Context, entry string, visited map[string]struct{}) i
 		size = addBytes(size, entrySize(ctx, filepath.Join(real, child.Name()), visited))
 	}
 	return size
+}
+
+func canonicalTarget(path string) (string, error) {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	real, err = filepath.Abs(filepath.Clean(real))
+	if err != nil {
+		return "", err
+	}
+	if runtime.GOOS == "windows" {
+		real = strings.ToLower(real)
+	}
+	return real, nil
 }
 
 func addBytes(left, right int64) int64 {

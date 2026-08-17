@@ -111,13 +111,7 @@ async function atomicCopy(source, destination, executable) {
   try {
     await fs.copyFile(source, temporary);
     if (executable) await fs.chmod(temporary, 0o755);
-    try {
-      await fs.rename(temporary, destination);
-    } catch (error) {
-      if (process.platform !== "win32") throw error;
-      await fs.rm(destination, { force: true });
-      await fs.rename(temporary, destination);
-    }
+    await fs.rename(temporary, destination);
   } finally {
     await fs.rm(temporary, { force: true });
   }
@@ -128,13 +122,7 @@ async function atomicWrite(filename, contents) {
   const temporary = `${filename}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
     await fs.writeFile(temporary, contents, { mode: 0o644 });
-    try {
-      await fs.rename(temporary, filename);
-    } catch (error) {
-      if (process.platform !== "win32") throw error;
-      await fs.rm(filename, { force: true });
-      await fs.rename(temporary, filename);
-    }
+    await fs.rename(temporary, filename);
   } finally {
     await fs.rm(temporary, { force: true });
   }
@@ -284,6 +272,134 @@ async function stageWindowsContents(contents, destination) {
   }
 }
 
+async function removeTemporaryOutputs(outputs, fileSystem) {
+  const results = await Promise.all(outputs.map(async ({ temporary }) => {
+    try {
+      await fileSystem.rm(temporary, { force: true });
+      return { error: undefined };
+    } catch (error) {
+      return { error };
+    }
+  }));
+  return results.flatMap(({ error }) => error === undefined ? [] : [error]);
+}
+
+async function rollbackWindowsOutputs(outputs, fileSystem) {
+  const errors = [];
+  for (let index = outputs.length - 1; index >= 0; index -= 1) {
+    const output = outputs[index];
+    if (!output.installed && !output.backupMoved) continue;
+    if (output.installed) {
+      try {
+        await fileSystem.rm(output.destination, { force: true });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (output.backupMoved) {
+      try {
+        await fileSystem.rename(output.backup, output.destination);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+  return errors;
+}
+
+// replaceWindowsOutputs stages every direct-install output before touching an
+// existing destination, then commits all replacements as one rollback-capable
+// transaction. Backups are retained until every destination is installed.
+export async function replaceWindowsOutputs(outputs, fileSystem = fs) {
+  if (!Array.isArray(outputs) || outputs.length === 0) {
+    throw new Error("Windows replacement requires at least one output");
+  }
+  const destinations = new Set();
+  for (const output of outputs) {
+    if (!output || typeof output.destination !== "string" || output.destination === "") {
+      throw new Error("Windows replacement output destination is invalid");
+    }
+    const hasSource = typeof output.source === "string";
+    const hasContents = typeof output.contents === "string";
+    if (hasSource === hasContents) {
+      throw new Error(`Windows replacement output ${output.destination} must have exactly one source or contents`);
+    }
+    const normalizedDestination = path.resolve(path.normalize(output.destination)).toLowerCase();
+    if (destinations.has(normalizedDestination)) {
+      throw new Error(`Windows replacement outputs contain duplicate destination: ${output.destination}`);
+    }
+    destinations.add(normalizedDestination);
+  }
+  const staged = [];
+  try {
+    for (const output of outputs) {
+      const temporary = `${output.destination}.${process.pid}.${crypto.randomUUID()}.ruk-pending`;
+      const entry = {
+        destination: output.destination,
+        temporary,
+        backup: `${output.destination}.${process.pid}.${crypto.randomUUID()}.ruk-backup`,
+        backupMoved: false,
+        installed: false,
+      };
+      staged.push(entry);
+      await fileSystem.mkdir(path.dirname(output.destination), { recursive: true });
+      if (typeof output.source === "string") {
+        await fileSystem.copyFile(output.source, temporary);
+      } else {
+        await fileSystem.writeFile(temporary, output.contents, { mode: output.mode ?? 0o644 });
+      }
+      if (output.executable) await fileSystem.chmod(temporary, 0o755);
+    }
+  } catch (error) {
+    const cleanupErrors = await removeTemporaryOutputs(staged, fileSystem);
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError([error, ...cleanupErrors], "Windows replacement staging cleanup failed");
+    }
+    throw error;
+  }
+
+  let committed = false;
+  try {
+    for (const output of staged) {
+      let hadDestination = true;
+      try {
+        await fileSystem.rename(output.destination, output.backup);
+        output.backupMoved = true;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        hadDestination = false;
+      }
+      output.hadDestination = hadDestination;
+      await fileSystem.rename(output.temporary, output.destination);
+      output.installed = true;
+    }
+    committed = true;
+    const cleanupErrors = [];
+    for (const output of staged) {
+      if (!output.hadDestination) continue;
+      try {
+        await fileSystem.rm(output.backup, { force: true });
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    const temporaryCleanupErrors = await removeTemporaryOutputs(staged, fileSystem);
+    return { cleanupPending: cleanupErrors.length > 0 || temporaryCleanupErrors.length > 0 };
+  } catch (error) {
+    if (!committed) {
+      const rollbackErrors = await rollbackWindowsOutputs(staged, fileSystem);
+      const cleanupErrors = await removeTemporaryOutputs(staged, fileSystem);
+      if (rollbackErrors.length > 0 || cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...rollbackErrors, ...cleanupErrors],
+          "Windows replacement rollback failed",
+        );
+      }
+    }
+    throw error;
+  }
+}
+
 export async function installNativeLauncher(options = {}) {
   const root = path.resolve(options.root ?? fileURLToPath(new URL("../..", import.meta.url)));
   const platform = options.platform ?? process.platform;
@@ -348,6 +464,7 @@ export async function installNativeLauncher(options = {}) {
   const commandDestination = options.commandDestination ?? (
     platform === "win32" ? windowsCommandDestination(root, options.environment) : undefined
   );
+  let cleanupPending = false;
   try {
     if (updatePID !== undefined) {
       deferredEntries.push([await stageWindowsCopy(source, destination), destination]);
@@ -363,20 +480,40 @@ export async function installNativeLauncher(options = {}) {
       deferredEntries.push([await stageWindowsContents(markerContents, marker), marker]);
       await scheduleWindowsReplacement(deferredEntries, updatePID, options.spawnReplacement ?? spawn);
     } else {
-      await atomicCopy(source, destination, platform !== "win32");
-      if (commandDestination !== undefined) {
-        if (platform !== "win32" || path.extname(commandDestination).toLowerCase() !== ".exe") {
-          throw new Error("Ruk native command destination must be a Windows .exe path");
-        }
-        const resolvedCommandDestination = path.resolve(commandDestination);
-        await atomicCopy(source, resolvedCommandDestination, false);
-        await atomicWrite(`${resolvedCommandDestination}.ruk-distribution`, markerContents);
+      if (platform !== "win32" && commandDestination !== undefined) {
+        throw new Error("Ruk native command destination must be a Windows .exe path");
       }
-      await atomicWrite(marker, markerContents);
+      if (platform === "win32") {
+        const outputs = [{ source, destination }];
+        if (commandDestination !== undefined) {
+          if (path.extname(commandDestination).toLowerCase() !== ".exe") {
+            throw new Error("Ruk native command destination must be a Windows .exe path");
+          }
+          const resolvedCommandDestination = path.resolve(commandDestination);
+          outputs.push(
+            { source, destination: resolvedCommandDestination },
+            { contents: markerContents, destination: `${resolvedCommandDestination}.ruk-distribution` },
+          );
+        }
+        outputs.push({ contents: markerContents, destination: marker });
+        const replacement = await replaceWindowsOutputs(outputs, options.fileSystem ?? fs);
+        cleanupPending = replacement.cleanupPending;
+      } else {
+        await atomicCopy(source, destination, true);
+        await atomicWrite(marker, markerContents);
+      }
     }
   } catch (error) {
     if (updatePID !== undefined) await removeStagedWindowsEntries(deferredEntries);
     throw error;
   }
-  return { packageName: selected.packageName, target: selected.target, destination, sha256: actualDigest, installer, deferred: updatePID !== undefined };
+  return {
+    packageName: selected.packageName,
+    target: selected.target,
+    destination,
+    sha256: actualDigest,
+    installer,
+    deferred: updatePID !== undefined,
+    cleanupPending,
+  };
 }

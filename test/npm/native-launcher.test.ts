@@ -10,6 +10,7 @@ import {
   installerFromEnvironment,
   installNativeLauncher,
   platformTarget,
+  replaceWindowsOutputs,
   windowsCommandDestination,
   windowsUpdateProcessID,
 } from "../../scripts/npm/launcher.mjs";
@@ -184,6 +185,9 @@ test("Windows installation places an executable ahead of npm's Node shim", async
     },
   }));
   const commandDestination = path.join(root, "node_modules", ".bin", "ruk.exe");
+  await fs.writeFile(path.join(root, "bin", "ruk.exe"), Buffer.from("previous-native-ruk-binary"));
+  await fs.mkdir(path.dirname(commandDestination), { recursive: true });
+  await fs.writeFile(commandDestination, Buffer.from("previous-command-ruk-binary"));
 
   const result = await installNativeLauncher({
     root,
@@ -200,6 +204,9 @@ test("Windows installation places an executable ahead of npm's Node shim", async
     JSON.parse(await fs.readFile(`${commandDestination}.ruk-distribution`, "utf8")),
     { schemaVersion: 1, distribution: "package", installer: "pnpm" },
   );
+  assert.equal(result.cleanupPending, false);
+  const files = await fs.readdir(root, { recursive: true });
+  assert.deepEqual(files.filter((file) => file.endsWith(".ruk-backup")), []);
 });
 
 test("Windows command placement follows npm local and global prefixes", () => {
@@ -217,6 +224,157 @@ test("Windows command placement follows npm local and global prefixes", () => {
     }),
     path.resolve("C:\\prefix", "ruk.exe"),
   );
+});
+
+test("Windows direct replacement rejects case-insensitive duplicate destinations before staging", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-launcher-duplicate-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const destination = path.join(root, "bin", "ruk.exe");
+
+  await assert.rejects(
+    replaceWindowsOutputs([
+      { contents: "first", destination },
+      { contents: "second", destination: destination.toUpperCase() },
+    ]),
+    /duplicate destination/,
+  );
+  await assert.rejects(fs.access(destination));
+  const files = await fs.readdir(root, { recursive: true });
+  assert.deepEqual(files.filter((file) => file.endsWith(".ruk-pending") || file.endsWith(".ruk-backup")), []);
+});
+
+test("Windows direct replacement requires exactly one source or contents", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-launcher-output-validation-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const destination = path.join(root, "bin", "ruk.exe");
+  const invoke = replaceWindowsOutputs as unknown as (outputs: unknown[]) => Promise<unknown>;
+
+  await assert.rejects(
+    invoke([{ source: path.join(root, "source.exe"), contents: "inline", destination }]),
+    /must have exactly one source or contents/,
+  );
+  await assert.rejects(
+    invoke([{ destination }]),
+    /must have exactly one source or contents/,
+  );
+  const files = await fs.readdir(root, { recursive: true });
+  assert.deepEqual(files.filter((file) => file.endsWith(".ruk-pending") || file.endsWith(".ruk-backup")), []);
+});
+
+test("Windows direct replacement rolls back every output when a later install fails", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-launcher-rollback-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const source = path.join(root, "source.exe");
+  const destination = path.join(root, "bin", "ruk.exe");
+  const commandDestination = path.join(root, "node_modules", ".bin", "ruk.exe");
+  const marker = `${destination}.ruk-distribution`;
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.mkdir(path.dirname(commandDestination), { recursive: true });
+  await fs.writeFile(source, "new-binary");
+  await fs.writeFile(destination, "old-primary");
+  await fs.writeFile(commandDestination, "old-command");
+  await fs.writeFile(marker, "old-marker");
+
+  const fileSystem = {
+    mkdir: fs.mkdir,
+    copyFile: (...args: Parameters<typeof fs.copyFile>) => fs.copyFile(...args),
+    writeFile: (...args: Parameters<typeof fs.writeFile>) => fs.writeFile(...args),
+    chmod: (...args: Parameters<typeof fs.chmod>) => fs.chmod(...args),
+    rm: (...args: Parameters<typeof fs.rm>) => fs.rm(...args),
+    rename: async (...args: Parameters<typeof fs.rename>) => {
+      const [from, to] = args;
+      if (String(to) === marker && String(from).endsWith(".ruk-pending")) {
+        throw new Error("injected marker replacement failure");
+      }
+      await fs.rename(...args);
+    },
+  };
+
+  await assert.rejects(
+    replaceWindowsOutputs([
+      { source, destination },
+      { source, destination: commandDestination },
+      { contents: "new-marker", destination: marker },
+    ], fileSystem),
+    /injected marker replacement failure/,
+  );
+  assert.equal(await fs.readFile(destination, "utf8"), "old-primary");
+  assert.equal(await fs.readFile(commandDestination, "utf8"), "old-command");
+  assert.equal(await fs.readFile(marker, "utf8"), "old-marker");
+  const files = await fs.readdir(root, { recursive: true });
+  assert.deepEqual(files.filter((file) => file.endsWith(".ruk-pending") || file.endsWith(".ruk-backup")), []);
+});
+
+test("Windows install reports committed backup cleanup failures", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-launcher-cleanup-pending-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const packageRoot = path.join(root, "node_modules", "@xenoviz", "ruk-windows-x64");
+  const native = path.join(packageRoot, "native", "ruk.exe");
+  const contents = Buffer.from("cleanup-pending-windows-ruk-binary");
+  await fs.mkdir(path.dirname(native), { recursive: true });
+  await fs.mkdir(path.join(root, "bin"), { recursive: true });
+  await fs.writeFile(native, contents);
+  const sha256 = crypto.createHash("sha256").update(contents).digest("hex");
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
+    name: "@xenoviz/ruk",
+    version,
+    ruk: { distribution: "package", binaryPath: "bin/ruk" },
+  }));
+  await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "@xenoviz/ruk-windows-x64",
+    version,
+    ruk: { distribution: "package", target: "windows-x64", binary: "native/ruk.exe", sha256 },
+  }));
+  const destination = path.join(root, "bin", "ruk.exe");
+  await fs.writeFile(destination, "previous-native-ruk-binary");
+
+  const fileSystem = {
+    mkdir: fs.mkdir,
+    copyFile: (...args: Parameters<typeof fs.copyFile>) => fs.copyFile(...args),
+    writeFile: (...args: Parameters<typeof fs.writeFile>) => fs.writeFile(...args),
+    chmod: (...args: Parameters<typeof fs.chmod>) => fs.chmod(...args),
+    rename: (...args: Parameters<typeof fs.rename>) => fs.rename(...args),
+    rm: async (target: Parameters<typeof fs.rm>[0], options: Parameters<typeof fs.rm>[1]) => {
+      if (String(target).endsWith(".ruk-backup")) throw new Error("injected backup cleanup failure");
+      return fs.rm(target, options);
+    },
+  };
+
+  const result = await installNativeLauncher({
+    root,
+    platform: "win32",
+    arch: "x64",
+    commandDestination: path.join(root, "node_modules", ".bin", "ruk.exe"),
+    fileSystem,
+  });
+
+  assert.equal(result.cleanupPending, true);
+  assert.deepEqual(await fs.readFile(destination), contents);
+  const files = await fs.readdir(root, { recursive: true });
+  assert.equal(files.filter((file) => file.endsWith(".ruk-backup")).length, 1);
+  assert.deepEqual(files.filter((file) => file.endsWith(".ruk-pending")), []);
+});
+
+test("Windows committed replacement reports pending temporary cleanup failures", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-launcher-temp-cleanup-pending-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const destination = path.join(root, "bin", "ruk.exe");
+  const fileSystem = {
+    mkdir: fs.mkdir,
+    copyFile: (...args: Parameters<typeof fs.copyFile>) => fs.copyFile(...args),
+    writeFile: (...args: Parameters<typeof fs.writeFile>) => fs.writeFile(...args),
+    chmod: (...args: Parameters<typeof fs.chmod>) => fs.chmod(...args),
+    rename: (...args: Parameters<typeof fs.rename>) => fs.rename(...args),
+    rm: async (target: Parameters<typeof fs.rm>[0], options: Parameters<typeof fs.rm>[1]) => {
+      if (String(target).endsWith(".ruk-pending")) throw new Error("injected temporary cleanup failure");
+      return fs.rm(target, options);
+    },
+  };
+
+  const result = await replaceWindowsOutputs([{ contents: "new-binary", destination }], fileSystem);
+
+  assert.equal(result.cleanupPending, true);
+  assert.equal(await fs.readFile(destination, "utf8"), "new-binary");
 });
 
 test("Windows package updates defer native replacement to a detached handoff", async (t) => {
