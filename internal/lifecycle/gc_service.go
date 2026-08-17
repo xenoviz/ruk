@@ -350,7 +350,9 @@ func (service *GCService) collectWorkspace(ctx context.Context, workspace state.
 	}
 	if worktree {
 		if err := service.options.Git.Unlock(ctx, collecting.Path); err != nil {
-			return service.restoreCollection(ctx, collecting.Path, operationID, err, false)
+			// Unlock may have changed Git state before reporting an error. Treat
+			// that boundary as uncertain and relock before clearing the fence.
+			return service.restoreCollection(ctx, collecting.Path, operationID, err, true)
 		}
 		if err := service.options.Git.Remove(ctx, collecting.Path, true); err != nil {
 			return service.restoreCollection(ctx, collecting.Path, operationID, err, true)
@@ -464,12 +466,14 @@ func (service *GCService) revalidateUnassignedWorkspace(ctx context.Context, exp
 }
 
 func (service *GCService) restoreCollection(ctx context.Context, path, operationID string, cause error, unlocked bool) error {
+	recoveryCtx, cancel := acquisitionRecoveryContext(ctx)
+	defer cancel()
 	if unlocked {
-		if relockErr := service.options.Git.Lock(ctx, path); relockErr != nil {
+		if relockErr := service.options.Git.Lock(recoveryCtx, path); relockErr != nil {
 			return errors.Join(cause, fmt.Errorf("relock worktree %s after failed removal: %w", path, relockErr))
 		}
 	}
-	if _, cancelErr := service.options.Lifecycle.CancelWorkspaceCollection(ctx, path, operationID); cancelErr != nil {
+	if _, cancelErr := service.options.Lifecycle.CancelWorkspaceCollection(recoveryCtx, path, operationID); cancelErr != nil {
 		return errors.Join(cause, fmt.Errorf("restore collection state: %w", cancelErr))
 	}
 	return cause

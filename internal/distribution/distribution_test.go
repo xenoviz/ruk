@@ -39,12 +39,12 @@ func TestResolveSupportedTargets(t *testing.T) {
 		{
 			name:   "windows amd64",
 			target: Target{GOOS: "windows", GOARCH: "amd64"},
-			want:   Mapping{AssetName: "ruk-windows-x64.exe", PackageName: "@xenoviz/ruk-win32-x64", ExecutableName: "ruk.exe"},
+			want:   Mapping{AssetName: "ruk-windows-x64.exe", PackageName: "@xenoviz/ruk-windows-x64", ExecutableName: "ruk.exe"},
 		},
 		{
 			name:   "windows arm64",
 			target: Target{GOOS: "windows", GOARCH: "arm64"},
-			want:   Mapping{AssetName: "ruk-windows-arm64.exe", PackageName: "@xenoviz/ruk-win32-arm64", ExecutableName: "ruk.exe"},
+			want:   Mapping{AssetName: "ruk-windows-arm64.exe", PackageName: "@xenoviz/ruk-windows-arm64", ExecutableName: "ruk.exe"},
 		},
 	}
 

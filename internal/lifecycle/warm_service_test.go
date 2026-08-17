@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/xenoviz/ruk/internal/dependencies"
 	"github.com/xenoviz/ruk/internal/lifecycle"
+	processpkg "github.com/xenoviz/ruk/internal/process"
 	"github.com/xenoviz/ruk/internal/state"
 )
 
@@ -165,6 +167,46 @@ func TestWarmSkipsInvalidHeadOrProjectionAndRecordsFailure(t *testing.T) {
 	}
 	if len(worktree.created) != 0 {
 		t.Fatalf("failed Git create was recorded as successful: %#v", worktree)
+	}
+}
+
+func TestWarmRetainsUnsafeInstallerProcessWhenPreparationFails(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStore()
+	worktree := &warmWorktreeFake{}
+	locker := &warmLockerFake{}
+	reader := &warmStateReaderFake{state: store.current}
+	record := state.TrackedProcessRecord{PID: 42, StartedAt: "native:42", Command: []string{"package-manager", "install"}}
+	registrationErr := &processpkg.RegistrationError{
+		Register: errors.New("registration failed"),
+		Cleanup: &processpkg.ProcessCleanupUnsafeError{
+			PID: 42, Mode: processpkg.Detached, Record: record, Cause: errors.New("descendants remain"),
+		},
+	}
+	service := newWarmService(t, store, worktree, locker, reader,
+		func(context.Context, string, state.TreeRecord) (bool, error) { return true, nil },
+		func(context.Context, string) (dependencies.EnsureResult, error) {
+			return dependencies.EnsureResult{}, registrationErr
+		},
+	)
+
+	_, err := service.Warm(context.Background(), lifecycle.WarmInput{Count: 1, StartPoint: "HEAD"})
+	if err == nil || !errors.Is(err, registrationErr) {
+		t.Fatalf("Warm error=%v, want original registration failure", err)
+	}
+	if len(worktree.created) != 1 {
+		t.Fatalf("created worktrees=%#v, want one failed preparation", worktree.created)
+	}
+	key, keyErr := state.TreeKey(worktree.created[0])
+	if keyErr != nil {
+		t.Fatal(keyErr)
+	}
+	workspace := store.current.Workspaces[key]
+	if workspace.Lifecycle != state.LifecycleFailed || workspace.OperationID != nil || len(workspace.Processes) != 1 {
+		t.Fatalf("failed workspace=%#v, want failed state with retained process", workspace)
+	}
+	if !reflect.DeepEqual(workspace.Processes[0], record) {
+		t.Fatalf("retained process=%#v, want %#v", workspace.Processes[0], record)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	ossignal "os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -784,7 +785,19 @@ func runGit(ctx context.Context, cwd string, runner git.CommandRunner, args []st
 }
 
 func sameRuntimePath(left, right string) bool {
+	return sameRuntimePathForOS(left, right, runtime.GOOS)
+}
+
+func sameRuntimePathForOS(left, right, goos string) bool {
 	leftAbs, leftErr := filepath.Abs(filepath.Clean(left))
 	rightAbs, rightErr := filepath.Abs(filepath.Clean(right))
-	return leftErr == nil && rightErr == nil && filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	leftAbs = filepath.Clean(leftAbs)
+	rightAbs = filepath.Clean(rightAbs)
+	if goos == "windows" {
+		return strings.EqualFold(leftAbs, rightAbs)
+	}
+	return leftAbs == rightAbs
 }

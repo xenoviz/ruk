@@ -17,7 +17,10 @@ type gcServiceStore struct {
 	failDelete bool
 }
 
-func (store *gcServiceStore) Update(_ context.Context, mutate func(*state.State) error) error {
+func (store *gcServiceStore) Update(ctx context.Context, mutate func(*state.State) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if store.failDelete {
 		for _, workspace := range store.current.Workspaces {
 			if workspace.Lifecycle == state.LifecycleAvailable && workspace.OperationID != nil {
@@ -38,13 +41,17 @@ func (locker *gcTestLocker) With(_ context.Context, path string, callback func()
 }
 
 type gcTestGit struct {
-	worktree  bool
-	unlockErr error
-	removeErr error
-	lockErr   error
-	unlock    int
-	remove    int
-	lock      int
+	worktree    bool
+	worktreeErr error
+	unlockErr   error
+	removeErr   error
+	lockErr     error
+	cancel      context.CancelFunc
+	cancelAt    string
+	cancelled   bool
+	unlock      int
+	remove      int
+	lock        int
 }
 
 type gcTestProcesses struct {
@@ -74,18 +81,30 @@ func (processes *gcTestProcesses) Terminate(_ context.Context, _ state.TrackedPr
 	return true, nil
 }
 
-func (git *gcTestGit) IsWorktree(context.Context, string) (bool, error) { return git.worktree, nil }
-func (git *gcTestGit) Unlock(context.Context, string) error {
+func (git *gcTestGit) IsWorktree(_ context.Context, _ string) (bool, error) {
+	git.triggerCancel("is-worktree")
+	return git.worktree, git.worktreeErr
+}
+func (git *gcTestGit) Unlock(_ context.Context, _ string) error {
 	git.unlock++
+	git.triggerCancel("unlock")
 	return git.unlockErr
 }
-func (git *gcTestGit) Remove(context.Context, string, bool) error {
+func (git *gcTestGit) Remove(_ context.Context, _ string, _ bool) error {
 	git.remove++
+	git.triggerCancel("remove")
 	return git.removeErr
 }
-func (git *gcTestGit) Lock(context.Context, string) error {
+func (git *gcTestGit) Lock(_ context.Context, _ string) error {
 	git.lock++
 	return git.lockErr
+}
+
+func (git *gcTestGit) triggerCancel(stage string) {
+	if git.cancel != nil && !git.cancelled && git.cancelAt == stage {
+		git.cancel()
+		git.cancelled = true
+	}
 }
 
 type gcTestTreeState struct {
@@ -221,6 +240,48 @@ func TestGCServiceRemoveFailureRelocksAndRestoresCollection(t *testing.T) {
 	workspace := workspaceAtPathForGC(t, store, "/pool/remove")
 	if workspace.OperationID != nil || workspace.Lifecycle != state.LifecycleAvailable {
 		t.Fatalf("collection was not restored: %#v", workspace)
+	}
+}
+
+func TestGCServiceCanceledRemovalRestoresCollectionWithRecoveryContext(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 2, 0, 0, 0, time.UTC)
+	removeErr := errors.New("remove canceled")
+	store, service := gcFixture(t, now, gcWorkspaceForService("/pool/canceled-remove", state.LifecycleAvailable, nil, nil, "2026-01-01T00:00:00.000Z"))
+	ctx, cancel := context.WithCancel(context.Background())
+	git := &gcTestGit{worktree: true, removeErr: removeErr, cancel: cancel, cancelAt: "remove"}
+	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{Reader: store, Lifecycle: service, Git: git, TreeState: &gcTestTreeState{}, Locker: &gcTestLocker{}, LocksRoot: t.TempDir()})
+
+	_, err := gc.Run(ctx, lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true})
+	if err == nil || !errors.Is(err, removeErr) {
+		t.Fatalf("canceled removal error = %v, want original removal error", err)
+	}
+	if git.lock != 1 {
+		t.Fatalf("relock calls = %d, want one recovery relock", git.lock)
+	}
+	workspace := workspaceAtPathForGC(t, store, "/pool/canceled-remove")
+	if workspace.OperationID != nil || workspace.Lifecycle != state.LifecycleAvailable {
+		t.Fatalf("canceled removal did not restore collection state: %#v", workspace)
+	}
+}
+
+func TestGCServiceCanceledUnlockRelocksBeforeRestoringCollection(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 2, 0, 0, 0, time.UTC)
+	unlockErr := errors.New("unlock uncertain")
+	store, service := gcFixture(t, now, gcWorkspaceForService("/pool/canceled-unlock", state.LifecycleAvailable, nil, nil, "2026-01-01T00:00:00.000Z"))
+	ctx, cancel := context.WithCancel(context.Background())
+	git := &gcTestGit{worktree: true, unlockErr: unlockErr, cancel: cancel, cancelAt: "unlock"}
+	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{Reader: store, Lifecycle: service, Git: git, TreeState: &gcTestTreeState{}, Locker: &gcTestLocker{}, LocksRoot: t.TempDir()})
+
+	_, err := gc.Run(ctx, lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true})
+	if err == nil || !errors.Is(err, unlockErr) {
+		t.Fatalf("canceled unlock error = %v, want original unlock error", err)
+	}
+	if git.lock != 1 {
+		t.Fatalf("relock calls = %d, want one recovery relock after uncertain unlock", git.lock)
+	}
+	workspace := workspaceAtPathForGC(t, store, "/pool/canceled-unlock")
+	if workspace.OperationID != nil || workspace.Lifecycle != state.LifecycleAvailable {
+		t.Fatalf("canceled unlock did not restore collection state: %#v", workspace)
 	}
 }
 

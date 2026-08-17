@@ -64,8 +64,8 @@ var supportedTargets = []struct {
 	{Target{"linux", "amd64", true}, Mapping{"ruk-linux-x64-musl", "@xenoviz/ruk-linux-x64-musl", "ruk"}},
 	{Target{"darwin", "amd64", false}, Mapping{"ruk-macos-x64", "@xenoviz/ruk-darwin-x64", "ruk"}},
 	{Target{"darwin", "arm64", false}, Mapping{"ruk-macos-arm64", "@xenoviz/ruk-darwin-arm64", "ruk"}},
-	{Target{"windows", "amd64", false}, Mapping{"ruk-windows-x64.exe", "@xenoviz/ruk-win32-x64", "ruk.exe"}},
-	{Target{"windows", "arm64", false}, Mapping{"ruk-windows-arm64.exe", "@xenoviz/ruk-win32-arm64", "ruk.exe"}},
+	{Target{"windows", "amd64", false}, Mapping{"ruk-windows-x64.exe", "@xenoviz/ruk-windows-x64", "ruk.exe"}},
+	{Target{"windows", "arm64", false}, Mapping{"ruk-windows-arm64.exe", "@xenoviz/ruk-windows-arm64", "ruk.exe"}},
 }
 
 // Resolve returns the release and npm names for a supported target.

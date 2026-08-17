@@ -396,3 +396,17 @@ func (forwarder *runtimeDefaultsForwarder) Forward(_ context.Context, _ state.Tr
 	forwarder.signals = append(forwarder.signals, signal)
 	return nil
 }
+
+func TestSameRuntimePathUsesWindowsCaseFoldingOnly(t *testing.T) {
+	left := filepath.Join("gc-root", "Workspace")
+	right := filepath.Join("gc-root", "workspace")
+	if !sameRuntimePathForOS(left, right, "windows") {
+		t.Fatal("Windows path comparison should ignore case")
+	}
+	if sameRuntimePathForOS(left, right, "linux") {
+		t.Fatal("non-Windows path comparison should remain case-sensitive")
+	}
+	if !sameRuntimePathForOS(left, left, "linux") {
+		t.Fatal("identical non-Windows paths should compare equal")
+	}
+}

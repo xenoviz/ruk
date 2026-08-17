@@ -279,6 +279,10 @@ func (service *WarmService) markWarmFailed(ctx context.Context, path, operationI
 	if cause == nil {
 		cause = errors.New("warm preparation failed")
 	}
-	_, markErr := service.lifecycle.MarkFailed(ctx, path, operationID, cause.Error())
+	recoveryCtx, cancel := acquisitionRecoveryContext(ctx)
+	defer cancel()
+	_, markErr := service.lifecycle.MarkFailedRetainingProcess(
+		recoveryCtx, path, operationID, cause.Error(), unsafeProcessRecord(cause),
+	)
 	return errors.Join(cause, markErr)
 }
