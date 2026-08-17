@@ -51,3 +51,28 @@ func TestGuardReleaseDoesNotMoveWhenReleasedPathIsOccupied(t *testing.T) {
 		t.Fatalf("canonical lock was not preserved: %v", err)
 	}
 }
+
+func TestCleanupReleasedTombstonesLeavesCanonicalAndUnrelatedEntries(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "pool.lock")
+	if err := os.MkdirAll(path+".released-deadbeef", 0o700); err != nil {
+		t.Fatalf("create released tombstone: %v", err)
+	}
+	unrelated := filepath.Join(root, "other.lock.released-deadbeef")
+	if err := os.MkdirAll(unrelated, 0o700); err != nil {
+		t.Fatalf("create unrelated tombstone: %v", err)
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatalf("create canonical lock: %v", err)
+	}
+	cleanupReleasedTombstones(path)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("canonical lock was touched: %v", err)
+	}
+	if _, err := os.Stat(path + ".released-deadbeef"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("matching tombstone remains: %v", err)
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("unrelated tombstone was touched: %v", err)
+	}
+}

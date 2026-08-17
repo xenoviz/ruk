@@ -276,8 +276,13 @@ func TestStandaloneUpdateUsesResolvedEntrypointTarget(t *testing.T) {
 		t.Fatalf("resolved target contents = %q, read error = %v", contents, err)
 	}
 	resolved, err := filepath.EvalSymlinks(link)
-	if err != nil || resolved != target {
+	if err != nil {
 		t.Fatalf("entrypoint symlink target = %q, want %q (error %v)", resolved, target, err)
+	}
+	resolvedInfo, resolvedErr := os.Stat(resolved)
+	targetInfo, targetErr := os.Stat(target)
+	if resolvedErr != nil || targetErr != nil || !os.SameFile(resolvedInfo, targetInfo) {
+		t.Fatalf("entrypoint symlink target = %q, want same file as %q (errors %v, %v)", resolved, target, resolvedErr, targetErr)
 	}
 }
 

@@ -184,6 +184,7 @@ func (locker *DirectoryLocker) Acquire(ctx context.Context, path string) (*Guard
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create lock parent %s: %w", filepath.Dir(path), err)
 	}
+	cleanupReleasedTombstones(path)
 
 	started := locker.now()
 	token := locker.token()
@@ -305,13 +306,21 @@ func (locker *DirectoryLocker) ownerIsAlive(ctx context.Context, owner Owner) (b
 
 // Guard represents one acquired directory lock.
 type Guard struct {
-	path  string
-	token string
+	path         string
+	token        string
+	releasedPath string
 }
 
 // Release removes the lock only when its owner token still belongs to this
 // guard. A missing or replaced lock is already released from this guard's view.
 func (guard *Guard) Release() error {
+	if guard.releasedPath != "" {
+		if err := os.RemoveAll(guard.releasedPath); err != nil {
+			return fmt.Errorf("cleanup released lock %s: %w", guard.path, err)
+		}
+		guard.releasedPath = ""
+		return nil
+	}
 	owner, valid, err := readOwner(guard.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -327,7 +336,9 @@ func (guard *Guard) Release() error {
 	// future contenders can acquire the canonical path, while the tombstone is
 	// safe to retry or garbage-collect later. Verify the moved owner again so a
 	// replacement owner cannot be accidentally moved or removed by a stale
-	// guard racing this release.
+	// guard racing this release. Within one host, an exact live owner remains
+	// fenced by its token while this guard runs; this does not claim a
+	// cross-host serialization guarantee for shared filesystems.
 	releasedPath := guard.path + ".released-" + releaseToken(guard.token)
 	if err := os.Rename(guard.path, releasedPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -335,6 +346,7 @@ func (guard *Guard) Release() error {
 		}
 		return fmt.Errorf("logically release lock %s: %w", guard.path, err)
 	}
+	guard.releasedPath = releasedPath
 	movedOwner, movedValid, movedErr := readOwner(releasedPath)
 	if movedErr != nil || !movedValid || movedOwner.Token != guard.token {
 		verifyErr := movedErr
@@ -353,7 +365,26 @@ func (guard *Guard) Release() error {
 	if err := os.RemoveAll(releasedPath); err != nil {
 		return fmt.Errorf("cleanup released lock %s: %w", guard.path, err)
 	}
+	guard.releasedPath = ""
 	return nil
+}
+
+// cleanupReleasedTombstones removes only directories produced by the
+// token-fenced Guard.Release handoff for this canonical lock. They no longer
+// own the canonical path, so cleanup cannot touch a replacement owner.
+func cleanupReleasedTombstones(path string) {
+	parent := filepath.Dir(path)
+	prefix := filepath.Base(path) + ".released-"
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(parent, entry.Name()))
+	}
 }
 
 func releaseToken(token string) string {

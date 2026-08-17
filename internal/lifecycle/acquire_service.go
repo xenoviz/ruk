@@ -307,17 +307,12 @@ const acquisitionGuardReleaseAttempts = 3
 // releaseAcquisitionGuard makes a bounded best effort to remove a guard. A
 // transient owner-file or filesystem failure must not leave a pool lock held
 // indefinitely; callers retain the final joined error and fail closed.
-func releaseAcquisitionGuard(ctx context.Context, guard *lock.Guard) error {
+func releaseAcquisitionGuard(_ context.Context, guard *lock.Guard) error {
 	if guard == nil {
 		return errors.New("acquisition lock guard is nil")
 	}
 	var releaseErr error
 	for attempt := 0; attempt < acquisitionGuardReleaseAttempts; attempt++ {
-		if ctx != nil {
-			if err := ctx.Err(); err != nil {
-				return errors.Join(releaseErr, err)
-			}
-		}
 		if err := guard.Release(); err == nil {
 			return nil
 		} else {
