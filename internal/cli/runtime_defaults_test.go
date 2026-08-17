@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,46 @@ import (
 type runtimeDefaultsWarmWorktree struct {
 	created []string
 	locked  []string
+}
+
+type runtimeShellTerminalStub struct{ called bool }
+
+func (stub *runtimeShellTerminalStub) Run(context.Context, ShellTerminalRequest) (ShellTerminalResult, error) {
+	stub.called = true
+	return ShellTerminalResult{DescendantsDrained: true}, nil
+}
+
+func TestRuntimeShellUsesConfiguredActivityRunnerAroundManagedShell(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	terminal := &runtimeShellTerminalStub{}
+	activityCalled := false
+	released := false
+	mutations := MutationAdapters{
+		Acquire: func(context.Context, git.Repository, AcquireInput) (AcquireResult, error) {
+			return AcquireResult{AcquireRecord: AcquireRecord{
+				Status: "assigned", AssignmentID: "assignment-shell", Path: filepath.Join(root, "workspace"),
+				ExpiresAt: "2026-08-16T13:00:00.000Z", Ports: map[string]int64{},
+			}}, nil
+		},
+		Release: func(context.Context, ReleaseInput) (ReleaseResult, error) {
+			released = true
+			return ReleaseResult{}, nil
+		},
+	}
+	activity := func(ctx context.Context, assignmentID string, operation func(context.Context) error) error {
+		activityCalled = assignmentID == "assignment-shell"
+		return operation(ctx)
+	}
+	result, err := runtimeShell(context.Background(), ShellRouteInput{
+		Repository: repository, Branch: "agent/shell", TTL: "30", Owner: "owner", Now: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC),
+		Stderr: io.Discard,
+	}, func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) }, func() string { return "unused" }, mutations, RuntimeDefaultsOptions{
+		ShellTerminal: terminal, ExecuteActivity: activity,
+	})
+	if err != nil || !activityCalled || !terminal.called || !released || !result.Released {
+		t.Fatalf("result/error/activity/terminal/release = %#v/%v/%v/%v/%v", result, err, activityCalled, terminal.called, released)
+	}
 }
 
 func (worktree *runtimeDefaultsWarmWorktree) Create(_ context.Context, path, branch, start string, detach bool) error {

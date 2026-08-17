@@ -28,3 +28,14 @@ func TestParseLinuxBootTime(t *testing.T) {
 		t.Fatalf("boot = %d", boot)
 	}
 }
+
+func TestFormatLinuxIdentityPreservesFullStartTicks(t *testing.T) {
+	t.Parallel()
+
+	if got := formatLinuxIdentity(1786740000, 1800); got != "linux:1786740000:1800" {
+		t.Fatalf("identity = %q", got)
+	}
+	if formatLinuxIdentity(1786740000, 1800) == formatLinuxIdentity(1786740000, 1801) {
+		t.Fatal("different process start ticks must produce different identities")
+	}
+}

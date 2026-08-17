@@ -26,6 +26,9 @@ func (service *Service) RenewAssignment(ctx context.Context, assignmentID string
 		}
 
 		renewedAtValue := service.now().UTC().Truncate(time.Millisecond)
+		if previous, parseErr := parseTimestamp(workspace.Assignment.RenewedAt); parseErr == nil {
+			renewedAtValue = laterTime(renewedAtValue, previous.Add(time.Millisecond))
+		}
 		expiresAtValue := expiresAt.UTC().Truncate(time.Millisecond)
 		if !expiresAtValue.After(renewedAtValue) {
 			return errors.New("expiresAt must be after now")

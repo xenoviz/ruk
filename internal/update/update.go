@@ -588,9 +588,15 @@ func (updater *Updater) updateStandalone(ctx context.Context, release Release, v
 	}
 	executable := options.Executable
 	if executable == "" {
-		executable, err = os.Executable()
-		if err != nil {
-			return Result{}, err
+		// The CLI resolves symlinks before composing update options. Use that
+		// resolved entrypoint for standalone replacement so an invocation via a
+		// symlink updates the installed target rather than destroying the link.
+		executable = options.Entrypoint
+		if executable == "" {
+			executable, err = os.Executable()
+			if err != nil {
+				return Result{}, err
+			}
 		}
 	}
 	executable, err = filepath.Abs(executable)
@@ -1066,8 +1072,9 @@ func isSHA256(value string) bool {
 }
 
 // WindowsReplacementPlan returns a conservative detached helper script. It
-// waits for the running executable's file lock by retrying the replacement;
-// it never polls or signals a numeric PID, so PID reuse cannot authorize an
+// waits for the running executable's file lock with a bounded retry count; on
+// exhaustion it leaves the candidate, backup, and helper for recovery. It
+// never polls or signals a numeric PID, so PID reuse cannot authorize an
 // unrelated process. The helper stages a backup, verifies the replacement, and
 // restores the backup when verification fails.
 func WindowsReplacementPlan(executable, candidate, version string, pid int) (string, string, error) {
@@ -1080,8 +1087,11 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 	backup := candidate + ".backup"
 	quote := func(value string) string { return `"` + value + `"` }
 	script := "@echo off\r\n" +
+		"set /A waitAttempts=0\r\n" +
 		"set /A rollbackAttempts=0\r\n" +
 		":wait\r\n" +
+		"set /A waitAttempts+=1\r\n" +
+		"if %waitAttempts% GEQ 120 goto wait_failed\r\n" +
 		"copy /Y " + quote(executable) + " " + quote(backup) + " >NUL 2>NUL\r\n" +
 		"if errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)\r\n" +
 		"move /Y " + quote(candidate) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
@@ -1089,6 +1099,7 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 		quote(executable) + " --version | findstr /X \"" + version + "\" >NUL || goto rollback\r\n" +
 		"del /Q " + quote(backup) + " >NUL 2>NUL\r\n" +
 		"del /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 0\r\n" +
+		":wait_failed\r\nexit /B 1\r\n" +
 		":rollback\r\nset /A rollbackAttempts+=1\r\n" +
 		"move /Y " + quote(backup) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
 		"if not errorlevel 1 goto rollback_succeeded\r\n" +

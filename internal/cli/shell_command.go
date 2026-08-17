@@ -52,6 +52,11 @@ type ShellTerminal interface {
 // confirmed drained.
 type ShellRelease func(context.Context, string) error
 
+// ShellActivityRunner is the shared activity-keeper seam used by managed
+// execution and shell operations. The callback owns terminal startup and
+// release so heartbeat loss cancels the shell before ownership can change.
+type ShellActivityRunner = ExecuteActivityRunner
+
 // ShellInput describes one high-level shell request.
 type ShellInput struct {
 	Branch           string
@@ -112,6 +117,7 @@ type ShellOptions struct {
 	Acquire  ShellAcquirer
 	Terminal ShellTerminal
 	Release  ShellRelease
+	Activity ShellActivityRunner
 }
 
 // ShellService composes acquire, interactive terminal execution, and exact
@@ -120,11 +126,12 @@ type ShellService struct {
 	acquire  ShellAcquirer
 	terminal ShellTerminal
 	release  ShellRelease
+	activity ShellActivityRunner
 }
 
 // NewShellService constructs a shell command service.
 func NewShellService(options ShellOptions) *ShellService {
-	return &ShellService{acquire: options.Acquire, terminal: options.Terminal, release: options.Release}
+	return &ShellService{acquire: options.Acquire, terminal: options.Terminal, release: options.Release, activity: options.Activity}
 }
 
 // Shell validates acquire inputs, selects a shell, runs an interactive
@@ -193,47 +200,65 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 		return ShellResult{}, errors.New("shell acquire returned an incomplete assignment")
 	}
 	base := ShellResult{Shell: shell, AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: acquired.ExpiresAt}
-	releaseBeforeSpawnFailure := func(cause error) (ShellResult, error) {
-		if releaseErr := service.release(context.WithoutCancel(ctx), acquired.AssignmentID); releaseErr != nil {
+	operationStarted := false
+	operation := func(operationCtx context.Context) error {
+		operationStarted = true
+		releaseBeforeSpawnFailure := func(cause error) error {
+			if releaseErr := service.release(context.WithoutCancel(operationCtx), acquired.AssignmentID); releaseErr != nil {
+				base.Retained = true
+				return retainedShellError(acquired, errors.Join(cause, releaseErr))
+			}
+			base.Released = true
+			return cause
+		}
+		environment, err := ports.BuildEnvironment(acquired.Ports)
+		if err != nil {
+			return releaseBeforeSpawnFailure(fmt.Errorf("build shell port environment: %w", err))
+		}
+		if input.Stderr != nil {
+			if _, err := fmt.Fprintf(input.Stderr, "Shell workspace: %s\nAssignment: %s\n", acquired.Path, acquired.AssignmentID); err != nil {
+				return releaseBeforeSpawnFailure(fmt.Errorf("write shell handoff: %w", err))
+			}
+		}
+		terminal, terminalErr := service.terminal.Run(operationCtx, ShellTerminalRequest{
+			AssignmentID: acquired.AssignmentID, WorkspacePath: acquired.Path, Shell: shell,
+			Environment: environment,
+			Stdin:       input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
+		})
+		base.ExitCode = terminal.ExitCode
+		base.Signal = terminal.Signal
+		if terminalErr != nil {
+			if !terminal.Started {
+				return releaseBeforeSpawnFailure(terminalErr)
+			}
 			base.Retained = true
-			return base, retainedShellError(acquired, errors.Join(cause, releaseErr))
+			return retainedShellError(acquired, terminalErr)
+		}
+		if !terminal.DescendantsDrained {
+			base.Retained = true
+			return retainedShellError(acquired, errors.New("terminal descendants are still running"))
+		}
+		if err := service.release(context.WithoutCancel(operationCtx), acquired.AssignmentID); err != nil {
+			base.Retained = true
+			return retainedShellError(acquired, err)
 		}
 		base.Released = true
-		return base, cause
+		return nil
 	}
-	environment, err := ports.BuildEnvironment(acquired.Ports)
-	if err != nil {
-		return releaseBeforeSpawnFailure(fmt.Errorf("build shell port environment: %w", err))
+	var operationErr error
+	if service.activity != nil {
+		operationErr = service.activity(ctx, acquired.AssignmentID, operation)
+	} else {
+		operationErr = operation(ctx)
 	}
-	if input.Stderr != nil {
-		if _, err := fmt.Fprintf(input.Stderr, "Shell workspace: %s\nAssignment: %s\n", acquired.Path, acquired.AssignmentID); err != nil {
-			return releaseBeforeSpawnFailure(fmt.Errorf("write shell handoff: %w", err))
+	if operationErr != nil && !operationStarted {
+		if releaseErr := service.release(context.WithoutCancel(ctx), acquired.AssignmentID); releaseErr != nil {
+			base.Retained = true
+			return base, retainedShellError(acquired, errors.Join(operationErr, releaseErr))
 		}
+		base.Released = true
 	}
-	terminal, terminalErr := service.terminal.Run(ctx, ShellTerminalRequest{
-		AssignmentID: acquired.AssignmentID, WorkspacePath: acquired.Path, Shell: shell,
-		Environment: environment,
-		Stdin:       input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
-	})
-	base.ExitCode = terminal.ExitCode
-	base.Signal = terminal.Signal
-	if terminalErr != nil {
-		if !terminal.Started {
-			return releaseBeforeSpawnFailure(terminalErr)
-		}
-		base.Retained = true
-		return base, retainedShellError(acquired, terminalErr)
-	}
-	if !terminal.DescendantsDrained {
-		base.Retained = true
-		return base, retainedShellError(acquired, errors.New("terminal descendants are still running"))
-	}
-	if err := service.release(context.WithoutCancel(ctx), acquired.AssignmentID); err != nil {
-		base.Retained = true
-		return base, retainedShellError(acquired, err)
-	}
-	base.Released = true
-	return base, nil
+	return base, operationErr
 }
 
 // SelectShell applies the documented environment precedence and platform

@@ -11,12 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/xenoviz/ruk/internal/lock"
 )
-
-const linuxClockTicks = uint64(100)
 
 func inspectPlatform(_ context.Context, pid int) (lock.ProcessState, error) {
 	processPath := strconv.Itoa(pid)
@@ -50,12 +47,19 @@ func inspectPlatform(_ context.Context, pid int) (lock.ProcessState, error) {
 	if err != nil {
 		return unavailableIdentity(pid, err)
 	}
-	started := time.Unix(bootTime+int64(startTicks/linuxClockTicks), 0)
 	return lock.ProcessState{
 		Alive:         true,
 		IdentityKnown: true,
-		Identity:      formatPOSIXIdentity(started),
+		Identity:      formatLinuxIdentity(bootTime, startTicks),
 	}, nil
+}
+
+// formatLinuxIdentity retains the kernel's full process start tick value. A
+// seconds-rounded timestamp can collide when a PID is recycled quickly.
+// Including boot time keeps the value tied to this boot while retaining the
+// existing string state representation for compatibility with persisted data.
+func formatLinuxIdentity(bootTime int64, startTicks uint64) string {
+	return fmt.Sprintf("linux:%d:%d", bootTime, startTicks)
 }
 
 func parseLinuxStartTicks(stat string) (uint64, error) {

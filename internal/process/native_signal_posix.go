@@ -76,7 +76,7 @@ func forwardNativeSignal(ctx context.Context, forwarder NativeSignalForwarder, r
 	if !observed.IdentityKnown || observed.Identity == "" {
 		return processUnavailable(int(record.PID), errors.New("process identity is unavailable"))
 	}
-	if observed.Identity != record.StartedAt || !groupHasLeader(entries, int(record.PID), group) {
+	if !exactIdentityMatch(record.StartedAt, observed.Identity) || !groupHasLeader(entries, int(record.PID), group) {
 		return processUnavailable(int(record.PID), errors.New("tracked leader identity or group membership changed"))
 	}
 	if err := ctx.Err(); err != nil {
@@ -86,7 +86,7 @@ func forwardNativeSignal(ctx context.Context, forwarder NativeSignalForwarder, r
 	if err != nil {
 		return processUnavailable(int(record.PID), err)
 	}
-	if !revalidated.Alive || !revalidated.IdentityKnown || revalidated.Identity != record.StartedAt {
+	if !revalidated.Alive || !revalidated.IdentityKnown || !exactIdentityMatch(record.StartedAt, revalidated.Identity) {
 		return processUnavailable(int(record.PID), errors.New("process identity changed before signal forwarding"))
 	}
 	if err := forwarder.group.SignalGroupSignal(ctx, group, signal); err != nil {

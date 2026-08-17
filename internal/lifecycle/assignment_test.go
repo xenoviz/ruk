@@ -83,6 +83,45 @@ func TestAssignmentHandoffIsOperationFenced(t *testing.T) {
 	}
 }
 
+func TestRefreshAcquisitionLeaseStartsAfterHandoffAndPreservesExplicitRenewal(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	identifiers := []string{"preparation-refresh", "assignment-refresh", "acquisition-refresh"}
+	service := lifecycle.New(store, lifecycle.Options{
+		Now: func() time.Time { return now },
+		NewID: func() string {
+			identifier := identifiers[0]
+			identifiers = identifiers[1:]
+			return identifier
+		},
+	})
+	workspacePath := filepath.Join(t.TempDir(), "workspace")
+	preparing, err := service.BeginPreparation(context.Background(), workspacePath, "agent/task")
+	if err != nil {
+		t.Fatalf("BeginPreparation returned an error: %v", err)
+	}
+	assigned, err := service.MarkAssigned(context.Background(), workspacePath, *preparing.OperationID, lifecycle.AssignmentInput{
+		Owner: "agent", Hostname: "host", Branch: "agent/task", ExpiresAt: now.Add(8 * time.Hour), LeaseDurationMinutes: 480,
+	})
+	if err != nil {
+		t.Fatalf("MarkAssigned returned an error: %v", err)
+	}
+	expected := assigned.Assignment.RenewedAt
+	now = now.Add(2 * time.Minute)
+	if _, err := service.RenewAssignment(context.Background(), assigned.Assignment.ID, now.Add(4*time.Hour), nil); err != nil {
+		t.Fatalf("RenewAssignment returned an error: %v", err)
+	}
+	refreshed, err := service.RefreshAcquisitionLease(context.Background(), assigned.Assignment.ID, *assigned.OperationID, expected, assigned.Assignment.ExpiresAt, 480)
+	if err != nil {
+		t.Fatalf("RefreshAcquisitionLease returned an error: %v", err)
+	}
+	if refreshed.Assignment.RenewedAt != "2026-01-01T00:02:00.000Z" || refreshed.Assignment.ExpiresAt != "2026-01-01T04:02:00.000Z" {
+		t.Fatalf("refresh overwrote explicit renewal: %#v", refreshed.Assignment)
+	}
+}
+
 func TestReserveAvailableWorkspaceSelectsAndPublishesAtomically(t *testing.T) {
 	t.Parallel()
 

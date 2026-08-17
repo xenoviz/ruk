@@ -48,6 +48,9 @@ func TestAcquireJSONValidatesTTLAndPassesStructuredOperationInput(t *testing.T) 
 		if !input.ExpiresAt.Equal(now.Add(8 * time.Hour)) {
 			t.Fatalf("operation expiry = %s", input.ExpiresAt)
 		}
+		if input.LeaseDurationMinutes != 480 {
+			t.Fatalf("lease duration = %v, want 480", input.LeaseDurationMinutes)
+		}
 		return acquireLifecycleResult(), nil
 	})
 	if err != nil {

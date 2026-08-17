@@ -64,7 +64,7 @@ func (terminator GroupTerminator) TerminateGroup(ctx context.Context, record sta
 	if err != nil {
 		return false, processUnavailable(pid, err)
 	}
-	if !observed.Alive || observed.Identity != record.StartedAt {
+	if !observed.Alive || !exactIdentityMatch(record.StartedAt, observed.Identity) {
 		if groupHasMember(entries, group) {
 			return false, processUnavailable(pid, errors.New("tracked leader is missing or reused while its process group remains"))
 		}
@@ -81,7 +81,7 @@ func (terminator GroupTerminator) TerminateGroup(ctx context.Context, record sta
 	if err != nil {
 		return false, processUnavailable(pid, err)
 	}
-	if !revalidated.Alive || !revalidated.IdentityKnown || revalidated.Identity != record.StartedAt {
+	if !revalidated.Alive || !revalidated.IdentityKnown || !exactIdentityMatch(record.StartedAt, revalidated.Identity) {
 		return false, processUnavailable(pid, errors.New("process identity changed before signaling"))
 	}
 	if err := ctx.Err(); err != nil {

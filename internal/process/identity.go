@@ -54,3 +54,10 @@ func formatPOSIXIdentity(started time.Time) string {
 func unavailableIdentity(pid int, err error) (lock.ProcessState, error) {
 	return lock.ProcessState{Alive: true, IdentityKnown: false}, fmt.Errorf("inspect process %d identity: %w", pid, err)
 }
+
+// exactIdentityMatch deliberately excludes legacy timestamp aliases. Those
+// aliases are safe for lock liveness (which must never reclaim a live process)
+// but insufficient evidence for signaling or terminating a tracked process.
+func exactIdentityMatch(expected, observed string) bool {
+	return lock.CompareIdentity(expected, observed) == lock.IdentityExact
+}

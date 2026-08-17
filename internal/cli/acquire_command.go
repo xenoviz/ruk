@@ -25,13 +25,14 @@ type AcquireOperationInput struct {
 	Branch string
 	From   string
 	// StartPoint mirrors From for lifecycle adapters that use Git terminology.
-	StartPoint string
-	Fetch      bool
-	Owner      string
-	Hostname   string
-	ExpiresAt  time.Time
-	Ports      []string
-	JSON       bool
+	StartPoint           string
+	Fetch                bool
+	Owner                string
+	Hostname             string
+	ExpiresAt            time.Time
+	LeaseDurationMinutes float64
+	Ports                []string
+	JSON                 bool
 }
 
 // AcquireInput is the parsed command input and deterministic rendering
@@ -88,6 +89,10 @@ func Acquire(ctx context.Context, input AcquireInput, operation AcquireOperation
 	if err != nil {
 		return AcquireResult{}, err
 	}
+	leaseMinutes, err := ParseLeaseMinutes(input.TTL, defaultLeaseMinutes, "--ttl")
+	if err != nil {
+		return AcquireResult{}, err
+	}
 	owner := input.Owner
 	if owner == "" {
 		fallback := input.OwnerFallback
@@ -111,15 +116,16 @@ func Acquire(ctx context.Context, input AcquireInput, operation AcquireOperation
 		return AcquireResult{}, errors.New("hostname must not be empty")
 	}
 	operationInput := AcquireOperationInput{
-		Branch:     input.Branch,
-		From:       input.From,
-		StartPoint: input.From,
-		Fetch:      input.Fetch,
-		Owner:      owner,
-		Hostname:   hostname,
-		ExpiresAt:  expiresAt,
-		Ports:      append([]string(nil), input.Ports...),
-		JSON:       input.JSON,
+		Branch:               input.Branch,
+		From:                 input.From,
+		StartPoint:           input.From,
+		Fetch:                input.Fetch,
+		Owner:                owner,
+		Hostname:             hostname,
+		ExpiresAt:            expiresAt,
+		LeaseDurationMinutes: leaseMinutes,
+		Ports:                append([]string(nil), input.Ports...),
+		JSON:                 input.JSON,
 	}
 	acquisition, err := operation(ctx, operationInput)
 	if err != nil {

@@ -60,7 +60,7 @@ func (terminator windowsTreeTerminator) TerminateTree(ctx context.Context, recor
 		}
 		return false, nil
 	}
-	if leader.Identity != record.StartedAt {
+	if !exactIdentityMatch(record.StartedAt, leader.Identity) {
 		return false, processUnavailable(int(record.PID), errors.New("process identity changed before signaling"))
 	}
 	if !rootPresent || len(pids) == 0 {
@@ -79,7 +79,7 @@ func (terminator windowsTreeTerminator) TerminateTree(ctx context.Context, recor
 			}
 			return false, processUnavailable(pid, inspectErr)
 		}
-		if pid == int(record.PID) && observed.Identity != record.StartedAt {
+		if pid == int(record.PID) && !exactIdentityMatch(record.StartedAt, observed.Identity) {
 			return false, processUnavailable(pid, errors.New("process identity changed before signaling"))
 		}
 		identities[pid] = observed.Identity

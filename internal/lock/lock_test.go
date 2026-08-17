@@ -19,6 +19,22 @@ type processProbe struct {
 	calls  int
 }
 
+func TestCompareIdentityKeepsLegacyLinuxOwnersLiveButNotExact(t *testing.T) {
+	t.Parallel()
+
+	legacy := "Sat Aug 15 06:07:08 2026"
+	raw := "linux:1786740000:1800"
+	if got := lockpkg.CompareIdentity(legacy, raw); got != lockpkg.IdentityLegacyCompatible {
+		t.Fatalf("legacy/raw match = %v", got)
+	}
+	if got := lockpkg.CompareIdentity(legacy, raw); got == lockpkg.IdentityExact {
+		t.Fatal("legacy identity must not be accepted as an exact signaling fence")
+	}
+	if got := lockpkg.CompareIdentity(raw, raw); got != lockpkg.IdentityExact {
+		t.Fatalf("exact match = %v", got)
+	}
+}
+
 func (probe *processProbe) Inspect(context.Context, int) (lockpkg.ProcessState, error) {
 	probe.calls++
 	return probe.result, probe.err

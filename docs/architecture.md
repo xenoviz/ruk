@@ -159,6 +159,9 @@ process record, so a recently exited child cannot remain falsely active.
 Windows registration cleanup terminates the new process tree only with a verified
 leader identity and otherwise retains ownership while descendants remain or the
 leader PID is reused.
+Linux identities include the boot time and raw kernel start ticks. Older
+timestamp identities remain compatible for conservative lock-liveness checks,
+but never authorize signaling when an exact native identity cannot be proven.
 Abort cleanup follows the same fail-closed rule for attached children and
 detached groups. If the original leader identity or surviving descendants
 cannot be verified, or any termination safety check refuses the signal, the
@@ -211,8 +214,10 @@ recovery restores its acquisition marker. Failed removal is re-locked before a
 workspace becomes available, and post-removal state remains retryable and is
 excluded from available-capacity statistics and warm counts. Forced-expiry
 release uses the handoff lock before it changes workspace state.
-Warm validation and garbage collection share a pool-maintenance lock so a slot
-cannot be removed after being reported as available.
+Warm validation, reusable-slot reservation, and garbage collection share a
+pool-maintenance lock so capacity cannot be removed or claimed after being
+reported as available. Acquisition releases that pool lock before dependency
+preparation while retaining the selected workspace's acquisition lock.
 Collection revalidates every stale snapshot under the slot's acquisition lock,
 passes that update fence into the lifecycle transaction, and acquisition handoff
 does not overwrite a concurrent lease renewal.

@@ -20,7 +20,9 @@ ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [
 The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
 `<hostname>:<pid>`. Managed Ruk operations renew the assignment automatically
 while they remain active; the TTL still controls how long an idle assignment
-remains current after the latest observed activity.
+remains current after the latest observed activity. The initial lease starts
+when acquisition preparation finishes and the ready assignment is published,
+so dependency installation time does not consume the requested TTL.
 
 ```json
 {

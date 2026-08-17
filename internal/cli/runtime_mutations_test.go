@@ -122,6 +122,56 @@ func TestNewMutationAdaptersBuildsAllRoutesAndCreateOrchestratesFreshWorktree(t 
 	}
 }
 
+func TestAssignedSyncSnapshotsAssignmentAndRevalidatesBeforePreparation(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "workspace"), CommonDir: filepath.Join(root, "common")}
+	if err := os.MkdirAll(repository.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(repository.CommonDir, lock.NewDirectoryLocker(lock.Config{}))
+	key, err := state.TreeKey(repository.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(context.Background(), func(current *state.State) error {
+		current.Workspaces[key] = state.WorkspaceRecord{
+			Path: repository.Root, Managed: true, Lifecycle: state.LifecycleAssigned,
+			Assignment: &state.AssignmentRecord{ID: "original-assignment", Ports: map[string]int64{}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	beforeCalled := false
+	adapters, err := NewMutationAdapters(MutationAdapterOptions{
+		Sync: func(ctx context.Context, input SyncCommandInput) (SyncCommandResult, error) {
+			if input.Ensure.BeforePrepare == nil || input.Ensure.Store == nil || input.Ensure.Locker == nil {
+				return SyncCommandResult{}, errors.New("assigned sync did not receive fenced ensure seams")
+			}
+			if err := input.Ensure.Store.Update(ctx, func(current *state.State) error {
+				workspace := current.Workspaces[key]
+				workspace.Assignment.ID = "replacement-assignment"
+				current.Workspaces[key] = workspace
+				return nil
+			}); err != nil {
+				return SyncCommandResult{}, err
+			}
+			if err := input.Ensure.BeforePrepare(); err == nil || !strings.Contains(err.Error(), "original-assignment") {
+				return SyncCommandResult{}, fmt.Errorf("before-prepare accepted replacement: %v", err)
+			}
+			beforeCalled = true
+			return SyncCommandResult{}, errors.New("expected fenced assignment rejection")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapters.Sync(context.Background(), SyncCommandInput{Repository: repository})
+	if err == nil || !beforeCalled || !strings.Contains(err.Error(), "expected fenced assignment rejection") {
+		t.Fatalf("sync error=%v beforeCalled=%v", err, beforeCalled)
+	}
+}
+
 func TestNewMutationAdaptersCreateUsesWorkspaceFence(t *testing.T) {
 	root := t.TempDir()
 	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}

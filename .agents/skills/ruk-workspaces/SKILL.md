@@ -122,8 +122,12 @@ GC recovers interrupted preparations, pre-handoff acquisitions, and collections
 after the age cutoff; it revalidates handoff state under the acquisition lock
 and preserves recovery markers after failed cleanup. Workspace and warm locks
 prevent recovery from racing live operations, including forced expiry cleanup.
-Warm and GC also share a pool-maintenance lock, so reported capacity cannot be
-removed by an already-running collection.
+Warm, reusable-slot acquisition, and GC share a pool-maintenance lock, so
+reported capacity cannot be removed or claimed by an already-running operation.
+Acquisition releases that pool lock before dependency preparation while keeping
+the selected workspace fenced. The requested initial TTL starts after
+preparation publishes the ready assignment, so installation time does not
+consume the lease.
 GC revalidates each candidate under its acquisition lock and carries that fence
 through the lifecycle transition. A renewal made during acquisition handoff is preserved.
 An unreadable identity for a live lock owner is treated as busy, never stale.

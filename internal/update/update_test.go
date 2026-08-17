@@ -237,6 +237,47 @@ func TestStandaloneRollback(t *testing.T) {
 	}
 }
 
+func TestStandaloneUpdateUsesResolvedEntrypointTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX replacement relies on rename-over-existing semantics")
+	}
+	temporary := t.TempDir()
+	target := filepath.Join(temporary, "ruk-target")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(temporary, "ruk")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	updater := New(Hooks{
+		Discover: func(context.Context) ([]Release, error) {
+			return []Release{testRelease("0.3.0", []byte("new"))}, nil
+		},
+		Run: func(context.Context, string, []string) (CommandResult, error) {
+			return CommandResult{Stdout: "0.3.0\n"}, nil
+		},
+	})
+	result, err := updater.Update(context.Background(), Options{
+		Distribution: DistributionStandalone, CurrentVersion: "0.2.0",
+		Platform: Platform{OS: "linux", Architecture: "x64"}, Entrypoint: target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusUpdated {
+		t.Fatalf("standalone update status = %s, want %s", result.Status, StatusUpdated)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil || string(contents) != "new" {
+		t.Fatalf("resolved target contents = %q, read error = %v", contents, err)
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil || resolved != target {
+		t.Fatalf("entrypoint symlink target = %q, want %q (error %v)", resolved, target, err)
+	}
+}
+
 type backupChmodFailureFileSystem struct {
 	OSFileSystem
 	removed []string
@@ -580,7 +621,7 @@ func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
 			t.Fatalf("replacement script contains unsafe %q: %s", forbidden, script)
 		}
 	}
-	for _, required := range []string{"copy /Y", "move /Y", "timeout /t 1 /nobreak", "findstr /X", "rollbackAttempts=0", "rollbackAttempts+=1", "if not errorlevel 1 goto rollback_succeeded", "GEQ 120 goto rollback_failed"} {
+	for _, required := range []string{"copy /Y", "move /Y", "timeout /t 1 /nobreak", "findstr /X", "waitAttempts=0", "waitAttempts+=1", "GEQ 120 goto wait_failed", "rollbackAttempts=0", "rollbackAttempts+=1", "if not errorlevel 1 goto rollback_succeeded", "GEQ 120 goto rollback_failed"} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("replacement script lacks %q: %s", required, script)
 		}
@@ -599,6 +640,19 @@ func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
 	}
 	if !strings.Contains(script, ":rollback_failed") {
 		t.Fatalf("replacement script lacks bounded rollback failure label: %s", script)
+	}
+	wait := strings.Index(script, ":wait")
+	waitFailed := strings.Index(script, ":wait_failed")
+	rollbackStart := strings.Index(script, ":rollback")
+	if wait < 0 || waitFailed <= wait || rollbackStart <= waitFailed {
+		t.Fatalf("replacement script has malformed bounded wait labels: %s", script)
+	}
+	waitBlock := script[wait:waitFailed]
+	if !strings.Contains(waitBlock, "if %waitAttempts% GEQ 120 goto wait_failed") || !strings.Contains(waitBlock, "goto wait") {
+		t.Fatalf("initial replacement wait is not bounded and retryable: %s", waitBlock)
+	}
+	if strings.Contains(script[waitFailed:rollbackStart], "del /Q") {
+		t.Fatalf("initial wait failure deletes recovery artifacts: %s", script[waitFailed:rollbackStart])
 	}
 	if strings.Index(script, "set /A rollbackAttempts=0") > strings.Index(script, ":wait") {
 		t.Fatalf("rollback counter is initialized after the wait loop: %s", script)

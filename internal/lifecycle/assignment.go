@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"time"
@@ -12,11 +13,14 @@ import (
 )
 
 // AssignmentInput describes a new immutable assignment and its initial lease.
+// LeaseDurationMinutes, when set, is also used to restart the lease clock
+// after acquisition preparation completes.
 type AssignmentInput struct {
-	Owner     string
-	Hostname  string
-	Branch    string
-	ExpiresAt time.Time
+	Owner                string
+	Hostname             string
+	Branch               string
+	ExpiresAt            time.Time
+	LeaseDurationMinutes float64
 }
 
 // ReserveAvailableWorkspace atomically reserves the oldest available workspace.
@@ -196,6 +200,53 @@ func (service *Service) RecordAcquisitionSuccess(ctx context.Context, assignment
 	return result, nil
 }
 
+// RefreshAcquisitionLease starts the requested lease clock after the
+// acquisition handoff has completed. expectedRenewedAt fences this refresh
+// against an explicit renewal that may have won while preparation ran.
+func (service *Service) RefreshAcquisitionLease(ctx context.Context, assignmentID, acquisitionOperationID, expectedRenewedAt, expectedExpiresAt string, leaseDurationMinutes float64) (state.WorkspaceRecord, error) {
+	if math.IsNaN(leaseDurationMinutes) || math.IsInf(leaseDurationMinutes, 0) || leaseDurationMinutes <= 0 {
+		return state.WorkspaceRecord{}, errors.New("lease duration must be finite and positive")
+	}
+	var result state.WorkspaceRecord
+	err := service.store.Update(ctx, func(current *state.State) error {
+		key, workspace, exists := findAssignment(current, assignmentID)
+		if !exists {
+			return fmt.Errorf("Assignment %s does not exist", assignmentID)
+		}
+		if workspace.Lifecycle != state.LifecycleAssigned {
+			return fmt.Errorf("Workspace %s is %s, expected assigned", workspace.Path, workspace.Lifecycle)
+		}
+		if workspace.OperationID == nil || *workspace.OperationID != acquisitionOperationID {
+			return errors.New("Acquisition operation does not match")
+		}
+		if (expectedRenewedAt != "" && workspace.Assignment.RenewedAt != expectedRenewedAt) || (expectedExpiresAt != "" && workspace.Assignment.ExpiresAt != expectedExpiresAt) {
+			result = cloneWorkspace(workspace)
+			return nil
+		}
+		now := service.now().UTC().Truncate(time.Millisecond)
+		if previous, parseErr := parseTimestamp(workspace.Assignment.RenewedAt); parseErr == nil {
+			now = laterTime(now, previous.Add(time.Millisecond))
+		}
+		expiresAt, err := lifecycleExpiry(now, leaseDurationMinutes)
+		if err != nil {
+			return err
+		}
+		renewedAt := timestamp(now)
+		workspace.Assignment.RenewedAt = renewedAt
+		workspace.Assignment.ExpiresAt = timestamp(expiresAt)
+		workspace.Assignment.LeaseDurationMinutes = leaseDurationMinutes
+		workspace.Assignment.LastActivityAt = renewedAt
+		workspace.UpdatedAt = renewedAt
+		current.Workspaces[key] = workspace
+		result = cloneWorkspace(workspace)
+		return nil
+	})
+	if err != nil {
+		return state.WorkspaceRecord{}, err
+	}
+	return result, nil
+}
+
 func findAssignment(current *state.State, assignmentID string) (string, state.WorkspaceRecord, bool) {
 	for key, workspace := range current.Workspaces {
 		if workspace.Assignment != nil && workspace.Assignment.ID == assignmentID {
@@ -218,7 +269,13 @@ func validateAssignmentInput(input AssignmentInput) error {
 func (service *Service) assign(workspace state.WorkspaceRecord, input AssignmentInput) (state.WorkspaceRecord, error) {
 	nowValue := service.now().UTC().Truncate(time.Millisecond)
 	expiresValue := input.ExpiresAt.UTC().Truncate(time.Millisecond)
-	if !expiresValue.After(nowValue) {
+	if input.LeaseDurationMinutes > 0 {
+		var err error
+		expiresValue, err = lifecycleExpiry(nowValue, input.LeaseDurationMinutes)
+		if err != nil {
+			return state.WorkspaceRecord{}, err
+		}
+	} else if !expiresValue.After(nowValue) {
 		return state.WorkspaceRecord{}, errors.New("expiresAt must be after now")
 	}
 	now := timestamp(nowValue)
@@ -245,4 +302,22 @@ func (service *Service) assign(workspace state.WorkspaceRecord, input Assignment
 	workspace.AvailableAt = nil
 	workspace.Failure = nil
 	return workspace, nil
+}
+
+func lifecycleExpiry(now time.Time, minutes float64) (time.Time, error) {
+	if math.IsNaN(minutes) || math.IsInf(minutes, 0) || minutes <= 0 {
+		return time.Time{}, errors.New("lease duration must be finite and positive")
+	}
+	maximum := time.Date(9999, 12, 31, 23, 59, 59, 999_000_000, time.UTC)
+	seconds := minutes * 60
+	availableSeconds := float64(maximum.Unix()-now.Unix()) + float64(maximum.Nanosecond()-now.Nanosecond())/1e9
+	if math.IsInf(seconds, 0) || seconds > availableSeconds {
+		return time.Time{}, errors.New("lease duration exceeds supported timestamp range")
+	}
+	whole, fraction := math.Modf(seconds)
+	expiresAt := time.Unix(now.Unix()+int64(whole), int64(now.Nanosecond())+int64(math.Round(fraction*1e9))).UTC().Truncate(time.Millisecond)
+	if !expiresAt.After(now) {
+		return time.Time{}, errors.New("lease duration does not produce a future millisecond")
+	}
+	return expiresAt, nil
 }

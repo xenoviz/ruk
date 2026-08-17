@@ -94,6 +94,34 @@ func TestNativeProcessManagerExistsDelegatesFailClosedTracker(t *testing.T) {
 	}
 }
 
+func TestNativeProcessManagerRetainsLiveLegacyLeaderWithoutDescendants(t *testing.T) {
+	legacy := "Sat Aug 15 06:07:08 2026"
+	manager := processpkg.NewNativeProcessManager(processpkg.ReleaseManagerOptions{
+		Probe: &releaseProbe{states: []lock.ProcessState{{Alive: true, IdentityKnown: true, Identity: "linux:1786740000:1800"}}},
+		Table: releaseTable{},
+	})
+	exists, err := manager.Exists(context.Background(), state.TrackedProcessRecord{PID: 42, StartedAt: legacy})
+	if err == nil || exists || !strings.Contains(err.Error(), "legacy process identity") {
+		t.Fatalf("legacy leader Exists = %v, %v; want fail-closed retention", exists, err)
+	}
+}
+
+func TestNativeProcessManagerRetainsLiveLegacyDetachedGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX process groups are not used on Windows")
+	}
+	legacy := "Sat Aug 15 06:07:08 2026"
+	group := int64(42)
+	manager := processpkg.NewNativeProcessManager(processpkg.ReleaseManagerOptions{
+		Probe: &releaseProbe{states: []lock.ProcessState{{Alive: true, IdentityKnown: true, Identity: "linux:1786740000:1800"}}},
+		Table: releaseTable{},
+	})
+	exists, err := manager.Exists(context.Background(), state.TrackedProcessRecord{PID: 42, GroupID: &group, StartedAt: legacy})
+	if err == nil || exists || !strings.Contains(err.Error(), "legacy process identity") {
+		t.Fatalf("legacy detached Exists = %v, %v; want fail-closed retention", exists, err)
+	}
+}
+
 func TestNativeProcessManagerUnverifiedSentinelNeverSignalsAndClearsOnlyWhenBoundaryGone(t *testing.T) {
 	group := int64(42)
 	signaler := &releaseGroupSignaler{}

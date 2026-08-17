@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -42,6 +43,36 @@ type ProcessState struct {
 	Alive         bool
 	IdentityKnown bool
 	Identity      string
+}
+
+// IdentityMatch describes compatibility between a persisted process identity
+// and a fresh native observation. Legacy POSIX identities are second-rounded
+// timestamps; they remain liveness-compatible with a Linux raw-tick identity,
+// but are never an exact fence for signaling or termination.
+type IdentityMatch uint8
+
+const (
+	IdentityMismatch IdentityMatch = iota
+	IdentityExact
+	IdentityLegacyCompatible
+)
+
+func CompareIdentity(expected, observed string) IdentityMatch {
+	if expected == "" || observed == "" {
+		return IdentityMismatch
+	}
+	if expected == observed {
+		return IdentityExact
+	}
+	if (isLegacyPOSIXIdentity(expected) && strings.HasPrefix(observed, "linux:")) || (isLegacyPOSIXIdentity(observed) && strings.HasPrefix(expected, "linux:")) {
+		return IdentityLegacyCompatible
+	}
+	return IdentityMismatch
+}
+
+func isLegacyPOSIXIdentity(value string) bool {
+	_, err := time.ParseInLocation("Mon Jan _2 15:04:05 2006", value, time.Local)
+	return err == nil
 }
 
 // ProcessProbe inspects a local lock owner without launching helper processes.
@@ -268,7 +299,8 @@ func (locker *DirectoryLocker) ownerIsAlive(ctx context.Context, owner Owner) (b
 	if owner.ProcessIdentity == "" || !state.IdentityKnown {
 		return true, nil
 	}
-	return state.Identity == owner.ProcessIdentity, nil
+	match := CompareIdentity(owner.ProcessIdentity, state.Identity)
+	return match == IdentityExact || match == IdentityLegacyCompatible, nil
 }
 
 // Guard represents one acquired directory lock.

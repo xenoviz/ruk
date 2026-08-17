@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/xenoviz/ruk/internal/dependencies"
+	"github.com/xenoviz/ruk/internal/lock"
 	"github.com/xenoviz/ruk/internal/state"
 )
 
@@ -56,9 +57,15 @@ type AcquisitionOptions struct {
 	// the repository's primary checkout. It is acquired before Locker.
 	PrimaryLocker   AcquisitionLocker
 	PrimaryLockPath string
-	Worktree        AcquisitionWorktree
-	Prepare         DependencyPreparer
-	Ports           PortAllocator
+	// PoolMaintenanceLocker serializes reusable-slot selection with warm
+	// capacity maintenance. Production DirectoryLocker also supports the
+	// manual guard path, allowing this pool lock to be released before the
+	// lengthy dependency handoff begins.
+	PoolMaintenanceLocker   AcquisitionLocker
+	PoolMaintenanceLockPath string
+	Worktree                AcquisitionWorktree
+	Prepare                 DependencyPreparer
+	Ports                   PortAllocator
 
 	// WorkspacePath creates a destination when no reusable workspace exists.
 	// An explicit AcquisitionInput.WorkspacePath takes precedence.
@@ -82,6 +89,8 @@ type AcquisitionService struct {
 	locker        AcquisitionLocker
 	primaryLocker AcquisitionLocker
 	primaryPath   string
+	poolLocker    AcquisitionLocker
+	poolPath      string
 	worktree      AcquisitionWorktree
 	prepare       DependencyPreparer
 	ports         PortAllocator
@@ -107,6 +116,8 @@ func NewAcquisitionService(options AcquisitionOptions) *AcquisitionService {
 		locker:        options.Locker,
 		primaryLocker: options.PrimaryLocker,
 		primaryPath:   options.PrimaryLockPath,
+		poolLocker:    options.PoolMaintenanceLocker,
+		poolPath:      options.PoolMaintenanceLockPath,
 		worktree:      options.Worktree,
 		prepare:       options.Prepare,
 		ports:         options.Ports,
@@ -200,6 +211,29 @@ func (service *AcquisitionService) Acquire(ctx context.Context, input AcquireInp
 }
 
 func (service *AcquisitionService) acquireLoop(ctx context.Context, input AcquireInput) (AcquisitionResult, error) {
+	if service.poolLocker != nil {
+		if service.poolPath == "" {
+			return AcquisitionResult{}, errors.New("pool maintenance lock path is not configured")
+		}
+		if manual, ok := service.poolLocker.(interface {
+			Acquire(context.Context, string) (*lock.Guard, error)
+		}); ok {
+			return service.acquireWithPoolGuard(ctx, input, manual)
+		}
+		// Adapters without manual guards retain the same serialization contract;
+		// production uses DirectoryLocker above so preparation is outside pool.
+		var result AcquisitionResult
+		var operationErr error
+		operationErr = service.poolLocker.With(ctx, service.poolPath, func() error {
+			result, operationErr = service.acquireLoopWithoutPool(ctx, input)
+			return operationErr
+		})
+		return result, operationErr
+	}
+	return service.acquireLoopWithoutPool(ctx, input)
+}
+
+func (service *AcquisitionService) acquireLoopWithoutPool(ctx context.Context, input AcquireInput) (AcquisitionResult, error) {
 	// Selection is deliberately read-only. Publishing the assigned operation
 	// marker is done only after the selected workspace's handoff lock is held.
 	for attempt := 0; attempt < 8; attempt++ {
@@ -217,6 +251,65 @@ func (service *AcquisitionService) acquireLoop(ctx context.Context, input Acquir
 		return result, reserveErr
 	}
 	return AcquisitionResult{}, errors.New("available workspace changed during acquisition; retry")
+}
+
+func (service *AcquisitionService) acquireWithPoolGuard(ctx context.Context, input AcquireInput, manual interface {
+	Acquire(context.Context, string) (*lock.Guard, error)
+}) (AcquisitionResult, error) {
+	for attempt := 0; attempt < 8; attempt++ {
+		poolGuard, err := manual.Acquire(ctx, service.poolPath)
+		if err != nil {
+			return AcquisitionResult{}, err
+		}
+		candidate, selectErr := service.selectAvailable(ctx, input)
+		if selectErr != nil {
+			return AcquisitionResult{}, errors.Join(selectErr, poolGuard.Release())
+		}
+		if candidate == nil {
+			return service.releasePoolAndAcquireFresh(ctx, input, poolGuard)
+		}
+		workspaceGuard, lockErr := service.acquireWorkspaceGuard(ctx, candidate.Path)
+		if lockErr != nil {
+			return AcquisitionResult{}, errors.Join(lockErr, poolGuard.Release())
+		}
+		assigned, reserveErr := service.reserveReserved(ctx, input, *candidate)
+		if reserveErr != nil {
+			workspaceReleaseErr := workspaceGuard.Release()
+			if errors.Is(reserveErr, errReservationChanged) {
+				poolReleaseErr := poolGuard.Release()
+				if workspaceReleaseErr != nil || poolReleaseErr != nil {
+					return AcquisitionResult{}, errors.Join(reserveErr, workspaceReleaseErr, poolReleaseErr)
+				}
+				continue
+			}
+			return AcquisitionResult{}, errors.Join(reserveErr, workspaceReleaseErr, poolGuard.Release())
+		}
+		if releaseErr := poolGuard.Release(); releaseErr != nil {
+			recoveryErr := service.failAssigned(ctx, assigned.Assignment.ID, *assigned.OperationID, assigned.Path, false, fmt.Errorf("pool maintenance lock release failed: %w", releaseErr))
+			workspaceReleaseErr := workspaceGuard.Release()
+			return AcquisitionResult{}, errors.Join(recoveryErr, workspaceReleaseErr)
+		}
+		result, handoffErr := service.completeReserved(ctx, input, *candidate, assigned)
+		return result, acquisitionReleaseFailure(result, handoffErr, workspaceGuard.Release())
+	}
+	return AcquisitionResult{}, errors.New("available workspace changed during acquisition; retry")
+}
+
+func (service *AcquisitionService) releasePoolAndAcquireFresh(ctx context.Context, input AcquireInput, guard *lock.Guard) (AcquisitionResult, error) {
+	if err := guard.Release(); err != nil {
+		return AcquisitionResult{}, err
+	}
+	return service.acquireFresh(ctx, input)
+}
+
+func (service *AcquisitionService) acquireWorkspaceGuard(ctx context.Context, path string) (*lock.Guard, error) {
+	manual, ok := service.locker.(interface {
+		Acquire(context.Context, string) (*lock.Guard, error)
+	})
+	if !ok {
+		return nil, errors.New("workspace lock does not support manual acquisition")
+	}
+	return manual.Acquire(ctx, service.lockPath(path))
 }
 
 var errReservationChanged = errors.New("available workspace reservation changed")
@@ -270,47 +363,66 @@ func (service *AcquisitionService) selectAvailable(ctx context.Context, input Ac
 
 func (service *AcquisitionService) acquireReserved(ctx context.Context, input AcquireInput, reserved state.WorkspaceRecord) (result AcquisitionResult, err error) {
 	path := reserved.Path
-	var assignmentID, operationID string
 	handoff := func() error {
-		assigned, reserveErr := service.lifecycle.ReserveAvailableWorkspace(ctx, input.Assignment, path)
+		assigned, reserveErr := service.reserveReserved(ctx, input, reserved)
 		if reserveErr != nil {
 			return reserveErr
 		}
-		if assigned == nil {
-			return errReservationChanged
-		}
-		if assigned.Assignment == nil || assigned.OperationID == nil {
-			return errors.New("reserved workspace has no assignment handoff fence")
-		}
-		assignmentID = assigned.Assignment.ID
-		operationID = *assigned.OperationID
-		if err := service.verifyAssignment(ctx, assignmentID, operationID); err != nil {
-			return err
-		}
-		if err := service.worktree.Assign(ctx, path, input.Assignment.Branch, input.StartPoint); err != nil {
-			return service.failAssigned(ctx, assignmentID, operationID, path, true, err)
-		}
-		dependency, prepErr := service.prepare(ctx, path)
-		if prepErr != nil {
-			return service.failAssigned(ctx, assignmentID, operationID, path, true, prepErr)
-		}
-		if err := service.verifyAssignment(ctx, assignmentID, operationID); err != nil {
-			return service.failAssigned(ctx, assignmentID, operationID, path, true, err)
-		}
-		if err := service.allocate(ctx, assignmentID, input.PortNames); err != nil {
-			return service.failAssigned(ctx, assignmentID, operationID, path, true, err)
-		}
-		workspace, successErr := service.lifecycle.RecordAcquisitionSuccess(ctx, assignmentID, operationID, true)
-		if successErr != nil {
-			return service.failAssigned(ctx, assignmentID, operationID, path, true, successErr)
-		}
-		result = makeAcquisitionResult(workspace, dependency, true)
-		return nil
+		result, err = service.completeReserved(ctx, input, reserved, assigned)
+		return err
 	}
 	if err = service.locker.With(ctx, service.lockPath(path), handoff); err != nil {
-		return AcquisitionResult{}, err
+		return result, acquisitionReleaseFailure(result, err, nil)
 	}
 	return result, nil
+}
+
+func (service *AcquisitionService) reserveReserved(ctx context.Context, input AcquireInput, reserved state.WorkspaceRecord) (state.WorkspaceRecord, error) {
+	assigned, err := service.lifecycle.ReserveAvailableWorkspace(ctx, input.Assignment, reserved.Path)
+	if err != nil {
+		return state.WorkspaceRecord{}, err
+	}
+	if assigned == nil {
+		return state.WorkspaceRecord{}, errReservationChanged
+	}
+	if assigned.Assignment == nil || assigned.OperationID == nil {
+		return state.WorkspaceRecord{}, errors.New("reserved workspace has no assignment handoff fence")
+	}
+	return *assigned, nil
+}
+
+func (service *AcquisitionService) completeReserved(ctx context.Context, input AcquireInput, reserved state.WorkspaceRecord, assigned state.WorkspaceRecord) (result AcquisitionResult, err error) {
+	path := reserved.Path
+	assignmentID := assigned.Assignment.ID
+	operationID := *assigned.OperationID
+	expectedRenewedAt := assigned.Assignment.RenewedAt
+	expectedExpiresAt := assigned.Assignment.ExpiresAt
+	if err := service.verifyAssignment(ctx, assignmentID, operationID); err != nil {
+		return result, err
+	}
+	if err := service.worktree.Assign(ctx, path, input.Assignment.Branch, input.StartPoint); err != nil {
+		return result, service.failAssigned(ctx, assignmentID, operationID, path, true, err)
+	}
+	dependency, prepErr := service.prepare(ctx, path)
+	if prepErr != nil {
+		return result, service.failAssigned(ctx, assignmentID, operationID, path, true, prepErr)
+	}
+	if err := service.verifyAssignment(ctx, assignmentID, operationID); err != nil {
+		return result, service.failAssigned(ctx, assignmentID, operationID, path, true, err)
+	}
+	if err := service.allocate(ctx, assignmentID, input.PortNames); err != nil {
+		return result, service.failAssigned(ctx, assignmentID, operationID, path, true, err)
+	}
+	if input.Assignment.LeaseDurationMinutes > 0 {
+		if _, err := service.lifecycle.RefreshAcquisitionLease(ctx, assignmentID, operationID, expectedRenewedAt, expectedExpiresAt, input.Assignment.LeaseDurationMinutes); err != nil {
+			return result, service.failAssigned(ctx, assignmentID, operationID, path, true, err)
+		}
+	}
+	workspace, successErr := service.lifecycle.RecordAcquisitionSuccess(ctx, assignmentID, operationID, true)
+	if successErr != nil {
+		return result, service.failAssigned(ctx, assignmentID, operationID, path, true, successErr)
+	}
+	return makeAcquisitionResult(workspace, dependency, true), nil
 }
 
 func (service *AcquisitionService) acquireFresh(ctx context.Context, input AcquireInput) (result AcquisitionResult, err error) {
@@ -369,8 +481,15 @@ func (service *AcquisitionService) acquireFresh(ctx context.Context, input Acqui
 		}
 		assignmentID := assigned.Assignment.ID
 		operationID := *assigned.OperationID
+		expectedRenewedAt := assigned.Assignment.RenewedAt
+		expectedExpiresAt := assigned.Assignment.ExpiresAt
 		if err := service.allocate(ctx, assignmentID, input.PortNames); err != nil {
 			return service.failFreshAssigned(ctx, assigned, true, err)
+		}
+		if input.Assignment.LeaseDurationMinutes > 0 {
+			if _, err := service.lifecycle.RefreshAcquisitionLease(ctx, assignmentID, operationID, expectedRenewedAt, expectedExpiresAt, input.Assignment.LeaseDurationMinutes); err != nil {
+				return service.failFreshAssigned(ctx, assigned, true, err)
+			}
 		}
 		workspace, successErr := service.lifecycle.RecordAcquisitionSuccess(ctx, assignmentID, operationID, false)
 		if successErr != nil {
@@ -386,7 +505,7 @@ func (service *AcquisitionService) acquireFresh(ctx context.Context, input Acqui
 		if !preparationStarted {
 			return result, err
 		}
-		return result, err
+		return result, acquisitionReleaseFailure(result, err, nil)
 	}
 	return result, nil
 }
@@ -507,4 +626,41 @@ func makeAcquisitionResult(workspace state.WorkspaceRecord, dependency dependenc
 	result.Path = workspace.Path
 	result.Branch = workspace.Branch
 	return result
+}
+
+// acquisitionReleaseFailure preserves assignment recovery metadata when a
+// handoff succeeded but its lock guard could not be released. The lifecycle
+// transition is already committed in that case, so retrying the assignment
+// transition would be unsafe; the typed error directs recovery through the
+// normal release command instead.
+func acquisitionReleaseFailure(result AcquisitionResult, handoffErr, releaseErr error) error {
+	if handoffErr != nil {
+		var retained *RetainedAssignmentError
+		if releaseErr == nil && result.Workspace.Assignment != nil && result.AssignmentID != "" && !errors.As(handoffErr, &retained) {
+			return &RetainedAssignmentError{
+				AssignmentID: result.AssignmentID,
+				Path:         result.Path,
+				ExpiresAt:    result.Workspace.Assignment.ExpiresAt,
+				Recovery:     "ruk release " + result.AssignmentID,
+				Cause:        handoffErr,
+			}
+		}
+		if releaseErr == nil {
+			return handoffErr
+		}
+		return errors.Join(handoffErr, releaseErr)
+	}
+	if releaseErr == nil {
+		return nil
+	}
+	if result.Workspace.Assignment == nil || result.AssignmentID == "" {
+		return releaseErr
+	}
+	return &RetainedAssignmentError{
+		AssignmentID: result.AssignmentID,
+		Path:         result.Path,
+		ExpiresAt:    result.Workspace.Assignment.ExpiresAt,
+		Recovery:     "ruk release " + result.AssignmentID,
+		Cause:        releaseErr,
+	}
 }

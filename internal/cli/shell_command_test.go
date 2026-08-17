@@ -121,6 +121,67 @@ func TestShellReleasesAfterDrainedTerminalAndPreservesStdioAndStatus(t *testing.
 	}
 }
 
+func TestShellRunsManagedOperationThroughActivityKeeper(t *testing.T) {
+	activityCalls := 0
+	activityID := ""
+	terminal := &shellTerminalStub{result: cli.ShellTerminalResult{DescendantsDrained: true}}
+	service := cli.NewShellService(cli.ShellOptions{
+		Acquire:  func(context.Context, cli.AcquireInput) (cli.AcquireResult, error) { return validShellAcquire(), nil },
+		Terminal: terminal,
+		Release:  func(context.Context, string) error { return nil },
+		Activity: func(ctx context.Context, assignmentID string, operation func(context.Context) error) error {
+			activityCalls++
+			activityID = assignmentID
+			return operation(ctx)
+		},
+	})
+
+	result, err := service.Shell(context.Background(), shellInput())
+	if err != nil || activityCalls != 1 || activityID != "assignment-1" || !result.Released || result.Retained {
+		t.Fatalf("result/error/activity = %#v/%v/%d/%q", result, err, activityCalls, activityID)
+	}
+}
+
+func TestShellReleasesAssignmentWhenActivitySetupFails(t *testing.T) {
+	activityErr := errors.New("activity keeper could not start")
+	releaseCalls := 0
+	service := cli.NewShellService(cli.ShellOptions{
+		Acquire:  func(context.Context, cli.AcquireInput) (cli.AcquireResult, error) { return validShellAcquire(), nil },
+		Terminal: &shellTerminalStub{},
+		Release: func(context.Context, string) error {
+			releaseCalls++
+			return nil
+		},
+		Activity: func(context.Context, string, func(context.Context) error) error { return activityErr },
+	})
+
+	result, err := service.Shell(context.Background(), shellInput())
+	if !errors.Is(err, activityErr) || !result.Released || result.Retained || releaseCalls != 1 {
+		t.Fatalf("result/error/release = %#v/%v/%d", result, err, releaseCalls)
+	}
+}
+
+func TestShellRetainsAssignmentWhenActivityCancellationReachesStartedTerminal(t *testing.T) {
+	heartbeatErr := errors.New("activity renewal failed")
+	terminalErr := errors.New("terminal canceled")
+	releaseCalls := 0
+	service := cli.NewShellService(cli.ShellOptions{
+		Acquire:  func(context.Context, cli.AcquireInput) (cli.AcquireResult, error) { return validShellAcquire(), nil },
+		Terminal: &shellTerminalStub{result: cli.ShellTerminalResult{Started: true}, err: terminalErr},
+		Release:  func(context.Context, string) error { releaseCalls++; return nil },
+		Activity: func(ctx context.Context, assignmentID string, operation func(context.Context) error) error {
+			operationContext, cancel := context.WithCancel(ctx)
+			cancel()
+			return errors.Join(heartbeatErr, operation(operationContext))
+		},
+	})
+
+	result, err := service.Shell(context.Background(), shellInput())
+	if err == nil || !errors.Is(err, heartbeatErr) || !errors.Is(err, terminalErr) || !result.Retained || result.Released || releaseCalls != 0 {
+		t.Fatalf("result/error/release = %#v/%v/%d", result, err, releaseCalls)
+	}
+}
+
 func TestShellReturnsAcquireFailureWithoutStartingOrReleasing(t *testing.T) {
 	wantErr := errors.New("no workspace available")
 	terminal := &shellTerminalStub{}

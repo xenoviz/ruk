@@ -54,6 +54,10 @@ versioning.
   validate release projections inside the workspace fence, recover missing GC
   leaves without trusting dangling symlinks, preserve Windows rollback backups,
   and restore shared-backend dependency error classification.
+- Fence assigned synchronization to its original lease, keep shells renewed,
+  start requested leases after preparation, serialize reusable capacity with
+  warm and GC, preserve fail-closed Linux identities, and bound Windows update
+  replacement waits without discarding recovery artifacts.
 
 ## 0.1.2 - 2026-08-08
 

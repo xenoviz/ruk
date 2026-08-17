@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,7 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 	if syncRoute == nil {
 		syncRoute = defaultSyncRoute
 	}
+	syncRoute = wrapAssignedSyncRoute(syncRoute)
 
 	createRoute := func(ctx context.Context, input CreateCommandInput) (CreateCommandResult, error) {
 		// Create holds the workspace handoff lock for the whole operation. The
@@ -155,6 +157,86 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 		Sync: syncRoute, Create: createRoute, Acquire: acquireRoute,
 		Release: releaseRoute, Remove: func(ctx context.Context, input RemoveInput) error { return removeRepository(ctx, input) },
 	}, nil
+}
+
+// wrapAssignedSyncRoute snapshots an already-assigned workspace before
+// dependency work starts and composes an ID-fenced check into Ensure. The
+// dependency layer acquires the workspace lock before invoking BeforePrepare,
+// so a release/reassignment that wins after the snapshot cannot make sync
+// adopt the replacement assignment. Acquisition and create already provide a
+// store plus held-lock adapter; those fenced handoffs bypass this wrapper.
+func wrapAssignedSyncRoute(route SyncRouteOperation) SyncRouteOperation {
+	return func(ctx context.Context, input SyncCommandInput) (SyncCommandResult, error) {
+		if route == nil {
+			return SyncCommandResult{}, errors.New("sync command is not configured")
+		}
+		if input.Ensure.Store != nil || input.Ensure.Locker != nil {
+			return route(ctx, input)
+		}
+		if err := validateRepositoryContext(input.Repository); err != nil {
+			return SyncCommandResult{}, err
+		}
+		locker, err := newNativeDirectoryLocker(ctx)
+		if err != nil {
+			return SyncCommandResult{}, err
+		}
+		store := state.NewStore(input.Repository.CommonDir, locker)
+		workspacePath := input.Repository.Root
+		key, err := state.TreeKey(workspacePath)
+		if err != nil {
+			return SyncCommandResult{}, err
+		}
+		snapshot, err := store.Read(ctx)
+		if err != nil {
+			return SyncCommandResult{}, err
+		}
+		workspace, managed := snapshot.Workspaces[key]
+		if !managed || workspace.Assignment == nil {
+			return route(ctx, input)
+		}
+		if workspace.Lifecycle != state.LifecycleAssigned {
+			return route(ctx, input)
+		}
+		if workspace.OperationID != nil {
+			return SyncCommandResult{}, fmt.Errorf("Assignment %s acquisition is still in progress", workspace.Assignment.ID)
+		}
+		assignmentID := workspace.Assignment.ID
+		beforePrepare := input.Ensure.BeforePrepare
+		input.Ensure.Store = store
+		input.Ensure.Locker = locker
+		input.Ensure.BeforePrepare = func() error {
+			if err := verifyAssignedSync(ctx, store, assignmentID, workspacePath); err != nil {
+				return err
+			}
+			if beforePrepare != nil {
+				return beforePrepare()
+			}
+			return nil
+		}
+		return route(ctx, input)
+	}
+}
+
+func verifyAssignedSync(ctx context.Context, store *state.Store, assignmentID, workspacePath string) error {
+	if store == nil {
+		return errors.New("sync state store is not configured")
+	}
+	snapshot, err := store.Read(ctx)
+	if err != nil {
+		return err
+	}
+	if snapshot == nil {
+		return errors.New("sync state reader returned nil state")
+	}
+	key, err := state.TreeKey(workspacePath)
+	if err != nil {
+		return err
+	}
+	workspace, ok := snapshot.Workspaces[key]
+	if !ok || workspace.Path != workspacePath || workspace.Assignment == nil || workspace.Assignment.ID != assignmentID || workspace.Lifecycle != state.LifecycleAssigned || workspace.OperationID != nil {
+		return fmt.Errorf("Assignment %s does not exist or no longer owns %s", assignmentID, workspacePath)
+	}
+	return nil
 }
 
 func defaultPrimaryCheckoutFence(ctx context.Context, repository git.Repository, callback func() error) error {
@@ -325,7 +407,9 @@ func acquireRepository(ctx context.Context, repository git.Repository, input Acq
 	acquisition := lifecycle.NewAcquisitionService(lifecycle.AcquisitionOptions{
 		Lifecycle: service, Reader: store, Locker: locker, PrimaryLocker: locker,
 		PrimaryLockPath: primaryCheckoutLockPath(repository.CommonDir), Worktree: worktree,
-		Prepare: prepare, Ports: allocator,
+		PoolMaintenanceLocker:   locker,
+		PoolMaintenanceLockPath: filepath.Join(paths.Locks, "pool-maintenance.lock"),
+		Prepare:                 prepare, Ports: allocator,
 		WorkspacePath: func(context.Context, string) (string, error) { return defaultPoolPath(repository.Root, input.Branch) },
 		LockPath: func(path string) string {
 			result, _ := MutationWorkspaceLockPath(repository.CommonDir, path)
@@ -344,7 +428,7 @@ func acquireRepository(ctx context.Context, repository git.Repository, input Acq
 		return lifecycle.AcquisitionResult{}, errors.New("port allocation is not configured")
 	}
 	return acquisition.Acquire(ctx, lifecycle.AcquireInput{
-		Assignment: lifecycle.AssignmentInput{Owner: input.Owner, Hostname: input.Hostname, Branch: input.Branch, ExpiresAt: input.ExpiresAt},
+		Assignment: lifecycle.AssignmentInput{Owner: input.Owner, Hostname: input.Hostname, Branch: input.Branch, ExpiresAt: input.ExpiresAt, LeaseDurationMinutes: input.LeaseDurationMinutes},
 		Branch:     input.Branch, StartPoint: input.StartPoint, PortNames: append([]string(nil), input.Ports...),
 	})
 }

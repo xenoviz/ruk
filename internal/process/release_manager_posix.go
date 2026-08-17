@@ -69,7 +69,7 @@ func terminateNativeRecord(ctx context.Context, manager NativeProcessManager, re
 	if !observed.IdentityKnown || observed.Identity == "" {
 		return false, processUnavailable(int(record.PID), errors.New("process identity is unavailable"))
 	}
-	if observed.Identity != record.StartedAt {
+	if !exactIdentityMatch(record.StartedAt, observed.Identity) {
 		return false, processUnavailable(int(record.PID), errors.New("process identity changed before signaling"))
 	}
 	if err := ctx.Err(); err != nil {
@@ -80,7 +80,7 @@ func terminateNativeRecord(ctx context.Context, manager NativeProcessManager, re
 	if err != nil {
 		return false, processUnavailable(int(record.PID), err)
 	}
-	if !revalidated.Alive || !revalidated.IdentityKnown || revalidated.Identity != record.StartedAt {
+	if !revalidated.Alive || !revalidated.IdentityKnown || !exactIdentityMatch(record.StartedAt, revalidated.Identity) {
 		return false, processUnavailable(int(record.PID), errors.New("process identity changed before signaling"))
 	}
 	kind := SignalGraceful

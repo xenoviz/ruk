@@ -63,19 +63,33 @@ func FutureExpiry(now time.Time, minutes float64) (time.Time, error) {
 // ParseFutureMinutes applies the CLI's positive-minutes contract and validates
 // the resulting timestamp before any lifecycle mutation occurs.
 func ParseFutureMinutes(value string, fallback float64, name string, now time.Time) (time.Time, error) {
-	minutes := fallback
-	if value != "" {
-		parsed, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("%s must be a positive number of minutes", name)
-		}
-		minutes = parsed
+	minutes, err := ParseLeaseMinutes(value, fallback, name)
+	if err != nil {
+		return time.Time{}, err
 	}
 	expiresAt, err := FutureExpiry(now, minutes)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("%s must be a positive number of minutes", name)
 	}
 	return expiresAt, nil
+}
+
+// ParseLeaseMinutes validates and returns the requested lease duration. The
+// duration is carried separately from the initial expiry so lifecycle can
+// restart the lease clock after acquisition preparation has completed.
+func ParseLeaseMinutes(value string, fallback float64, name string) (float64, error) {
+	minutes := fallback
+	if value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be a positive number of minutes", name)
+		}
+		minutes = parsed
+	}
+	if math.IsNaN(minutes) || math.IsInf(minutes, 0) || minutes <= 0 {
+		return 0, fmt.Errorf("%s must be a positive number of minutes", name)
+	}
+	return minutes, nil
 }
 
 // Renew validates expiry before delegating to lifecycle and formats one stable

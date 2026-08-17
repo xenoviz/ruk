@@ -113,13 +113,13 @@ func runtimeShell(ctx context.Context, input ShellRouteInput, now func() time.Ti
 	if mutations.Acquire == nil || mutations.Release == nil {
 		return ShellResult{}, errors.New("shell lifecycle operations are not configured")
 	}
+	store, locker, lifecycleService, err := runtimeState(ctx, input.Repository, now, newID)
+	if err != nil {
+		return ShellResult{}, err
+	}
 	terminal := options.ShellTerminal
 	stopShellSignals := func() {}
 	if terminal == nil {
-		store, locker, lifecycleService, err := runtimeState(ctx, input.Repository, now, newID)
-		if err != nil {
-			return ShellResult{}, err
-		}
 		shellSignals, stopSignals := runtimeManagedSignals()
 		stopShellSignals = stopSignals
 		terminal = NewNativeShellTerminal(ShellTerminalOptions{
@@ -142,11 +142,16 @@ func runtimeShell(ctx context.Context, input ShellRouteInput, now func() time.Ti
 		})
 	}
 	defer stopShellSignals()
+	activity := options.ExecuteActivity
+	if activity == nil {
+		activity = NewActivityRunner(ActivityRunnerOptions{Lifecycle: lifecycleService, Reader: store, Now: now, NewID: newID}).ExecuteActivityRunner()
+	}
 	service := NewShellService(ShellOptions{
 		Acquire: func(ctx context.Context, request AcquireInput) (AcquireResult, error) {
 			return mutations.Acquire(ctx, input.Repository, request)
 		},
 		Terminal: terminal,
+		Activity: activity,
 		Release: func(ctx context.Context, assignmentID string) error {
 			_, err := mutations.Release(ctx, ReleaseInput{Repository: input.Repository, AssignmentID: assignmentID})
 			return err

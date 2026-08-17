@@ -571,7 +571,7 @@ func (cleaner NativeProcessCleaner) Cleanup(ctx context.Context, child Child, re
 		return nil
 	}
 	observed, err := cleaner.Probe.Inspect(ctx, int(record.PID))
-	if err != nil || !observed.Alive || !observed.IdentityKnown || observed.Identity != record.StartedAt {
+	if err != nil || !observed.Alive || !observed.IdentityKnown || !exactIdentityMatch(record.StartedAt, observed.Identity) {
 		if err == nil {
 			err = errors.New("process identity changed before registration cleanup")
 		}
@@ -579,7 +579,7 @@ func (cleaner NativeProcessCleaner) Cleanup(ctx context.Context, child Child, re
 	}
 	// Recheck immediately before signaling: the first probe can race PID reuse.
 	revalidated, err := cleaner.Probe.Inspect(ctx, int(record.PID))
-	if err != nil || !revalidated.Alive || !revalidated.IdentityKnown || revalidated.Identity != record.StartedAt {
+	if err != nil || !revalidated.Alive || !revalidated.IdentityKnown || !exactIdentityMatch(record.StartedAt, revalidated.Identity) {
 		if err == nil {
 			err = errors.New("process identity changed before registration cleanup signal")
 		}
