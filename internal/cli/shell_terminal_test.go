@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -88,7 +89,7 @@ func TestNativeShellTerminalRunsForegroundNativeProcessAndDrainsIt(t *testing.T)
 	if len(runner.command) != 1 || runner.command[0] != "/bin/sh" {
 		t.Fatalf("command = %v", runner.command)
 	}
-	if runner.options.Dir != "/workspace/one" || runner.options.Mode != processpkg.Detached || !runner.options.ForegroundTerminal {
+	if runner.options.Dir != "/workspace/one" || runner.options.Mode != processpkg.Detached || !runner.options.ForegroundTerminal || !runner.options.SuperviseCancellation {
 		t.Fatalf("run options = %#v", runner.options)
 	}
 	portFound := false
@@ -109,6 +110,35 @@ func TestNativeShellTerminalRunsForegroundNativeProcessAndDrainsIt(t *testing.T)
 	}
 	if tracker.record.PID != 42 || tracker.record.StartedAt != "identity-42" {
 		t.Fatalf("tracker record = %#v", tracker.record)
+	}
+}
+
+func TestNativeShellTerminalPreservesCaseDistinctPOSIXEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX environment names are case-sensitive")
+	}
+	t.Setenv("ruk_port_api", "9999")
+	runner := &shellProcessRunnerStub{result: processpkg.RunResult{
+		Record: shellProcessRecord(),
+	}}
+	terminal := cli.NewNativeShellTerminal(shellTerminalOptions(runner, &shellProcessTrackerStub{}))
+	request := shellTerminalRequest()
+	request.Environment = map[string]string{"RUK_PORT_API": "4312"}
+
+	if _, err := terminal.Run(context.Background(), request); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	foundUpper, foundLower := false, false
+	for _, entry := range runner.options.Env {
+		switch entry {
+		case "RUK_PORT_API=4312":
+			foundUpper = true
+		case "ruk_port_api=9999":
+			foundLower = true
+		}
+	}
+	if !foundUpper || !foundLower {
+		t.Fatalf("environment = %v, want both case-distinct port variables", runner.options.Env)
 	}
 }
 

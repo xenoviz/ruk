@@ -25,17 +25,20 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
-	Repository       = "xenoviz/ruk"
-	PackageName      = "@xenoviz/ruk"
-	ReleasesURL      = "https://api.github.com/repos/xenoviz/ruk/releases?per_page=10"
-	releasesPerPage  = 10
-	maxReleasePages  = 100
-	MaxBinaryBytes   = int64(250 * 1024 * 1024)
-	MaxCommandTail   = 64 * 1024
-	defaultUserAgent = "ruk-go"
+	Repository              = "xenoviz/ruk"
+	PackageName             = "@xenoviz/ruk"
+	ReleasesURL             = "https://api.github.com/repos/xenoviz/ruk/releases?per_page=10"
+	releasesPerPage         = 10
+	maxReleasePages         = 100
+	MaxBinaryBytes          = int64(250 * 1024 * 1024)
+	MaxCommandTail          = 64 * 1024
+	defaultUserAgent        = "ruk-go"
+	defaultDiscoveryTimeout = 30 * time.Second
+	defaultDownloadTimeout  = 5 * time.Minute
 )
 
 // Distribution is intentionally not inferred from the executable path.  The
@@ -371,11 +374,36 @@ func (updater *Updater) discovery() Discovery {
 	return updater.discoverHTTP
 }
 
-func (updater *Updater) discoverHTTP(ctx context.Context) ([]Release, error) {
+func (updater *Updater) doHTTP(ctx context.Context, request *http.Request, timeout time.Duration) (*http.Response, error) {
+	if request == nil {
+		return nil, errors.New("update HTTP request is unavailable")
+	}
 	client := updater.httpClient
 	if client == nil {
-		client = http.DefaultClient
+		var cancel context.CancelFunc
+		ctx, cancel = boundHTTPContext(ctx, timeout)
+		defer cancel()
+		request = request.WithContext(ctx)
+		client = defaultHTTPClient(timeout)
 	}
+	return client.Do(request)
+}
+
+func boundHTTPContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func defaultHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout}
+}
+
+func (updater *Updater) discoverHTTP(ctx context.Context) ([]Release, error) {
 	var remote []struct {
 		Tag        string `json:"tag_name"`
 		Draft      bool   `json:"draft"`
@@ -402,7 +430,7 @@ func (updater *Updater) discoverHTTP(ctx context.Context) ([]Release, error) {
 		}
 		request.Header.Set("Accept", "application/vnd.github+json")
 		request.Header.Set("User-Agent", defaultUserAgent)
-		response, err := client.Do(request)
+		response, err := updater.doHTTP(ctx, request, defaultDiscoveryTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -526,11 +554,7 @@ func (updater *Updater) downloadFunc() Download {
 		}
 		request.Header.Set("Accept", "application/octet-stream")
 		request.Header.Set("User-Agent", defaultUserAgent)
-		client := updater.httpClient
-		if client == nil {
-			client = http.DefaultClient
-		}
-		response, err := client.Do(request)
+		response, err := updater.doHTTP(ctx, request, defaultDownloadTimeout)
 		if err != nil {
 			return nil, err
 		}

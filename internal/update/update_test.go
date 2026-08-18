@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testRelease(version string, bytes []byte) Release {
@@ -574,6 +575,32 @@ func TestHTTPDiscoveryRejectsMalformedReleasePage(t *testing.T) {
 	_, err := New(Hooks{HTTPClient: client}).discoverHTTP(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "invalid release list") {
 		t.Fatalf("malformed page error = %v", err)
+	}
+}
+
+func TestDefaultHTTPClientAppliesTimeout(t *testing.T) {
+	client := defaultHTTPClient(17 * time.Second)
+	if client == nil || client.Timeout != 17*time.Second {
+		t.Fatalf("default client = %#v, want 17s timeout", client)
+	}
+}
+
+func TestBoundHTTPContextPreservesExistingDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	bounded, stop := boundHTTPContext(ctx, time.Second)
+	defer stop()
+	if bounded != ctx {
+		t.Fatal("existing request deadline was replaced")
+	}
+}
+
+func TestBoundHTTPContextAddsDeadlineWhenMissing(t *testing.T) {
+	bounded, stop := boundHTTPContext(context.Background(), time.Second)
+	defer stop()
+	deadline, ok := bounded.Deadline()
+	if !ok || time.Until(deadline) > time.Second || time.Until(deadline) <= 0 {
+		t.Fatalf("deadline = %v ok=%v, want ~1s", deadline, ok)
 	}
 }
 

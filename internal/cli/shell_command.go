@@ -112,12 +112,18 @@ func (err *RetainedShellError) Unwrap() error {
 	return errors.Join(err.Cause, NewRetainedAssignmentError(err.AssignmentID, err.Path, err.ExpiresAt, err.Cause))
 }
 
+// ShellAssignmentExpiry reloads the current durable expiry for a retained
+// assignment. Heartbeats can extend the lease after acquisition, so retained
+// diagnostics must not report the original timestamp.
+type ShellAssignmentExpiry func(context.Context, string, string) (string, bool)
+
 // ShellOptions configures ShellService.
 type ShellOptions struct {
 	Acquire  ShellAcquirer
 	Terminal ShellTerminal
 	Release  ShellRelease
 	Activity ShellActivityRunner
+	Expiry   ShellAssignmentExpiry
 }
 
 // ShellService composes acquire, interactive terminal execution, and exact
@@ -127,11 +133,12 @@ type ShellService struct {
 	terminal ShellTerminal
 	release  ShellRelease
 	activity ShellActivityRunner
+	expiry   ShellAssignmentExpiry
 }
 
 // NewShellService constructs a shell command service.
 func NewShellService(options ShellOptions) *ShellService {
-	return &ShellService{acquire: options.Acquire, terminal: options.Terminal, release: options.Release, activity: options.Activity}
+	return &ShellService{acquire: options.Acquire, terminal: options.Terminal, release: options.Release, activity: options.Activity, expiry: options.Expiry}
 }
 
 // Shell validates acquire inputs, selects a shell, runs an interactive
@@ -206,7 +213,7 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 		releaseBeforeSpawnFailure := func(cause error) error {
 			if releaseErr := service.release(context.WithoutCancel(operationCtx), acquired.AssignmentID); releaseErr != nil {
 				base.Retained = true
-				return retainedShellError(acquired, errors.Join(cause, releaseErr))
+				return service.retainedError(operationCtx, acquired, &base, errors.Join(cause, releaseErr))
 			}
 			base.Released = true
 			return cause
@@ -232,15 +239,15 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 				return releaseBeforeSpawnFailure(terminalErr)
 			}
 			base.Retained = true
-			return retainedShellError(acquired, terminalErr)
+			return service.retainedError(operationCtx, acquired, &base, terminalErr)
 		}
 		if !terminal.DescendantsDrained {
 			base.Retained = true
-			return retainedShellError(acquired, errors.New("terminal descendants are still running"))
+			return service.retainedError(operationCtx, acquired, &base, errors.New("terminal descendants are still running"))
 		}
 		if err := service.release(context.WithoutCancel(operationCtx), acquired.AssignmentID); err != nil {
 			base.Retained = true
-			return retainedShellError(acquired, err)
+			return service.retainedError(operationCtx, acquired, &base, err)
 		}
 		base.Released = true
 		return nil
@@ -254,7 +261,7 @@ func (service *ShellService) Shell(ctx context.Context, input ShellInput) (Shell
 	if operationErr != nil && !operationStarted {
 		if releaseErr := service.release(context.WithoutCancel(ctx), acquired.AssignmentID); releaseErr != nil {
 			base.Retained = true
-			return base, retainedShellError(acquired, errors.Join(operationErr, releaseErr))
+			return base, service.retainedError(ctx, acquired, &base, errors.Join(operationErr, releaseErr))
 		}
 		base.Released = true
 	}
@@ -293,6 +300,15 @@ func shellEnvironmentValue(environment map[string]string, name string, caseInsen
 	return ""
 }
 
-func retainedShellError(acquired AcquireResult, cause error) error {
-	return &RetainedShellError{AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: acquired.ExpiresAt, Cause: cause}
+func (service *ShellService) retainedError(ctx context.Context, acquired AcquireResult, result *ShellResult, cause error) error {
+	expiresAt := acquired.ExpiresAt
+	if service != nil && service.expiry != nil {
+		if current, ok := service.expiry(context.WithoutCancel(ctx), acquired.AssignmentID, acquired.Path); ok && strings.TrimSpace(current) != "" {
+			expiresAt = current
+		}
+	}
+	if result != nil {
+		result.ExpiresAt = expiresAt
+	}
+	return &RetainedShellError{AssignmentID: acquired.AssignmentID, Path: acquired.Path, ExpiresAt: expiresAt, Cause: cause}
 }

@@ -170,6 +170,21 @@ func runtimeShell(ctx context.Context, input ShellRouteInput, now func() time.Ti
 		},
 		Terminal: terminal,
 		Activity: activity,
+		Expiry: func(ctx context.Context, assignmentID, path string) (string, bool) {
+			snapshot, err := store.Read(ctx)
+			if err != nil || snapshot == nil {
+				return "", false
+			}
+			key, err := state.TreeKey(path)
+			if err != nil {
+				return "", false
+			}
+			workspace, ok := snapshot.Workspaces[key]
+			if !ok || workspace.Assignment == nil || workspace.Assignment.ID != assignmentID {
+				return "", false
+			}
+			return workspace.Assignment.ExpiresAt, true
+		},
 		Release: func(ctx context.Context, assignmentID string) error {
 			_, err := mutations.Release(ctx, ReleaseInput{Repository: input.Repository, AssignmentID: assignmentID})
 			return err

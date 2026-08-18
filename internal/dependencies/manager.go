@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/xenoviz/ruk/internal/config"
 )
@@ -102,7 +104,15 @@ func isStandardPackageManager(name string) bool {
 }
 
 func isStandardManagerSelection(manager PackageManager) bool {
-	return isStandardPackageManager(manager.Name) && len(manager.Command) > 0 && manager.Command[0] == manager.Name
+	return isStandardPackageManager(manager.Name) && len(manager.Command) > 0 && managerCommandName(manager.Command[0]) == manager.Name
+}
+
+func managerCommandName(command string) string {
+	name := filepath.Base(strings.TrimSpace(command))
+	if len(name) >= len(".exe") && strings.EqualFold(name[len(name)-len(".exe"):], ".exe") {
+		name = name[:len(name)-len(".exe")]
+	}
+	return name
 }
 
 func (resolver ManagerResolver) probeVersion(ctx context.Context, root, name string, command []string) (string, error) {

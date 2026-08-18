@@ -20,6 +20,7 @@ import (
 type executeStore struct {
 	current        *state.State
 	updateContexts []context.Context
+	updateLive     []bool
 }
 
 func (store *executeStore) Read(context.Context) (*state.State, error) { return store.current, nil }
@@ -28,6 +29,7 @@ func (store *executeStore) Update(ctx context.Context, mutate func(*state.State)
 		return err
 	}
 	store.updateContexts = append(store.updateContexts, ctx)
+	store.updateLive = append(store.updateLive, ctx.Err() == nil)
 	return mutate(store.current)
 }
 
@@ -67,11 +69,13 @@ func (cleaner *executeCleanup) Exists(ctx context.Context, _ state.TrackedProces
 
 type executeRecoveryProcesses struct {
 	ctx   context.Context
+	live  bool
 	calls int
 }
 
 func (processes *executeRecoveryProcesses) Exists(ctx context.Context, _ state.TrackedProcessRecord) (bool, error) {
 	processes.ctx = ctx
+	processes.live = ctx.Err() == nil
 	processes.calls++
 	return false, nil
 }
@@ -258,8 +262,8 @@ func TestExecuteCancellationCleansUpAndRemovesRecordWithRecoveryContext(t *testi
 	if cleanup.cleanup != 1 || cleanup.verify != 1 || processes.calls != 1 {
 		t.Fatalf("cleanup calls=%d verifier calls=%d final process calls=%d, want 1/1/1", cleanup.cleanup, cleanup.verify, processes.calls)
 	}
-	if processes.ctx == nil || processes.ctx.Err() != nil {
-		t.Fatalf("final process context=%v, want active recovery context", processes.ctx)
+	if processes.ctx == nil || !processes.live {
+		t.Fatalf("final process context=%v live=%v, want active recovery context", processes.ctx, processes.live)
 	}
 	if _, ok := processes.ctx.Deadline(); !ok {
 		t.Fatal("final process context has no bounded deadline")
@@ -318,7 +322,7 @@ func TestExecuteAttachedCancellationRemovesRecordWithRecoveryContext(t *testing.
 		t.Fatal("attached cancellation did not reach durable process removal")
 	}
 	removalCtx := store.updateContexts[len(store.updateContexts)-1]
-	if removalCtx.Err() != nil {
+	if !store.updateLive[len(store.updateLive)-1] {
 		t.Fatalf("attached removal context=%v, want active recovery context", removalCtx)
 	}
 	if _, ok := removalCtx.Deadline(); !ok {
@@ -356,6 +360,16 @@ func TestExecuteRejectsAssignmentFenceChangeAfterSynchronization(t *testing.T) {
 	}
 }
 
+type executeDrainedTree struct{}
+
+func (executeDrainedTree) Cleanup(context.Context, processpkg.Child, state.TrackedProcessRecord) error {
+	return nil
+}
+
+func (executeDrainedTree) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	return false, nil
+}
+
 func TestExecuteForwardsPendingDetachedSignalsAndPreservesSignalExitStatus(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "workspace")
@@ -363,7 +377,7 @@ func TestExecuteForwardsPendingDetachedSignalsAndPreservesSignalExitStatus(t *te
 	child := &executeChild{pid: 42, status: processpkg.ExitStatus{Code: -1, Signal: syscall.SIGTERM}}
 	spawner := &executeSpawner{child: child}
 	forwarder := &executeForwarder{}
-	runner := processpkg.Runner{Spawner: spawner, Describer: executeDescriber{record: state.TrackedProcessRecord{PID: 42, StartedAt: "identity", GroupID: int64Pointer(42)}}, Forwarder: forwarder}
+	runner := processpkg.Runner{Spawner: spawner, Describer: executeDescriber{record: state.TrackedProcessRecord{PID: 42, StartedAt: "identity", GroupID: int64Pointer(42)}}, Forwarder: forwarder, Cleaner: executeDrainedTree{}}
 	signals := make(chan os.Signal, 1)
 	signals <- syscall.SIGINT
 	service := cli.NewExecuteService(cli.ExecuteOptions{Lifecycle: lifecycleService, Reader: store, Runner: runner, Processes: executeProcesses{}, Synchronize: func(context.Context, string, string) error { return nil }})
@@ -384,6 +398,7 @@ func TestExecuteDetachedRetainsRecordWhenDescendantsRemain(t *testing.T) {
 	runner := processpkg.Runner{
 		Spawner:   &executeSpawner{child: child},
 		Describer: executeDescriber{record: state.TrackedProcessRecord{PID: 42, StartedAt: "identity", GroupID: int64Pointer(42)}},
+		Cleaner:   executeDrainedTree{},
 	}
 	service := cli.NewExecuteService(cli.ExecuteOptions{
 		Lifecycle: lifecycleService, Reader: store, Runner: runner, Processes: executeProcesses{alive: true},

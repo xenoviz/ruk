@@ -296,6 +296,33 @@ func TestShellRetainsAssignmentWhenDescendantsRemain(t *testing.T) {
 	}
 }
 
+func TestShellReportsRenewedExpiryWhenRetained(t *testing.T) {
+	terminal := &shellTerminalStub{
+		result: cli.ShellTerminalResult{ExitCode: 1, Started: true},
+		err:    errors.New("terminal descendants are still running"),
+	}
+	renewed := "2026-08-16T18:30:00Z"
+	service := cli.NewShellService(cli.ShellOptions{
+		Acquire:  func(context.Context, cli.AcquireInput) (cli.AcquireResult, error) { return validShellAcquire(), nil },
+		Terminal: terminal,
+		Release:  func(context.Context, string) error { return nil },
+		Expiry: func(context.Context, string, string) (string, bool) {
+			return renewed, true
+		},
+	})
+
+	result, err := service.Shell(context.Background(), shellInput())
+	if err == nil || !result.Retained || result.Released {
+		t.Fatalf("result/error = %#v/%v", result, err)
+	}
+	if result.ExpiresAt != renewed {
+		t.Fatalf("result expiry = %q, want renewed %q", result.ExpiresAt, renewed)
+	}
+	if !strings.Contains(err.Error(), renewed) || strings.Contains(err.Error(), "2026-08-16T12:00:00Z") {
+		t.Fatalf("error = %q, want renewed expiry", err)
+	}
+}
+
 func TestShellRetainsAssignmentWhenReleaseFails(t *testing.T) {
 	releaseErr := errors.New("release fence changed")
 	terminal := &shellTerminalStub{result: cli.ShellTerminalResult{DescendantsDrained: true}}

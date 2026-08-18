@@ -189,34 +189,31 @@ func (locker *DirectoryLocker) Acquire(ctx context.Context, path string) (*Guard
 		return nil, fmt.Errorf("create lock parent %s: %w", filepath.Dir(path), err)
 	}
 	cleanupReleasedTombstones(path)
+	cleanupStalePendingLocks(path, locker.now(), locker.options.Stale)
 
 	started := locker.now()
-	token := locker.token()
-	if token == "" {
-		return nil, errors.New("lock: empty owner token")
-	}
-	owner := Owner{
-		PID:             locker.pid,
-		Hostname:        locker.hostname,
-		Token:           token,
-		CreatedAt:       formatTimestamp(locker.now()),
-		ProcessIdentity: locker.processIdentity,
-	}
 
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		err := os.Mkdir(path, 0o700)
-		if err == nil {
-			if err := writeOwner(path, owner); err != nil {
-				_ = os.RemoveAll(path)
-				return nil, err
-			}
-			return &Guard{path: path, token: token}, nil
+		token := locker.token()
+		if token == "" {
+			return nil, errors.New("lock: empty owner token")
 		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("create lock %s: %w", path, err)
+		owner := Owner{
+			PID:             locker.pid,
+			Hostname:        locker.hostname,
+			Token:           token,
+			CreatedAt:       formatTimestamp(locker.now()),
+			ProcessIdentity: locker.processIdentity,
+		}
+		guard, err := locker.publishLock(path, owner)
+		if err == nil {
+			return guard, nil
+		}
+		if !lockTargetBusy(err) {
+			return nil, err
 		}
 
 		recovered, err := locker.recoverAbandoned(ctx, path)
@@ -269,6 +266,12 @@ func (locker *DirectoryLocker) recoverAbandoned(ctx context.Context, path string
 
 	owner, valid, err := readOwner(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// A canonical lock directory without owner.json can exist when a
+			// previous mkdir-first publisher crashed before writeOwner. After
+			// the stale interval that in-progress window has closed.
+			return locker.retireAbandoned(path, stat, Owner{}, false)
+		}
 		// Unreadable owner metadata is not evidence that the owner is dead.
 		return false, nil
 	}
@@ -278,13 +281,16 @@ func (locker *DirectoryLocker) recoverAbandoned(ctx context.Context, path string
 		// recovery by age alone could race a live owner.
 		return false, nil
 	}
-	if valid && owner.Hostname == locker.hostname {
+	if owner.Hostname == locker.hostname {
 		alive, err := locker.ownerIsAlive(ctx, owner)
 		if err != nil || alive {
 			return false, nil
 		}
 	}
+	return locker.retireAbandoned(path, stat, owner, valid)
+}
 
+func (locker *DirectoryLocker) retireAbandoned(path string, stat os.FileInfo, owner Owner, valid bool) (bool, error) {
 	identity := abandonedIdentity(path, stat.ModTime(), owner, valid)
 	tombstone := path + ".abandoned-" + identity
 	if err := os.Rename(path, tombstone); err != nil {
@@ -294,6 +300,61 @@ func (locker *DirectoryLocker) recoverAbandoned(ctx context.Context, path string
 		return false, fmt.Errorf("recover abandoned lock %s: %w", path, err)
 	}
 	return true, nil
+}
+
+var errLockBusy = errors.New("lock: canonical path is busy")
+
+func lockTargetBusy(err error) bool {
+	return errors.Is(err, errLockBusy) || errors.Is(err, os.ErrExist)
+}
+
+func pendingLockPath(path, token string) string {
+	return path + ".pending-" + token
+}
+
+func (locker *DirectoryLocker) publishLock(path string, owner Owner) (*Guard, error) {
+	staging := pendingLockPath(path, owner.Token)
+	_ = os.RemoveAll(staging)
+	if err := os.Mkdir(staging, 0o700); err != nil {
+		return nil, fmt.Errorf("create lock staging %s: %w", staging, err)
+	}
+	if err := writeOwner(staging, owner); err != nil {
+		_ = os.RemoveAll(staging)
+		return nil, err
+	}
+	if err := os.Rename(staging, path); err != nil {
+		_ = os.RemoveAll(staging)
+		if _, statErr := os.Lstat(path); statErr == nil {
+			return nil, errLockBusy
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("inspect lock %s: %w", path, statErr)
+		}
+		return nil, fmt.Errorf("publish lock %s: %w", path, err)
+	}
+	return &Guard{path: path, token: owner.Token}, nil
+}
+
+func cleanupStalePendingLocks(path string, now time.Time, stale time.Duration) {
+	parent := filepath.Dir(path)
+	prefix := filepath.Base(path) + ".pending-"
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		pending := filepath.Join(parent, entry.Name())
+		info, err := os.Lstat(pending)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			continue
+		}
+		if now.Sub(info.ModTime()) <= stale {
+			continue
+		}
+		_ = os.RemoveAll(pending)
+	}
 }
 
 func (locker *DirectoryLocker) ownerIsAlive(ctx context.Context, owner Owner) (bool, error) {

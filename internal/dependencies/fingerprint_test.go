@@ -151,7 +151,7 @@ func TestProjectionFingerprintTracksNestedAndSymlinkTargetChanges(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(target, "index.js"), "two")
+	writeFile(t, filepath.Join(target, "index.js"), "two-changed")
 	after, err := ProjectionFingerprint(root, []string{"packages/api/node_modules"})
 	if err != nil {
 		t.Fatal(err)

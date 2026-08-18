@@ -619,10 +619,15 @@ func unverifiedProcessRecord(pid int, mode ProcessMode, command []string) state.
 }
 
 func waitStatusError(status ExitStatus) error {
-	// exec.Cmd.Wait reports an ExitError for ordinary non-zero exits. Those are
-	// represented by Code/Signal and are not infrastructure failures. A
-	// negative code without a signal means Wait could not produce a status.
-	if status.Err == nil || status.Signal != nil || status.Code >= 0 {
+	// exec.Cmd.Wait reports an ExitError for ordinary non-zero exits and
+	// signaled children. Those are represented by Code/Signal. Other wait
+	// errors, including stdout/stderr copy failures after exit code 0, are
+	// infrastructure failures and must not be reported as success.
+	if status.Err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(status.Err, &exitErr) {
 		return nil
 	}
 	return &ProcessWaitError{Cause: status.Err}

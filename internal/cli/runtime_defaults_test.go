@@ -337,6 +337,7 @@ func TestRuntimeRunSubscribesAndForwardsManagedSignals(t *testing.T) {
 		Spawner:   runtimeDefaultsSpawner{called: new(bool), child: &runtimeDefaultsChild{status: processpkg.ExitStatus{Code: 0}}},
 		Describer: runtimeDefaultsDescriber{record: state.TrackedProcessRecord{PID: 42, GroupID: &group, StartedAt: "identity-42"}},
 		Forwarder: forwarder,
+		Cleaner:   runtimeDefaultsDrainedTree{},
 	}
 	signals := make(chan os.Signal, 1)
 	signals <- os.Interrupt
@@ -395,6 +396,16 @@ type runtimeDefaultsForwarder struct{ signals []os.Signal }
 func (forwarder *runtimeDefaultsForwarder) Forward(_ context.Context, _ state.TrackedProcessRecord, signal os.Signal) error {
 	forwarder.signals = append(forwarder.signals, signal)
 	return nil
+}
+
+type runtimeDefaultsDrainedTree struct{}
+
+func (runtimeDefaultsDrainedTree) Cleanup(context.Context, processpkg.Child, state.TrackedProcessRecord) error {
+	return nil
+}
+
+func (runtimeDefaultsDrainedTree) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	return false, nil
 }
 
 func TestSameRuntimePathUsesWindowsCaseFoldingOnly(t *testing.T) {

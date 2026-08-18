@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -227,14 +228,15 @@ func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTermi
 		}()
 	}
 	run, err := terminal.runner.Run(ctx, []string{request.Shell}, processpkg.RunOptions{
-		Dir:                request.WorkspacePath,
-		Env:                shellEnvironment(request.Environment),
-		Mode:               processpkg.Detached,
-		ForegroundTerminal: true,
-		Stdin:              request.Stdin,
-		Stdout:             request.Stdout,
-		Stderr:             request.Stderr,
-		HandoffComplete:    releaseHandoff,
+		Dir:                   request.WorkspacePath,
+		Env:                   shellEnvironment(request.Environment),
+		Mode:                  processpkg.Detached,
+		ForegroundTerminal:    true,
+		SuperviseCancellation: true,
+		Stdin:                 request.Stdin,
+		Stdout:                request.Stdout,
+		Stderr:                request.Stderr,
+		HandoffComplete:       releaseHandoff,
 		Register: func(registerCtx context.Context, record state.TrackedProcessRecord) error {
 			if err := terminal.register(registerCtx, request.AssignmentID, record); err != nil {
 				return err
@@ -300,7 +302,7 @@ func shellEnvironment(additions map[string]string) []string {
 		replaced := false
 		for index, existing := range environment {
 			key, _, ok := strings.Cut(existing, "=")
-			if ok && strings.EqualFold(key, name) {
+			if ok && environmentKeyMatches(key, name) {
 				environment[index] = entry
 				replaced = true
 				break
@@ -311,6 +313,13 @@ func shellEnvironment(additions map[string]string) []string {
 		}
 	}
 	return environment
+}
+
+func environmentKeyMatches(existing, name string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(existing, name)
+	}
+	return existing == name
 }
 
 func shellForwardSignal(signal os.Signal) bool {

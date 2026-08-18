@@ -265,6 +265,22 @@ func TestRunnerPropagatesForegroundTerminalBoundary(t *testing.T) {
 	}
 }
 
+func TestRunnerReportsSuccessfulChildStreamCopyFailure(t *testing.T) {
+	t.Parallel()
+	copyErr := errors.New("write stdout: broken pipe")
+	child := &runnerChild{pid: 42, status: processpkg.ExitStatus{Code: 0, Err: copyErr}}
+	runner := processpkg.Runner{
+		Spawner:   &runnerSpawner{child: child},
+		Describer: runnerDescriber{record: state.TrackedProcessRecord{PID: 42, StartedAt: "started"}},
+	}
+	_, err := runner.Run(context.Background(), []string{"tool"}, processpkg.RunOptions{Mode: processpkg.Attached})
+	var waitErr *processpkg.ProcessWaitError
+	var unsafeErr *processpkg.ProcessCleanupUnsafeError
+	if !errors.As(err, &waitErr) || !errors.As(err, &unsafeErr) || !errors.Is(err, copyErr) {
+		t.Fatalf("error = %T %v, want wrapped stream copy wait failure", err, err)
+	}
+}
+
 func TestNativeProcessDescriberRequiresExactIdentityAndDetachedGroup(t *testing.T) {
 	t.Parallel()
 	probe := staticProbe{state: lock.ProcessState{Alive: true, IdentityKnown: true, Identity: "started"}}

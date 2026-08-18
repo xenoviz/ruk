@@ -275,7 +275,7 @@ func TestDirectoryLockGivesIncompleteOwnerOneSecondGrace(t *testing.T) {
 		PID:      41,
 		Hostname: "host-a",
 		Token:    func() string { return "new-token" },
-		Options:  lockpkg.Options{Timeout: time.Millisecond, Stale: time.Millisecond},
+		Options:  lockpkg.Options{Timeout: time.Millisecond, Stale: time.Hour},
 		Sleep: func(context.Context, time.Duration) error {
 			now = now.Add(time.Millisecond)
 			return nil
@@ -293,6 +293,46 @@ func TestDirectoryLockGivesIncompleteOwnerOneSecondGrace(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Name() != "state.lock" {
 		t.Fatalf("entries = %v, incomplete lock was stolen", entries)
+	}
+}
+
+func TestDirectoryLockRecoversOwnerlessLockAfterStaleAge(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "state.lock")
+	if err := os.MkdirAll(lockPath, 0o700); err != nil {
+		t.Fatalf("create ownerless lock: %v", err)
+	}
+	setModified(t, lockPath, now.Add(-time.Hour))
+	locker := newTestLocker(t, lockpkg.Config{
+		Now:      func() time.Time { return now },
+		PID:      41,
+		Hostname: "host-a",
+		Token:    func() string { return "recovered-token" },
+		Options:  lockpkg.Options{Timeout: time.Second, Stale: time.Millisecond},
+	})
+
+	guard, err := locker.Acquire(context.Background(), lockPath)
+	if err != nil {
+		t.Fatalf("Acquire error = %v, want recovered ownerless lock", err)
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatalf("Release returned an error: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read root: %v", err)
+	}
+	foundAbandoned := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "state.lock.abandoned-") {
+			foundAbandoned = true
+		}
+	}
+	if !foundAbandoned {
+		t.Fatalf("entries = %v, want abandoned ownerless tombstone", entries)
 	}
 }
 

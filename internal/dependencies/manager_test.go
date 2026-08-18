@@ -102,6 +102,28 @@ func TestResolvePackageManagerParsesNoisyBoundedVersionOutput(t *testing.T) {
 	}
 }
 
+func TestResolvePackageManagerProbesAbsoluteSharedManagerExecutables(t *testing.T) {
+	t.Parallel()
+	mode := config.Shared
+	var request CommandRequest
+	manager, err := ResolvePackageManager(context.Background(), t.TempDir(), config.Config{
+		InstallCommand: []string{"/opt/pnpm/bin/pnpm", "install"},
+		DependencyMode: &mode,
+	}, func(_ context.Context, got CommandRequest) (CommandResult, error) {
+		request = got
+		return CommandResult{Stdout: "10.12.2\n"}, nil
+	})
+	if err != nil {
+		t.Fatalf("ResolvePackageManager returned an error: %v", err)
+	}
+	if manager.Name != "pnpm" || manager.Version != "10.12.2" || manager.DependencyMode != string(config.Shared) {
+		t.Fatalf("manager = %#v, want shared pnpm 10.12.2", manager)
+	}
+	if request.Command != "/opt/pnpm/bin/pnpm" || strings.Join(request.Args, " ") != "--version" {
+		t.Fatalf("version probe request = %#v", request)
+	}
+}
+
 func TestResolvePackageManagerDoesNotProbeCustomInstallers(t *testing.T) {
 	t.Parallel()
 	var calls []CommandRequest
