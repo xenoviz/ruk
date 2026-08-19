@@ -1,0 +1,15 @@
+{
+  "name": "@xenoviz/ruk-windows-arm64",
+  "version": "0.3.0-beta.1",
+  "description": "Native Ruk binary for Windows arm64",
+  "license": "MIT",
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "files": ["native"],
+  "ruk": {
+    "distribution": "package",
+    "target": "windows-arm64",
+    "binary": "native/ruk.exe",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

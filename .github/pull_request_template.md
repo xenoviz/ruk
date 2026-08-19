@@ -5,7 +5,9 @@
 ## Validation
 
 - [ ] `bun run check`
-- [ ] `bun run test:coverage`
+- [ ] `go test ./...`
+- [ ] `go test -race ./...`
+- [ ] `bun run test:conformance`
 - [ ] `bun run binary:check`
 - [ ] `bun run binary:cross-check`
 - [ ] `bun run pack:check`

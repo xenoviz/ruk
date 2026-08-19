@@ -63,8 +63,7 @@ Ensure dependencies are ready, launch the command, and return its exit code.
 Inside an assigned workspace, Ruk records the child process for release.
 It also renews the assignment while the command is active. In a shared primary
 checkout it follows `sharedCheckoutPolicy`.
-The separator remains recommended. Ruk also accepts the command without it for
-PowerShell npm shims that consume a standalone `--`.
+The separator keeps command boundaries unambiguous.
 
 ### `ruk exec <branch> -- <command>`
 
@@ -76,9 +75,10 @@ recovery ID.
 ### `ruk shell <branch>`
 
 Open a terminal-attached interactive assigned shell. Set `RUK_SHELL` to override
-the platform default. On POSIX, an isolated terminal session keeps surviving
-shell descendants tracked. Ruk releases a clean workspace on shell exit and
-retains a dirty one.
+the platform default. Ruk inherits the terminal and tracks descendants through
+a native POSIX process group or Windows job boundary without launching a helper
+shell. This adapter does not allocate a PTY or ConPTY. Ruk releases a clean
+workspace on shell exit and retains a dirty one.
 
 ### `ruk warm --count <n>`
 
@@ -129,8 +129,14 @@ is 1,440 minutes. `--force-expired` requires `--apply`.
 
 ### `ruk update [--check] [--json]`
 
-Check for or install a completed stable release. Ordinary commands never
-contact GitHub for updates.
+Check for or install a completed release. Stable installations select stable
+versions. An installation whose current version contains a prerelease
+identifier follows newer prereleases on that channel. Package installations
+delegate the exact version to the owning npm, Bun, pnpm, or Yarn installation;
+standalone binaries verify and replace their native executable. Ordinary
+commands never contact GitHub for updates. On Windows, a package or standalone
+update reports a scheduled handoff and replaces locked native files only after
+the current Ruk process exits.
 
 ## Global output behavior
 

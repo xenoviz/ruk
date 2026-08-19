@@ -1,9 +1,10 @@
 # Ruk
 
-[![npm version](https://img.shields.io/npm/v/@xenoviz/ruk.svg)](https://www.npmjs.com/package/@xenoviz/ruk)
+[![npm beta version](https://img.shields.io/npm/v/@xenoviz/ruk?tag=beta&label=npm%20beta)](https://www.npmjs.com/package/@xenoviz/ruk)
 
 Ruk creates dependency-aware Git workspaces for parallel coding agents. It is
-an independent worktree manager: no Treehouse runtime or service is required.
+an independent, Go-native worktree manager: no Treehouse runtime, service, or
+resident JavaScript supervisor is required.
 
 The command is pronounced “rook.”
 
@@ -24,7 +25,7 @@ installs.
 
 ## Status
 
-Ruk is an early release with a deliberately small, tested surface:
+Ruk 0.3 is a Go-native beta with a deliberately small, tested surface:
 
 - create, inspect, run commands in, and remove Git worktrees;
 - acquire, renew, release, and reuse fenced agent workspace assignments;
@@ -38,7 +39,11 @@ Ruk is an early release with a deliberately small, tested surface:
   patches, runtime, platform, architecture, and install strategy;
 - serialize preparation of the same workspace;
 - share immutable package content by default with supported Bun and pnpm versions;
-- allow repositories to opt out when an isolated layout is incompatible.
+- allow repositories to opt out when an isolated layout is incompatible;
+- inspect processes with native operating-system APIs, including Windows, so
+  routine liveness checks do not launch PowerShell;
+- publish one native runtime through npm platform packages or standalone
+  executables.
 
 Lifecycle coordination is local to one host. Ruk allocates cooperative named
 ports but provides no broader runtime namespaces. Garbage collection acts only
@@ -49,26 +54,31 @@ worktrees or processes.
 
 - Git
 - the repository's declared package manager
-- Node.js 22.14 or newer when installing Ruk from npm
-- Bun 1.3.14+ or pnpm 10.12.1+ for the default shared mode
+- Node.js, Bun, pnpm, or Yarn when using that package manager to install or
+  update Ruk from npm
+- Bun 1.3.14+ or pnpm 10.12.1+ for the default shared dependency mode
 
 ## Install
 
+Ruk 0.3 is currently published on npm's `beta` channel:
+
 ```bash
-npm install --global @xenoviz/ruk
+npm install --global @xenoviz/ruk@beta
 ```
 
-The same Node.js package can be installed with Bun (the Node.js runtime
-requirement still applies to this distribution):
+The package manager installs a matching native optional package for the host.
+The `ruk` command then executes the native Go binary directly; Node.js is not
+kept resident as a command supervisor. Bun can also install the package:
 
 ```bash
-bun install --global @xenoviz/ruk
+bun install --global @xenoviz/ruk@beta
 ```
 
 GitHub Releases also provides standalone Linux, macOS, and Windows executables
-for x64 and ARM64. These embed the Bun runtime, so users do not need Node.js or
-Bun installed to run Ruk. Checksums are published beside every executable, and
-GitHub records signed build-provenance attestations for the release binaries.
+for x64 and ARM64, including Linux x64 with musl. These are native Go binaries,
+so users do not need Node.js or Bun installed to run Ruk. Checksums are
+published beside every executable, and GitHub records signed build-provenance
+attestations for the release binaries.
 
 ## Usage
 
@@ -154,11 +164,15 @@ ruk update
 Standalone executables select the matching operating-system, architecture, and
 Linux libc asset, verify its manifest-pinned SHA-256 digest, and replace the
 current executable atomically. Published checksum files remain available for
-manual verification. A failed post-replacement version check rolls
-back on POSIX systems; Windows schedules replacement after the running process
-exits. npm, Bun, pnpm, and Yarn installations delegate the exact released
-version to their package manager rather than modifying managed files directly.
-Ruk never performs background update checks or downloads.
+manual verification. A failed post-replacement version check rolls back on
+POSIX systems. Windows schedules locked executable replacement after the
+running Ruk process exits, including when a package manager installs the new
+native package. Package installations otherwise delegate the exact released
+version to their owning package manager rather than modifying managed files
+directly. A stable install
+selects stable releases; an install already running a prerelease follows newer
+prereleases on that channel. Ruk never performs background update checks or
+downloads.
 
 For unusual global installation layouts or automation, set
 `RUK_UPDATE_INSTALLER` to `npm`, `bun`, `pnpm`, or `yarn` to override automatic
@@ -218,7 +232,7 @@ The fingerprint includes:
 - Bun, npm, pnpm, and Yarn lock/configuration files;
 - patch directories;
 - package-manager name, version, command, and dependency mode;
-- runtime identity (Node or Bun), version, and native module ABI;
+- the selected dependency manager's runtime identity, when one is supplied;
 - operating system and CPU architecture.
 
 Changing ordinary source code does not invalidate the dependency projection.
@@ -230,15 +244,19 @@ content already present in the package manager store remains reusable.
 ```bash
 bun install --frozen-lockfile
 bun run check
-bun run test:coverage
+go test ./...
+go test -race ./...
+bun run test:conformance
 bun run binary:check
 bun run binary:cross-check
 bun run pack:check
 ```
 
-Ruk is authored in strict TypeScript. Bun is the repository toolchain and
-builds the standalone executables; `tsc` emits the Node-compatible npm
-distribution. The published runtime remains dependency-free.
+The shipped runtime is written in Go and has no third-party runtime
+dependencies. Bun remains the repository toolchain for VitePress, documentation,
+and supporting scripts; it is not required to run the installed Ruk command.
+The module targets Go 1.24, and release CI pins Go 1.24.6 for reproducible
+native builds.
 
 This repository commits managed mode in `.rukrc.json` because Bun's isolated
 global-store linker does not reliably install the VitePress dependency graph on
@@ -253,14 +271,17 @@ locking, state, or dependency behavior.
 
 - Report vulnerabilities privately by following [the security policy](./SECURITY.md).
 - Published runtime code has no third-party npm dependencies.
-- CI runs the compiled package on Node 22 and 24 across Linux, Windows, and
-  macOS.
-- CI also compiles and exercises native Bun executables on all three operating
-  systems.
+- CI runs Go vet, unit, race, conformance, native package, and standalone
+  executable checks in the cloud environment.
+- GitHub Actions exercises native process, shell, packaging, and update paths
+  on Linux, Windows, and macOS.
+- Routine Windows process inspection uses native APIs and launches zero
+  PowerShell helpers.
 - GitHub Actions are pinned to immutable commit SHAs.
-- Releases verify tag/package parity, publish through npm trusted publishing
-  with provenance, and attach seven standalone executables with SHA-256
-  checksums and signed GitHub build-provenance attestations.
+- Releases verify tag/package parity, publish seven native npm platform packages
+  plus the root package through npm trusted publishing with provenance, and
+  attach seven standalone executables with SHA-256 checksums and signed GitHub
+  build-provenance attestations.
 - A release becomes visible to `ruk update` only after npm publication and all
   binaries, checksums, and attestations succeed; `ruk-release.json` is uploaded
   last. Later releases exercise a real previous-to-current Windows self-update.

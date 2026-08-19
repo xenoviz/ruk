@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+
+console.error("Ruk native binary was not installed; reinstall @xenoviz/ruk for this platform.");
+process.exitCode = 1;

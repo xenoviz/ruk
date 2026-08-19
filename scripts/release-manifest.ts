@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { RELEASE_ASSET_NAMES } from "../src/release.js";
-import type { ReleaseManifest } from "../src/release.js";
+import { RELEASE_ASSET_NAMES } from "./lib/release.js";
+import type { ReleaseManifest } from "./lib/release.js";
 
 export function checksumFromFile(content: string, assetName: string): string {
   for (const line of content.split(/\r?\n/)) {

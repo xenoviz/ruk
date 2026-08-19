@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { run } from "../src/process.js";
-import { compareVersions } from "../src/release.js";
-import { isRecord } from "../src/types.js";
-import { VERSION } from "../src/version.js";
+import { fileURLToPath } from "node:url";
+import { run } from "./lib/process.js";
+import { readPackageVersion } from "./lib/package.js";
+import { compareVersions } from "./lib/release.js";
+import { isRecord } from "./lib/types.js";
 
 function hasAsset(value: unknown, name: string): boolean {
   return Array.isArray(value) && value.some(
@@ -13,6 +14,7 @@ function hasAsset(value: unknown, name: string): boolean {
 }
 
 const currentTag = process.env["RELEASE_TAG"];
+const VERSION = await readPackageVersion(path.resolve(fileURLToPath(new URL("..", import.meta.url))));
 if (currentTag !== `v${VERSION}` && currentTag !== VERSION) {
   throw new Error(`Release tag ${String(currentTag)} does not match ${VERSION}`);
 }

@@ -7,25 +7,49 @@ export interface SampleSummary {
 export interface ConcurrencyBenchmark {
   concurrency: number;
   elapsedMs: SampleSummary;
+  coldResidentBytes: SampleSummary;
   idleResidentBytes: SampleSummary;
   peakResidentBytes: SampleSummary;
+  idleChildProcessCount: SampleSummary;
+  peakChildProcessCount: SampleSummary;
+  peakWindowsPowerShellChildren: SampleSummary;
 }
 
 export interface TargetBenchmark {
-  name: "node" | "bun-standalone" | "go-supervisor";
+  name: "node" | "go";
   runtimeVersion: string;
   binaryBytes: number;
   coldStartMs: SampleSummary;
   wrappers: ConcurrencyBenchmark[];
 }
 
+export interface BenchmarkFailure {
+  target: TargetBenchmark["name"];
+  message: string;
+}
+
 export interface RuntimeBenchmarkResult {
-  schemaVersion: 1;
+  schemaVersion: 3;
+  fixtureMode: "shared-repository-readiness-gated";
   generatedAt: string;
   platform: { os: NodeJS.Platform; architecture: string };
   sampleCount: number;
   wrapperDurationMs: number;
+  assignmentTTLMinutes: number;
+  concurrencyLevels: number[];
   targets: TargetBenchmark[];
+  failures: BenchmarkFailure[];
+  assertions: RuntimeBenchmarkAssertions;
+}
+
+export interface RuntimeBenchmarkAssertions {
+  minimumRamReductionPercent: number;
+  ramReductionPercentByConcurrency: Record<string, number | null>;
+  ramTargetMet: boolean;
+  zeroRoutineWindowsPowerShellChildren: boolean;
+  observedWindowsPowerShellChildren: number;
+  applicable: boolean;
+  failureReasons: string[];
 }
 
 export function summarizeSamples(values: readonly number[]): SampleSummary {
@@ -50,14 +74,23 @@ export function runtimeBenchmarkResult(input: {
   architecture: string;
   sampleCount: number;
   wrapperDurationMs: number;
+  assignmentTTLMinutes: number;
+  concurrencyLevels: number[];
   targets: TargetBenchmark[];
+  failures: BenchmarkFailure[];
+  assertions: RuntimeBenchmarkAssertions;
 }): RuntimeBenchmarkResult {
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
+    fixtureMode: "shared-repository-readiness-gated",
     generatedAt: new Date(input.generatedAt).toISOString(),
     platform: { os: input.platform, architecture: input.architecture },
     sampleCount: input.sampleCount,
     wrapperDurationMs: input.wrapperDurationMs,
+    assignmentTTLMinutes: input.assignmentTTLMinutes,
+    concurrencyLevels: [...input.concurrencyLevels],
     targets: input.targets,
+    failures: input.failures,
+    assertions: input.assertions,
   };
 }

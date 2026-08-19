@@ -3,16 +3,25 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.3.0-beta.1 - 2026-08-16
 
+- Replace the shipped TypeScript/Node command with one dependency-free native
+  Go runtime while preserving the frozen CLI, JSON, state, and lifecycle
+  contract.
+- Publish native npm platform packages for Linux, macOS, and Windows on x64 and
+  ARM64, with glibc and musl Linux x64 variants.
+- Replace state atomically on Windows with bounded retries for transient file
+  sharing, access, and lock violations.
+- Drain native Windows Job Object descendants by querying their active-process
+  count, avoiding wrappers that wait forever after a managed command exits.
 - Automatically renew assignments during managed commands and dependency sync,
   using concurrent fenced keepers and observable activity timestamps.
 - Guard task commands in a shared primary checkout by default, with repository
   `deny`, `warn`, and `allow` policies plus a one-command override.
 - Expose activity, automatic-renewal, checkout, management, and active-assignment
   fields through status and list JSON.
-- Add a repeatable Node/Bun/Go runtime benchmark and a non-shipping Go
-  heartbeat supervisor experiment to inform, not pre-commit, a future rewrite.
+- Add a repeatable Node/Go runtime benchmark with Linux and Windows raw evidence,
+  RAM-reduction gating, child-process counts, and zero-PowerShell verification.
 - Allow repository administrators to bypass branch rules only through pull
   requests, preventing sole-maintainer deadlock without allowing direct pushes;
   keep required CI in a separate non-bypassable ruleset.
@@ -23,6 +32,37 @@ versioning.
 - Pin release builds to the triggering commit, require it to descend from
   protected `main`, and protect version tags from updates and deletion.
 - Restore a prominent link to private vulnerability-reporting instructions.
+- Fence primary-checkout work against concurrent assignment publication, keep
+  foreground shell descendants durably tracked, and fail closed when native
+  process identity or cleanup cannot be proven.
+- Include package-manager runtime and native ABI details in dependency
+  fingerprints, stream human installer output with bounded diagnostics, and
+  keep JSON-mode installers silent and memory-bounded.
+- Harden garbage collection against current-workspace subdirectories and
+  interrupted state removal, and keep prerelease updates on their current
+  channel while discovering every paginated GitHub release.
+- Preserve current-workspace `exec` routing, fence explicit workspace creation,
+  parse newline-containing worktree paths safely, stream human package updates,
+  preserve POSIX rollback modes, and defer locked Windows package replacement.
+- Route Windows package-manager shims through `COMSPEC` without PowerShell and
+  import active Ruk 0.2 host-port reservations before allocating new ports.
+- Rescan dependency inputs after installation, reserve dual-stack ports across
+  both address families, recycle shell acquisitions that fail before spawning,
+  and return exact retained-acquisition recovery metadata without changing the
+  underlying machine-readable failure category.
+- Resolve package executable symlinks before update ownership detection,
+  validate release projections inside the workspace fence, recover missing GC
+  leaves without trusting dangling symlinks, preserve Windows rollback backups,
+  and restore shared-backend dependency error classification.
+- Fence assigned synchronization to its original lease, keep shells renewed,
+  start requested leases after preparation, serialize reusable capacity with
+  warm and GC, preserve fail-closed Linux identities, and bound Windows update
+  replacement waits without discarding recovery artifacts.
+- Supervise dependency installers with native process groups and Windows jobs,
+  retain exact process records across canceled preparation, let fenced GC drain
+  only identity-matching installer trees, and use microsecond kernel process
+  identities on macOS. Windows cleanup performs a final bounded leaderless-tree
+  drain without signaling newly discovered reusable PIDs.
 
 ## 0.1.2 - 2026-08-08
 

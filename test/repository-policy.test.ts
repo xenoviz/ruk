@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { run } from "../src/process.js";
-import { isRecord } from "../src/types.js";
+import { run } from "../scripts/lib/process.js";
+import { isRecord } from "../scripts/lib/types.js";
 
 const root = process.cwd();
 const script = path.join(root, "scripts", "configure-repository.ts");

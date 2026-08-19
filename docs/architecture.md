@@ -2,28 +2,34 @@
 
 ## Toolchain and distributions
 
-Ruk is authored in strict TypeScript and uses the pinned Bun toolchain for
-dependency installation, repository scripts, and standalone executable builds.
-TypeScript performs static checking and emits the Node-compatible npm package.
+Ruk's shipped runtime is a single dependency-free Go application. The CLI uses
+native operating-system APIs for process inspection, locking, signals, and
+atomic replacement. Git and repository package managers remain explicit child
+processes; Ruk does not reimplement them.
 
-The core uses portable `node:*` APIs and must not depend on `Bun.*` APIs. This
-keeps one source tree valid for both distributions:
+The same Go runtime is distributed in two forms:
 
-- compiled JavaScript for Node.js 22.14 and newer, published to npm without
-  runtime dependencies;
-- self-contained Bun executables for Linux, macOS, and Windows.
+- a small `@xenoviz/ruk` npm package with one of seven optional native platform
+  packages; the package installer places the verified binary on the user's
+  package-manager path and exits;
+- standalone Linux, macOS, and Windows binaries for x64 and ARM64, including a
+  Linux x64 musl build, with checksums and provenance attestations.
 
-Both distributions must exercise real Git subprocess behavior in CI. A binary
-that only starts or prints its version is not considered verified.
+Node.js, Bun, pnpm, and Yarn may run package-manager installation or update
+hooks, but none is retained as Ruk's command supervisor. Bun remains a
+repository tool for VitePress and supporting scripts. Both distributions must
+exercise real Git subprocess behavior in CI; a binary that only starts or
+prints its version is not considered verified.
 
 ## Updates and release trust
 
 Self-update is an explicit operation; ordinary commands never contact GitHub.
 The package distribution delegates an exact version to the package manager that
-owns the installation. Standalone builds download only release assets from the
-canonical repository, enforce a size limit, verify the SHA-256 digest committed
-by the readiness manifest, and replace the executable through a same-directory
-staged file.
+owns the installation. A durable marker records that installer ownership so
+path layouts do not silently select the wrong manager. Standalone builds
+download only release assets from the canonical repository, enforce a size
+limit, verify the SHA-256 digest committed by the readiness manifest, and
+replace the executable through a same-directory staged file.
 
 GitHub release visibility is not update readiness. Protected version tags are
 immutable after creation, and the release workflow rejects a triggering commit
@@ -33,11 +39,15 @@ assets. A final job creates a mutable draft release, verifies the staged
 checksums, uploads the assets, uploads `ruk-release.json` last, and only then
 publishes the immutable release.
 Update discovery considers only stable releases with a valid readiness manifest
-and falls back to the previous ready release while publication is incomplete.
+for stable installs. A version already carrying a prerelease identifier follows
+newer prereleases on that channel without a second opt-in. Incomplete releases
+are ignored, so update discovery falls back to the previous ready release.
 
 POSIX replacement retains a rollback copy until the new executable reports the
-expected version. Windows defers replacement to a detached operating-system
-helper because a running executable may be locked. Release CI generates signed
+expected version. Windows standalone and package updates stage verified native
+files and defer replacement to a detached helper because a running executable
+may be locked. Package-mode updates report that scheduled handoff instead of
+claiming immediate replacement. Release CI generates signed
 GitHub build-provenance attestations in addition to checksums. Checksums protect
 download integrity; provenance provides an independently verifiable record of
 which repository workflow produced an executable.
@@ -51,22 +61,24 @@ replacement.
 
 ## Boundaries
 
-Ruk has five deliberately separate concerns:
+Ruk has deliberately separate Go packages:
 
-1. `git.js` discovers repositories and performs Git worktree operations.
-2. `fingerprint.js` identifies dependency inputs without interpreting source.
-3. `dependencies.js` prepares one local projection through a selected backend.
-4. `state.js` records preparation metadata under the common Git directory.
-5. `update.js` owns release discovery, installer delegation, integrity checks,
-   and executable replacement.
-6. `ports.js` performs short-lived OS port probes, coordinates a host-level
-   reservation registry, and maps names into environment variables.
-7. `statistics.js` derives aggregate and optional on-demand disk measurements.
-8. `activity.js` owns assignment heartbeat timing and keeper cleanup.
-9. `checkout.js` owns primary-checkout sharing policy and diagnostics.
+1. `internal/git` discovers repositories and performs Git worktree operations.
+2. `internal/dependencies` identifies dependency inputs and prepares one local
+   projection through a selected backend.
+3. `internal/state` records preparation metadata under the common Git directory.
+4. `internal/lifecycle` owns assignments, activity keepers, returns, warm, and
+   garbage collection.
+5. `internal/process` owns process identity, descendants, signals, and safe
+   termination, with native Windows and POSIX implementations.
+6. `internal/ports` and `internal/statistics` own host reservations and bounded
+   usage reporting.
+7. `internal/update` owns release discovery, installer delegation, integrity
+   checks, prerelease selection, and executable replacement.
+8. `internal/cli` composes these modules and owns the human and JSON boundary.
 
-`cli.js` composes these modules. Business rules should remain in the closest
-module instead of accumulating in the CLI.
+Business rules remain in the module that owns the relevant state or operating-
+system action instead of accumulating in the CLI.
 
 ## Safety invariants
 
@@ -84,8 +96,9 @@ module instead of accumulating in the CLI.
 - Machine-readable output contains one JSON value on stdout; diagnostics go to
   stderr, while suppressed installer streams are discarded rather than buffered.
 - Named ports are serialized through a stable per-user host registry and unique
-  among active recorded assignments. They are cooperative reservations, not
-  held sockets.
+  among active recorded assignments. Active Ruk 0.2 reservations are imported
+  under their legacy host lock during migration. They are cooperative
+  reservations, not held sockets.
 - Metrics are bounded counters; ordinary commands never append an event log or
   scan workspace disk usage.
 - Only observed Ruk operations renew leases. Ruk does not infer activity from
@@ -109,6 +122,9 @@ for automatic renewal.
 State is an optimization, not source of truth. Git and the dependency
 fingerprint remain authoritative. Invalid state fails visibly rather than being
 silently replaced.
+On Windows, state commits use atomic replace-with-write-through and retry only
+transient access, sharing, and lock violations; permanent replacement errors
+still fail immediately without deleting the last valid state.
 
 ## Workspace lifecycle
 
@@ -143,6 +159,15 @@ process record, so a recently exited child cannot remain falsely active.
 Windows registration cleanup terminates the new process tree only with a verified
 leader identity and otherwise retains ownership while descendants remain or the
 leader PID is reused.
+Windows release and GC also perform a bounded final descendant drain after the
+exact leader exits. Newly observed or leaderless processes are never signaled
+from a PID-only snapshot; they retain the workspace when they do not exit.
+Linux identities include the boot time and raw kernel start ticks. Older
+timestamp identities remain compatible for conservative lock-liveness checks,
+but never authorize signaling when an exact native identity cannot be proven.
+macOS identities use the kernel process start time at microsecond precision.
+Legacy `ps` timestamps remain useful only for conservative liveness checks and
+never authorize signaling when the native identity is unavailable.
 Abort cleanup follows the same fail-closed rule for attached children and
 detached groups. If the original leader identity or surviving descendants
 cannot be verified, or any termination safety check refuses the signal, the
@@ -155,13 +180,17 @@ accepted as completion only when an OS liveness check confirms that process no
 longer exists. The workspace tree lock remains held until child registration is
 persisted or failed registration cleanup settles, so release cannot recycle the
 worktree during that handoff.
-Interactive shells use their isolated session ID on Linux and controlling
-terminal on macOS, where `ps` does not expose the POSIX session ID. A live
-identity-fenced sentinel prevents macOS terminal-name reuse from authorizing
-cleanup, and a leaderless Linux session fails closed. Detached managed commands
-explicitly forward wrapper interrupt and termination signals to their process group.
-Linux checks for the util-linux `script` command before acquiring an interactive
-shell workspace.
+Interactive shells inherit the user's terminal and run behind a native POSIX
+process-group or Windows job boundary. Ruk records the shell leader and checks
+the tracked tree after it exits; an unverifiable or leaderless record fails
+closed. The Go runtime does not launch util-linux `script`, PowerShell, or a
+shell helper to provide this boundary, and this adapter does not allocate a PTY
+or ConPTY. Detached managed commands explicitly forward wrapper interrupt and
+termination signals to their tracked process group or job.
+Dependency installers use the same native process boundary. Their exact process
+identity is persisted before installation proceeds, cancellation waits are
+bounded, and an unverifiable surviving installer keeps the workspace fenced
+rather than allowing Git cleanup underneath it.
 
 Warm workspaces enter `available` directly after detached creation and
 dependency preparation. Assigned `exec` and `shell` operations reuse the same
@@ -175,7 +204,10 @@ the current post-heartbeat expiry from the retained record. Command
 launch snapshots its original assignment across dependency repair and rejects
 reassignment or an initially unassigned pool slot instead of adopting another
 agent's lease. Assigned dependency synchronization revalidates that same immutable
-assignment inside the tree lock before inspecting or modifying dependency projections.
+assignment inside the tree lock before inspecting or modifying dependency
+projections. Release snapshots and validates projections only after acquiring
+that same tree lock, so it cannot preserve stale projection metadata across a
+concurrent synchronization.
 Explicit `--fetch` is
 the only workspace operation in this layer that contacts a Git remote, and an
 explicit remote name must exist.
@@ -192,11 +224,21 @@ recovery restores its acquisition marker. Failed removal is re-locked before a
 workspace becomes available, and post-removal state remains retryable and is
 excluded from available-capacity statistics and warm counts. Forced-expiry
 release uses the handoff lock before it changes workspace state.
-Warm validation and garbage collection share a pool-maintenance lock so a slot
-cannot be removed after being reported as available.
+Failed or abandoned preparations may retain exact installer process records.
+Applied GC drains those recorded native process boundaries under the workspace
+fence, removes only identity-matching records, and revalidates the updated state
+before any Git mutation. An uncertain identity or incomplete termination fails
+closed and leaves the recovery record intact.
+Warm validation, reusable-slot reservation, and garbage collection share a
+pool-maintenance lock so capacity cannot be removed or claimed after being
+reported as available. Acquisition releases that pool lock before dependency
+preparation while retaining the selected workspace's acquisition lock.
 Collection revalidates every stale snapshot under the slot's acquisition lock,
 passes that update fence into the lifecycle transaction, and acquisition handoff
 does not overwrite a concurrent lease renewal.
+Missing workspace leaves are canonicalized through their nearest existing
+ancestor for recovery, while blank paths and dangling symlink ancestors fail
+closed.
 Ordinary release cannot cross an active acquisition marker, and an unreadable
 identity for a provably live lock owner never authorizes stale-lock recovery.
 

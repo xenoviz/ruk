@@ -1,0 +1,221 @@
+package cli
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/xenoviz/ruk/internal/dependencies"
+	"github.com/xenoviz/ruk/internal/lifecycle"
+	"github.com/xenoviz/ruk/internal/lock"
+	processpkg "github.com/xenoviz/ruk/internal/process"
+)
+
+func TestClassifyErrorPreservesStableCategories(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		err       error
+		code      ErrorCode
+		retryable bool
+	}{
+		{name: "dirty workspace", err: errors.New("Workspace has uncommitted changes."), code: WorkspaceDirtyCode},
+		{name: "invalid config", err: errors.New("Cannot read /repo/.rukrc.json: malformed JSON"), code: InvalidArgumentCode},
+		{name: "unknown option", err: errors.New("Unknown option --force"), code: InvalidArgumentCode},
+		{name: "dependency message", err: errors.New("Dependency installation failed"), code: DependencyPreparationCode, retryable: true},
+		{name: "missing package manager", err: errors.New("npm is required but was not found on PATH"), code: DependencyPreparationCode, retryable: true},
+		{name: "shared bun linker preflight", err: errors.New("Bun's global virtual store requires the isolated linker"), code: DependencyPreparationCode, retryable: true},
+		{name: "shared pnpm backend preflight", err: errors.New("pnpm's shared dependency backend requires the global virtual store"), code: DependencyPreparationCode, retryable: true},
+		{name: "shared backend version", err: errors.New("bun 1.3.14 or newer is required for Ruk's shared dependency backend"), code: DependencyPreparationCode, retryable: true},
+		{name: "typed dependency", err: &dependencies.DependencyPreparationError{Cause: errors.New("installer exited")}, code: DependencyPreparationCode, retryable: true},
+		{name: "port", err: errors.New("Could not allocate an available port"), code: PortUnavailableCode, retryable: true},
+		{name: "assignment conflict", err: errors.New("Assignment a does not exist"), code: AssignmentConflictCode},
+		{name: "lock timeout", err: &lock.TimeoutError{Path: "/tmp/lock"}, code: ResourceBusyCode, retryable: true},
+		{name: "process identity", err: &processpkg.IdentityUnavailableError{PID: 42, Cause: errors.New("identity unavailable")}, code: ResourceBusyCode, retryable: true},
+		{name: "process enumeration", err: errors.New("Could not enumerate POSIX processes: unavailable"), code: ResourceBusyCode, retryable: true},
+		{name: "git", err: errors.New("git fetch origin main: remote rejected"), code: GitOperationFailedCode},
+		{name: "generic", err: errors.New("unexpected"), code: OperationFailedCode},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			record := ClassifyError(test.err)
+			if record.Status != "error" {
+				t.Fatalf("status = %q, want error", record.Status)
+			}
+			if record.Code != test.code {
+				t.Fatalf("code = %q, want %q", record.Code, test.code)
+			}
+			if record.Retryable != test.retryable {
+				t.Fatalf("retryable = %t, want %t", record.Retryable, test.retryable)
+			}
+		})
+	}
+}
+
+func TestClassifyErrorPreservesRecoveryMetadata(t *testing.T) {
+	t.Parallel()
+
+	retained := RetainedAssignmentFailure(
+		"assignment-1",
+		"/workspace",
+		"2026-08-15T00:00:00.000Z",
+		&processpkg.IdentityUnavailableError{PID: 42},
+	)
+	if retained == nil {
+		t.Fatal("RetainedAssignmentFailure returned nil")
+	}
+	record := ClassifyError(retained)
+	if record.Code != ResourceBusyCode || !record.Retryable {
+		t.Fatalf("record = %#v, want retryable resource busy", record)
+	}
+	if record.AssignmentID != "assignment-1" || record.Path != "/workspace" || record.ExpiresAt != "2026-08-15T00:00:00.000Z" {
+		t.Fatalf("recovery metadata = %#v", record)
+	}
+	if record.Recovery != "ruk release assignment-1" {
+		t.Fatalf("recovery = %q", record.Recovery)
+	}
+	if RetainedAssignmentFailure("id", "/workspace", "expiry", errors.New("ordinary failure")) != nil {
+		t.Fatal("ordinary failure was incorrectly retained")
+	}
+	unsafeSetup := &processpkg.ProcessSetupError{
+		Cause: errors.New("describe failed"),
+		Cleanup: &processpkg.ProcessCleanupUnsafeError{
+			PID: 42, Mode: processpkg.Detached, Cause: errors.New("identity unavailable"),
+		},
+	}
+	if RetainedAssignmentFailure("id", "/workspace", "expiry", unsafeSetup) == nil {
+		t.Fatal("unsafe post-spawn cleanup was not retained")
+	}
+
+	shared := ClassifyError(NewSharedCheckoutError(2))
+	if shared.ActiveAssignments != 2 || shared.Recovery != "ruk acquire <branch>" {
+		t.Fatalf("shared checkout metadata = %#v", shared)
+	}
+}
+
+func TestClassifyLifecycleRetainedAssignmentPreservesCauseAndJSONMetadata(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("unexpected acquisition failure")
+	err := &lifecycle.RetainedAssignmentError{
+		AssignmentID: "assignment-1",
+		Path:         "/workspace",
+		ExpiresAt:    "2026-08-15T00:00:00.000Z",
+		Recovery:     "ruk release assignment-1",
+		Cause:        cause,
+	}
+	record := ClassifyError(err)
+	if record.Code != ResourceBusyCode || !record.Retryable || record.AssignmentID != "assignment-1" || record.Path != "/workspace" || record.ExpiresAt != "2026-08-15T00:00:00.000Z" || record.Recovery != "ruk release assignment-1" {
+		t.Fatalf("record = %#v", record)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("retained lifecycle error lost its original cause")
+	}
+	json := FormatJSONError(err)
+	for _, fragment := range []string{`"code":"RESOURCE_BUSY"`, `"assignmentId":"assignment-1"`, `"path":"/workspace"`, `"expiresAt":"2026-08-15T00:00:00.000Z"`, `"recovery":"ruk release assignment-1"`} {
+		if !strings.Contains(json, fragment) {
+			t.Errorf("JSON %q does not contain %q", json, fragment)
+		}
+	}
+	if human := FormatHumanError(err); !strings.Contains(human, "ruk release assignment-1") || !strings.Contains(human, "2026-08-15T00:00:00.000Z") || !strings.Contains(human, cause.Error()) {
+		t.Fatalf("human = %q", human)
+	}
+}
+
+func TestClassifyLifecycleRetainedAssignmentPreservesUnderlyingCategories(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		cause     error
+		code      ErrorCode
+		retryable bool
+	}{
+		{
+			name:      "dependency preparation",
+			cause:     &dependencies.DependencyPreparationError{Cause: errors.New("installer failed")},
+			code:      DependencyPreparationCode,
+			retryable: true,
+		},
+		{
+			name:      "port unavailable",
+			cause:     errors.New("Could not allocate an available port"),
+			code:      PortUnavailableCode,
+			retryable: true,
+		},
+		{
+			name:      "generic retained fallback",
+			cause:     errors.New("unexpected acquisition failure"),
+			code:      ResourceBusyCode,
+			retryable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := &lifecycle.RetainedAssignmentError{
+				AssignmentID: "assignment-1",
+				Path:         "/workspace",
+				ExpiresAt:    "2026-08-15T00:00:00.000Z",
+				Cause:        test.cause,
+			}
+			record := ClassifyError(err)
+			if record.Code != test.code || record.Retryable != test.retryable {
+				t.Fatalf("record = %#v, want code=%q retryable=%t", record, test.code, test.retryable)
+			}
+			if record.AssignmentID != "assignment-1" || record.Path != "/workspace" || record.ExpiresAt != "2026-08-15T00:00:00.000Z" {
+				t.Fatalf("recovery metadata = %#v", record)
+			}
+		})
+	}
+}
+
+func TestClassifyErrorSearchesJoinedCauses(t *testing.T) {
+	t.Parallel()
+
+	err := errors.Join(
+		errors.New("heartbeat failed"),
+		NewAssignmentActivityError("assignment-1", errors.New("EPERM")),
+	)
+	record := ClassifyError(err)
+	if record.Code != ResourceBusyCode || !record.Retryable {
+		t.Fatalf("record = %#v, want retryable resource busy", record)
+	}
+
+	if got := ClassifyError(errors.Join(
+		&dependencies.DependencyPreparationError{Cause: errors.New("dependency preparation aborted")},
+		&processpkg.IdentityUnavailableError{PID: 42},
+	)); got.Code != DependencyPreparationCode {
+		t.Fatalf("joined typed dependency code = %q, want %q", got.Code, DependencyPreparationCode)
+	}
+}
+
+func TestErrorFormattingAndJSONRequested(t *testing.T) {
+	t.Parallel()
+
+	err := errors.New("Workspace has uncommitted changes.")
+	json := FormatJSONError(err)
+	if !strings.HasSuffix(json, "\n") || !strings.Contains(json, `"code":"WORKSPACE_DIRTY"`) {
+		t.Fatalf("JSON = %q", json)
+	}
+	if got := FormatHumanError(err); got != "ruk: Workspace has uncommitted changes.\n" {
+		t.Fatalf("human = %q", got)
+	}
+
+	tests := []struct {
+		args []string
+		want bool
+	}{
+		{args: []string{"status", "--json"}, want: true},
+		{args: []string{"exec", "branch", "--", "tool", "--json"}, want: false},
+		{args: []string{"run", "tool", "--json"}, want: false},
+		{args: []string{"list", "--json", "--", "ignored"}, want: true},
+		{args: []string{"list", "--", "--json"}, want: false},
+	}
+	for _, test := range tests {
+		if got := JSONRequested(test.args); got != test.want {
+			t.Errorf("JSONRequested(%q) = %t, want %t", test.args, got, test.want)
+		}
+	}
+}

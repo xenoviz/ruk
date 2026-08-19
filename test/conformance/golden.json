@@ -1,0 +1,728 @@
+{
+  "schemaVersion": 1,
+  "normalizerVersion": 2,
+  "oracle": {
+    "runtime": "typescript",
+    "commit": "969d5c3ff8dc3f43e9e878677ea8c75189a8c09c",
+    "version": "0.1.2"
+  },
+  "scenarioCount": 19,
+  "scenarioFiles": [
+    {
+      "path": "test/conformance/fixtures/core.json",
+      "sha256": "5a6bb7f1b614d1535566f4b4eeaf163b86cf45aac2e9a680da5393de09319cab",
+      "scenarios": [
+        {
+          "name": "help",
+          "stepNames": [
+            "help"
+          ]
+        },
+        {
+          "name": "version",
+          "stepNames": [
+            "version"
+          ]
+        },
+        {
+          "name": "invalid-command",
+          "stepNames": [
+            "invalid-command"
+          ]
+        },
+        {
+          "name": "missing-branch",
+          "stepNames": [
+            "missing-branch"
+          ]
+        },
+        {
+          "name": "unknown-option",
+          "stepNames": [
+            "unknown-option"
+          ]
+        },
+        {
+          "name": "init-json",
+          "stepNames": [
+            "init-json"
+          ]
+        },
+        {
+          "name": "status-json",
+          "stepNames": [
+            "status-json"
+          ]
+        },
+        {
+          "name": "list-json",
+          "stepNames": [
+            "list-json"
+          ]
+        },
+        {
+          "name": "stats-json",
+          "stepNames": [
+            "stats-json"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "test/conformance/fixtures/lifecycle.json",
+      "sha256": "992ba712f799ffbf5f45b5342efbcd9021b169038c46f779d745746158f490b8",
+      "scenarios": [
+        {
+          "name": "lifecycle-sequence",
+          "stepNames": [
+            "init",
+            "status",
+            "list",
+            "stats",
+            "acquire",
+            "renew",
+            "release",
+            "warm",
+            "gc",
+            "create",
+            "remove"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "test/conformance/fixtures/state-migrations.json",
+      "sha256": "1d390022e8401883f0f49c98caae213cdc3d1252cbdb3b131f6e6f31930f687e",
+      "scenarios": [
+        {
+          "name": "state-v1-load",
+          "stepNames": [
+            "status",
+            "stats"
+          ]
+        },
+        {
+          "name": "state-v2-load",
+          "stepNames": [
+            "status",
+            "stats"
+          ]
+        },
+        {
+          "name": "state-v3-load",
+          "stepNames": [
+            "status",
+            "stats"
+          ]
+        },
+        {
+          "name": "state-v4-load",
+          "stepNames": [
+            "status",
+            "stats"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "test/conformance/fixtures/configuration.json",
+      "sha256": "0801fa32cc295523e1d7fedcc10086b21a04209815a25cc9c8853cae1c6bd538",
+      "scenarios": [
+        {
+          "name": "unknown-config-option",
+          "stepNames": [
+            "status"
+          ]
+        },
+        {
+          "name": "invalid-config-command",
+          "stepNames": [
+            "init"
+          ]
+        },
+        {
+          "name": "invalid-environment-command",
+          "stepNames": [
+            "status"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "test/conformance/fixtures/dependencies.json",
+      "sha256": "6ddf6ef57bb232c76f051b9eca164586fba373d462be925c7118277dc6e4d7cc",
+      "scenarios": [
+        {
+          "name": "managed-dependencies-ready",
+          "stepNames": [
+            "init",
+            "sync",
+            "status"
+          ]
+        },
+        {
+          "name": "unsupported-shared-dependencies",
+          "stepNames": [
+            "init"
+          ]
+        }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "help",
+      "steps": [
+        {
+          "name": "help",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "text",
+            "value": "Ruk — dependency-aware Git workspaces for parallel coding agents\n\nUsage:\n  ruk init [--json]\n  ruk create <branch> [--path <directory>] [--from <ref>] [--fetch] [--detach] [--json]\n  ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] [--json]\n  ruk renew <assignment-id> [--ttl <minutes>] [--json]\n  ruk release <assignment-id> [--force] [--json]\n  ruk sync [--allow-shared-checkout] [--json]\n  ruk run [--allow-shared-checkout] -- <command> [args...]\n  ruk exec <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...] -- <command> [args...]\n  ruk warm --count <n> [--from <ref>] [--fetch] [--json]\n  ruk shell <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...]\n  ruk list [--json]\n  ruk remove <path> [--force]\n  ruk status [--explain] [--json]\n  ruk stats [--disk] [--json]\n  ruk gc [--max-age <minutes>] [--apply] [--force-expired] [--json]\n  ruk update [--check] [--json]\n\nRuk shares immutable package content by default when it automatically detects\nsupported Bun and pnpm versions. A custom installCommand defaults to managed\nmode; set dependencyMode to \"shared\" explicitly only for a compatible custom\nBun or pnpm command.\n"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "version",
+      "steps": [
+        {
+          "name": "version",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "text",
+            "value": "<version>\n"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-command",
+      "steps": [
+        {
+          "name": "invalid-command",
+          "exitCode": 1,
+          "stdout": {
+            "kind": "text",
+            "value": ""
+          },
+          "stderr": {
+            "kind": "json",
+            "value": "{\"code\":\"INVALID_ARGUMENT\",\"message\":\"Unknown command unknown. Run ruk --help.\",\"retryable\":false,\"status\":\"error\"}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "missing-branch",
+      "steps": [
+        {
+          "name": "missing-branch",
+          "exitCode": 1,
+          "stdout": {
+            "kind": "text",
+            "value": ""
+          },
+          "stderr": {
+            "kind": "json",
+            "value": "{\"code\":\"INVALID_ARGUMENT\",\"message\":\"create requires exactly one branch name\",\"retryable\":false,\"status\":\"error\"}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "unknown-option",
+      "steps": [
+        {
+          "name": "unknown-option",
+          "exitCode": 1,
+          "stdout": {
+            "kind": "text",
+            "value": ""
+          },
+          "stderr": {
+            "kind": "json",
+            "value": "{\"code\":\"INVALID_ARGUMENT\",\"message\":\"Unknown option --unknown\",\"retryable\":false,\"status\":\"error\"}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "init-json",
+      "steps": [
+        {
+          "name": "init-json",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"status\":\"prepared\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        }
+      ],
+      "finalState": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+    },
+    {
+      "name": "status-json",
+      "steps": [
+        {
+          "name": "status-json",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"nodeModulesPresent\":false,\"path\":\"<repo>\",\"preparedFingerprint\":null,\"primaryCheckout\":true,\"reason\":\"not-prepared\",\"recovery\":\"ruk sync\",\"status\":\"sync-required\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "null"
+        }
+      ],
+      "finalState": "null"
+    },
+    {
+      "name": "list-json",
+      "steps": [
+        {
+          "name": "list-json",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "[{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"branch\":\"master\",\"expiresAt\":null,\"fingerprint\":null,\"head\":\"1422f510ebac1c2f36cda8c4724a2d376e2cc4e0\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"path\":\"<repo>\",\"primaryCheckout\":true,\"status\":\"not-prepared\"}]"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "null"
+        }
+      ],
+      "finalState": "null"
+    },
+    {
+      "name": "stats-json",
+      "steps": [
+        {
+          "name": "stats-json",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":0,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "null"
+        }
+      ],
+      "finalState": "null"
+    },
+    {
+      "name": "lifecycle-sequence",
+      "steps": [
+        {
+          "name": "init",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"status\":\"prepared\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "status",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":\"managed-install\",\"nodeModulesPresent\":true,\"path\":\"<repo>\",\"preparedFingerprint\":\"<fingerprint>\",\"primaryCheckout\":true,\"reason\":null,\"recovery\":null,\"status\":\"ready\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "list",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "[{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"branch\":\"master\",\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"head\":\"e94928412b24827770d00e420bfd422ac6b51370\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":\"managed-install\",\"path\":\"<repo>\",\"primaryCheckout\":true,\"status\":\"prepared\"}]"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "stats",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":1,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "acquire",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"assignmentId\":\"<uuid>\",\"branch\":\"agent/conformance\",\"expiresAt\":\"<timestamp>\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<workspace>\",\"ports\":{\"http\":\"<port>\"},\"reused\":false,\"status\":\"assigned\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":2,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"agent/conformance\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<workspace>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"},{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[{\"assignment\":{\"assignedAt\":\"<timestamp>\",\"expiresAt\":\"<timestamp>\",\"hostname\":\"runnervmzvulz\",\"id\":\"<uuid>\",\"lastActivityAt\":\"<timestamp>\",\"leaseDurationMinutes\":\"<duration>\",\"leaseKeepers\":[],\"owner\":\"fixture\",\"ports\":{\"http\":\"<port>\"},\"renewedAt\":\"<timestamp>\"},\"availableAt\":null,\"branch\":\"agent/conformance\",\"createdAt\":\"<timestamp>\",\"failure\":null,\"lifecycle\":\"assigned\",\"managed\":true,\"operationId\":null,\"path\":\"<workspace>\",\"processes\":[],\"updatedAt\":\"<timestamp>\"}]}"
+        },
+        {
+          "name": "renew",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"assignmentId\":\"<uuid>\",\"expiresAt\":\"<timestamp>\",\"path\":\"<workspace>\",\"status\":\"renewed\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":2,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"agent/conformance\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<workspace>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"},{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[{\"assignment\":{\"assignedAt\":\"<timestamp>\",\"expiresAt\":\"<timestamp>\",\"hostname\":\"runnervmzvulz\",\"id\":\"<uuid>\",\"lastActivityAt\":\"<timestamp>\",\"leaseDurationMinutes\":\"<duration>\",\"leaseKeepers\":[],\"owner\":\"fixture\",\"ports\":{\"http\":\"<port>\"},\"renewedAt\":\"<timestamp>\"},\"availableAt\":null,\"branch\":\"agent/conformance\",\"createdAt\":\"<timestamp>\",\"failure\":null,\"lifecycle\":\"assigned\",\"managed\":true,\"operationId\":null,\"path\":\"<workspace>\",\"processes\":[],\"updatedAt\":\"<timestamp>\"}]}"
+        },
+        {
+          "name": "release",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"assignmentId\":\"<uuid>\",\"cleanedProcesses\":0,\"path\":\"<workspace>\",\"status\":\"available\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":2,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"agent/conformance\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<workspace>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"},{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[{\"assignment\":null,\"availableAt\":\"<timestamp>\",\"branch\":\"agent/conformance\",\"createdAt\":\"<timestamp>\",\"failure\":null,\"lifecycle\":\"available\",\"managed\":true,\"operationId\":null,\"path\":\"<workspace>\",\"processes\":[],\"updatedAt\":\"<timestamp>\"}]}"
+        },
+        {
+          "name": "warm",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"available\":1,\"created\":[],\"requested\":1,\"status\":\"warmed\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":2,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"agent/conformance\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<workspace>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"},{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[{\"assignment\":null,\"availableAt\":\"<timestamp>\",\"branch\":\"agent/conformance\",\"createdAt\":\"<timestamp>\",\"failure\":null,\"lifecycle\":\"available\",\"managed\":true,\"operationId\":null,\"path\":\"<workspace>\",\"processes\":[],\"updatedAt\":\"<timestamp>\"}]}"
+        },
+        {
+          "name": "gc",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"expired\":[],\"removed\":[{\"lifecycle\":\"available\",\"path\":\"<workspace>\",\"reason\":\"older than max age\"}],\"status\":\"collected\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":2,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "create",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<workspace>\",\"status\":\"prepared\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":3,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"(detached)\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<workspace>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"},{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "remove",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "text",
+            "value": ""
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":3,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        }
+      ],
+      "finalState": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":3,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+    },
+    {
+      "name": "state-v1-load",
+      "steps": [
+        {
+          "name": "status",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"nodeModulesPresent\":false,\"path\":\"<repo>\",\"preparedFingerprint\":null,\"primaryCheckout\":true,\"reason\":\"not-prepared\",\"recovery\":\"ruk sync\",\"status\":\"sync-required\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"trees\":[],\"version\":1}"
+        },
+        {
+          "name": "stats",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":0,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"trees\":[],\"version\":1}"
+        }
+      ],
+      "finalState": "{\"trees\":[],\"version\":1}"
+    },
+    {
+      "name": "state-v2-load",
+      "steps": [
+        {
+          "name": "status",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"nodeModulesPresent\":false,\"path\":\"<repo>\",\"preparedFingerprint\":null,\"primaryCheckout\":true,\"reason\":\"not-prepared\",\"recovery\":\"ruk sync\",\"status\":\"sync-required\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"trees\":[],\"version\":2,\"workspaces\":[]}"
+        },
+        {
+          "name": "stats",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":0,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"trees\":[],\"version\":2,\"workspaces\":[]}"
+        }
+      ],
+      "finalState": "{\"trees\":[],\"version\":2,\"workspaces\":[]}"
+    },
+    {
+      "name": "state-v3-load",
+      "steps": [
+        {
+          "name": "status",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"nodeModulesPresent\":false,\"path\":\"<repo>\",\"preparedFingerprint\":null,\"primaryCheckout\":true,\"reason\":\"not-prepared\",\"recovery\":\"ruk sync\",\"status\":\"sync-required\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":3,\"workspaces\":[]}"
+        },
+        {
+          "name": "stats",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":0,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":3,\"workspaces\":[]}"
+        }
+      ],
+      "finalState": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":3,\"workspaces\":[]}"
+    },
+    {
+      "name": "state-v4-load",
+      "steps": [
+        {
+          "name": "status",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"nodeModulesPresent\":false,\"path\":\"<repo>\",\"preparedFingerprint\":null,\"primaryCheckout\":true,\"reason\":\"not-prepared\",\"recovery\":\"ruk sync\",\"status\":\"sync-required\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "stats",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":0,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":4,\"workspaces\":[]}"
+        }
+      ],
+      "finalState": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":4,\"workspaces\":[]}"
+    },
+    {
+      "name": "unknown-config-option",
+      "steps": [
+        {
+          "name": "status",
+          "exitCode": 1,
+          "stdout": {
+            "kind": "text",
+            "value": ""
+          },
+          "stderr": {
+            "kind": "json",
+            "value": "{\"code\":\"INVALID_ARGUMENT\",\"message\":\"Unknown .rukrc.json option: unknownOption\",\"retryable\":false,\"status\":\"error\"}"
+          }
+        }
+      ],
+      "finalState": "null"
+    },
+    {
+      "name": "invalid-config-command",
+      "steps": [
+        {
+          "name": "init",
+          "exitCode": 1,
+          "stdout": {
+            "kind": "text",
+            "value": ""
+          },
+          "stderr": {
+            "kind": "json",
+            "value": "{\"code\":\"INVALID_ARGUMENT\",\"message\":\".rukrc.json installCommand must be a non-empty string array\",\"retryable\":false,\"status\":\"error\"}"
+          }
+        }
+      ],
+      "finalState": "null"
+    },
+    {
+      "name": "invalid-environment-command",
+      "steps": [
+        {
+          "name": "status",
+          "exitCode": 1,
+          "stdout": {
+            "kind": "text",
+            "value": ""
+          },
+          "stderr": {
+            "kind": "json",
+            "value": "{\"code\":\"INVALID_ARGUMENT\",\"message\":\"RUK_INSTALL_COMMAND must be a JSON string array\",\"retryable\":false,\"status\":\"error\"}"
+          }
+        }
+      ],
+      "finalState": "null"
+    },
+    {
+      "name": "managed-dependencies-ready",
+      "steps": [
+        {
+          "name": "init",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"status\":\"prepared\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "sync",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"status\":\"ready\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":1,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        },
+        {
+          "name": "status",
+          "exitCode": 0,
+          "stdout": {
+            "kind": "json",
+            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":\"managed-install\",\"nodeModulesPresent\":true,\"path\":\"<repo>\",\"preparedFingerprint\":\"<fingerprint>\",\"primaryCheckout\":true,\"reason\":null,\"recovery\":null,\"status\":\"ready\"}"
+          },
+          "stderr": {
+            "kind": "text",
+            "value": ""
+          },
+          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":1,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+        }
+      ],
+      "finalState": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":1,\"preparationSkips\":1,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
+    },
+    {
+      "name": "unsupported-shared-dependencies",
+      "steps": [
+        {
+          "name": "init",
+          "exitCode": 1,
+          "stdout": {
+            "kind": "text",
+            "value": ""
+          },
+          "stderr": {
+            "kind": "json",
+            "value": "{\"code\":\"DEPENDENCY_PREPARATION_FAILED\",\"message\":\"Ruk's shared dependency backend does not support node\",\"retryable\":true,\"status\":\"error\"}"
+          }
+        }
+      ]
+    }
+  ]
+}

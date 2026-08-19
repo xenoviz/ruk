@@ -1,0 +1,31 @@
+package ports
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+
+	"github.com/xenoviz/ruk/internal/lock"
+	processpkg "github.com/xenoviz/ruk/internal/process"
+)
+
+func newNativeDirectoryLocker() (*lock.DirectoryLocker, error) {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		if err == nil {
+			err = errors.New("hostname is empty")
+		}
+		return nil, fmt.Errorf("resolve lock hostname: %w", err)
+	}
+	identity, err := processpkg.CurrentIdentity(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("resolve lock process identity: %w", err)
+	}
+	return lock.NewDirectoryLocker(lock.Config{
+		PID:             os.Getpid(),
+		Hostname:        hostname,
+		ProcessIdentity: identity,
+		Probe:           processpkg.Inspector{},
+	}), nil
+}

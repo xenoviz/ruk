@@ -1,0 +1,15 @@
+{
+  "name": "@xenoviz/ruk-darwin-x64",
+  "version": "0.3.0-beta.1",
+  "description": "Native Ruk binary for macOS x64",
+  "license": "MIT",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": ["native"],
+  "ruk": {
+    "distribution": "package",
+    "target": "darwin-x64",
+    "binary": "native/ruk",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

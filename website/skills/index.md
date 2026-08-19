@@ -1,9 +1,13 @@
 # Ruk workspace skill
 
-Ruk includes a maintained agent skill at
+Ruk 0.3 includes a maintained agent skill at
 `.agents/skills/ruk-workspaces/SKILL.md`. It teaches coding agents to acquire a
 prepared workspace, preserve the assignment fence, run tracked processes, and
 release the workspace safely.
+
+The installed Ruk command is a native Go binary. The skill works the same with
+the npm distribution and standalone executables; it does not require Node.js or
+Bun at command runtime.
 
 ## Install the skill
 
@@ -92,7 +96,8 @@ ruk release <returned-assignmentId> --json
 Use `ruk run -- ...` for long-lived agent processes so Ruk can record and stop
 them during release and renew the assignment while they remain active. Run
 `ruk sync --json` after changing a manifest, lockfile, package-manager
-configuration, or patch. Explicitly renew long idle editor-only work.
+configuration, or patch. Ruk intentionally does not treat file timestamps as
+activity; explicitly renew long idle editor-only work.
 
 ## Author a compatible skill
 

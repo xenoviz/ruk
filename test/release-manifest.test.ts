@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createReleaseManifest } from "../scripts/release-manifest.js";
-import { RELEASE_ASSET_NAMES } from "../src/release.js";
+import { RELEASE_ASSET_NAMES } from "../scripts/lib/release.js";
 
 async function writeReleaseFixtures(directory: string): Promise<void> {
   for (const name of RELEASE_ASSET_NAMES) {

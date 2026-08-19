@@ -1,6 +1,7 @@
 # Agent interface
 
-Use `--json` for automation. On success, Ruk writes exactly one JSON value and
+Ruk's installed command is a dependency-free native Go binary. Use `--json` for
+automation. On success, Ruk writes exactly one JSON value and
 a trailing newline to stdout. Human-mode progress and dependency-installer
 output use the terminal; JSON mode discards installer streams so verbose tools
 cannot grow an unbounded in-memory buffer. A failure exits nonzero, writes one
@@ -19,7 +20,9 @@ ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [
 The TTL defaults to 480 minutes. The owner defaults to `RUK_AGENT_ID`, then to
 `<hostname>:<pid>`. Managed Ruk operations renew the assignment automatically
 while they remain active; the TTL still controls how long an idle assignment
-remains current after the latest observed activity.
+remains current after the latest observed activity. The initial lease starts
+when acquisition preparation finishes and the ready assignment is published,
+so dependency installation time does not consume the requested TTL.
 
 ```json
 {
@@ -41,11 +44,13 @@ remains current after the latest observed activity.
 and release. `reused` reports whether Ruk assigned an available managed
 workspace instead of creating one.
 
-If dependency synchronization in a reused assignment aborts without being able
-to verify that its installer process tree is gone, acquisition fails with a
-retryable `RESOURCE_BUSY` error and retains the workspace. That error includes
-`assignmentId`, `path`, `expiresAt`, and a `recovery` release command so
-automation can preserve and later recover the exact fenced assignment. Ruk
+If a reused acquisition fails after ownership is published, Ruk retains the
+workspace and includes `assignmentId`, `path`, `expiresAt`, and a `recovery`
+release command in the error. The original machine-readable category is
+preserved, so dependency failures remain `DEPENDENCY_PREPARATION_FAILED`, port
+failures remain `PORT_UNAVAILABLE`, and an otherwise unclassified retained
+failure is retryable `RESOURCE_BUSY`. Automation can therefore respond to the
+cause while preserving and later recovering the exact fenced assignment. Ruk
 clears the incomplete acquisition marker before returning this error, so the
 exact recovery command is accepted when the caller decides cleanup is safe.
 The returned expiry is the current retained-state value, including a heartbeat
@@ -101,6 +106,11 @@ graceful termination or the worktree is dirty. `--force` force-kills surviving
 tracked process trees and discards tracked and untracked changes.
 Failed acquisition cleanup restores assigned ownership so the fenced workspace
 can be discovered and recovered.
+Dependency installers are tracked with the same native process identity rules
+as managed commands. If cancellation cannot prove that the installer tree is
+gone, Ruk keeps the assigned, failed, or preparing workspace fenced and reports
+a retryable cleanup failure. Applied GC can later drain that exact recorded
+process tree before collecting an unassigned failed preparation.
 Ordinary release is rejected while an acquisition handoff marker is active.
 Tracked, untracked, and ignored files are removed before a workspace enters the
 pool, except dependency projections recorded and integrity-validated by Ruk.
@@ -226,3 +236,15 @@ Stable categories include `INVALID_ARGUMENT`, `ASSIGNMENT_CONFLICT`,
 `OPERATION_FAILED`. Consumers must still ignore unknown fields and categories.
 Malformed `.rukrc.json` input and TTL values outside the supported date range
 are non-retryable `INVALID_ARGUMENT` errors raised before acquisition.
+
+## Update ownership
+
+`ruk update` is explicit and never runs in the background. An npm installation
+delegates the exact version to the package manager recorded by its durable
+distribution marker; standalone binaries verify the release manifest and
+replace their native executable atomically. On Windows, either distribution
+reports a scheduled update while a detached handoff waits for the running Ruk
+process to exit before replacing locked native files. Stable installations
+select stable releases. A current prerelease follows newer prereleases
+automatically, which keeps beta installations on the beta channel without a
+second flag.

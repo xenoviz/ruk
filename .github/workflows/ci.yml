@@ -13,122 +13,246 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: Linux quality (Node 24.14.0)
+  go-quality:
+    name: Go quality (Linux)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup Node.js
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: 1.24.6
+          cache: true
+      - name: Setup Bun for repository tooling
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - name: Setup Node.js for packaging tooling
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.14.0
           package-manager-cache: false
-      - name: Setup Bun
+      - name: Install repository tooling
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Validate repository and package policy
+        run: bun run check
+      - name: Verify native binary
+        run: bun run binary:check
+      - name: Verify cross-platform binaries
+        run: bun run binary:cross-check
+      - name: Verify native package archive
+        run: bun run pack:check
+      - name: Validate Go packages
+        run: go vet ./...
+      - name: Test Go packages
+        run: go test ./...
+      - name: Test Go packages with the race detector
+        run: go test -race ./...
+      - name: Build and exercise the Go package
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA} -X main.distribution=package" -o artifacts/ruk ./cmd/ruk
+          ./artifacts/ruk --version
+          ./artifacts/ruk --help >/dev/null
+
+  cross-compile:
+    name: Cross-compile ${{ matrix.output }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            output: ruk-linux-x64
+          - goos: linux
+            goarch: arm64
+            output: ruk-linux-arm64
+          - goos: linux
+            goarch: amd64
+            output: ruk-linux-x64-musl
+          - goos: darwin
+            goarch: amd64
+            output: ruk-macos-x64
+          - goos: darwin
+            goarch: arm64
+            output: ruk-macos-arm64
+          - goos: windows
+            goarch: amd64
+            output: ruk-windows-x64.exe
+          - goos: windows
+            goarch: arm64
+            output: ruk-windows-arm64.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: 1.24.6
+          cache: true
+      - name: Cross-compile release executable
+        shell: bash
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p artifacts
+          go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA} -X main.distribution=standalone" -o "artifacts/${{ matrix.output }}" ./cmd/ruk
+          test -s "artifacts/${{ matrix.output }}"
+
+  platform-smoke:
+    name: Platform smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: 1.24.6
+          cache: true
+      - name: Test host-specific Go packages
+        if: runner.os != 'Linux'
+        run: go test ./...
+      - name: Exercise native command
+        run: |
+          go run ./cmd/ruk --version
+          go run ./cmd/ruk --help
+
+  go-conformance:
+    name: Go vs frozen golden conformance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: 1.24.6
+          cache: true
+      - name: Setup Bun for conformance tooling
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
-      - name: Install
-        run: bun install --frozen-lockfile
-      - name: Validate repository
-        run: bun run check
-      - name: Test compiled Node.js distribution with coverage
-        run: bun run test:coverage
-      - name: Build and exercise native Linux executable
-        run: bun run binary:check
-      - name: Build and install package tarball
-        run: bun run pack:check
-      - name: Cross-compile release executables
-        run: bun run binary:cross-check
-      - name: Build documentation
-        run: bun run docs:build
+      - name: Install conformance tooling
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Test migration tooling
+        run: bun test test/conformance/*.test.ts test/benchmark.test.ts
+      - name: Compare Go CLI with frozen golden
+        env:
+          RUK_CONFORMANCE_VERBOSE: "1"
+        run: bun run test:conformance
 
-  compatibility:
-    name: Compatibility (${{ matrix.os }}, Node ${{ matrix.node }})
+  npm-smoke:
+    name: Native npm install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            node: 22.14.0
+            template: npm/ruk-linux-x64
+            binary: ruk
+          - os: macos-15-intel
+            template: npm/ruk-darwin-x64
+            binary: ruk
           - os: windows-latest
-            node: 22.14.0
-          - os: windows-latest
-            node: 24.14.0
-          - os: macos-latest
-            node: 24.14.0
-    runs-on: ${{ matrix.os }}
+            template: npm/ruk-windows-x64
+            binary: ruk.exe
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup Node.js
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: 1.24.6
+          cache: true
+      - name: Setup Node.js for npm packaging
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24.14.0
           package-manager-cache: false
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.3.14
-      - name: Install
-        run: bun install --frozen-lockfile
-      - name: Test compiled Node.js distribution
-        run: bun run test:node
+      - name: Test npm packaging seams
+        if: runner.os == 'Linux'
+        run: node --experimental-strip-types --test test/npm/*.test.ts
+      - name: Build and stage package-mode binary
+        shell: bash
+        env:
+          PACKAGE_TEMPLATE: ${{ matrix.template }}
+          PACKAGE_BINARY: ${{ matrix.binary }}
+        run: |
+          mkdir -p artifacts
+          go build -trimpath -ldflags "-s -w -X main.version=0.3.0-beta.1 -X main.distribution=package" -o "artifacts/$PACKAGE_BINARY" ./cmd/ruk
+          node scripts/npm/package.mjs --kind platform --version 0.3.0-beta.1 --template "$PACKAGE_TEMPLATE" --binary "artifacts/$PACKAGE_BINARY" --output platform-package
+          node scripts/npm/package.mjs --kind root --version 0.3.0-beta.1 --template npm/ruk --scripts scripts/npm --license LICENSE --output root-package
+          npm pack --ignore-scripts --pack-destination artifacts ./platform-package
+          npm pack --ignore-scripts --pack-destination artifacts ./root-package
+      - name: Install staged packages
+        shell: bash
+        run: |
+          mkdir consumer
+          cd consumer
+          npm init --yes
+          PLATFORM_TARBALL=$(find ../artifacts -maxdepth 1 -name 'xenoviz-ruk-*-0.3.0-beta.1.tgz' ! -name 'xenoviz-ruk-0.3.0-beta.1.tgz' -print -quit)
+          test -n "$PLATFORM_TARBALL"
+          npm install --foreground-scripts ../artifacts/xenoviz-ruk-0.3.0-beta.1.tgz "$PLATFORM_TARBALL"
+      - name: Exercise native npm command on POSIX
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          test "$(head -c 2 consumer/node_modules/@xenoviz/ruk/bin/ruk)" != '#!'
+          consumer/node_modules/.bin/ruk --version | grep -Fx 0.3.0-beta.1
+          consumer/node_modules/.bin/ruk --help >/dev/null
+      - name: Exercise native npm command on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $command = Resolve-Path consumer/node_modules/.bin/ruk.exe
+          if (-not (Test-Path $command -PathType Leaf)) { throw "Native ruk.exe was not installed" }
+          if ((& $command --version) -ne "0.3.0-beta.1") { throw "Native npm version check failed" }
+          & $command --help | Out-Null
 
-  macos-node-22:
-    name: Compatibility (macos-latest, Node 22.14.0)
-    if: github.event_name == 'push'
-    runs-on: macos-latest
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.14.0
-          package-manager-cache: false
-      - name: Setup Bun
+      - name: Setup Bun for documentation tooling
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
-      - name: Install
-        run: bun install --frozen-lockfile
-      - name: Test compiled Node.js distribution
-        run: bun run test:node
-
-  native:
-    name: Native executable (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.3.14
-      - name: Install
-        run: bun install --frozen-lockfile
-      - name: Build and exercise native executable
-        run: bun run binary:check
+      - name: Install documentation tooling
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build documentation
+        run: bun run docs:build
 
   required:
     name: Required checks
     if: always()
-    needs: [quality, compatibility, macos-node-22, native]
+    needs: [go-quality, cross-compile, platform-smoke, go-conformance, npm-smoke, docs]
     runs-on: ubuntu-latest
     steps:
       - name: Confirm required jobs passed
         env:
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
-          MACOS_NODE_22_RESULT: ${{ needs.macos-node-22.result }}
-          NATIVE_RESULT: ${{ needs.native.result }}
+          GO_QUALITY_RESULT: ${{ needs.go-quality.result }}
+          CROSS_COMPILE_RESULT: ${{ needs.cross-compile.result }}
+          PLATFORM_SMOKE_RESULT: ${{ needs.platform-smoke.result }}
+          GO_CONFORMANCE_RESULT: ${{ needs.go-conformance.result }}
+          NPM_SMOKE_RESULT: ${{ needs.npm-smoke.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
         run: |
-          test "$QUALITY_RESULT" = success
-          test "$COMPATIBILITY_RESULT" = success
-          test "$NATIVE_RESULT" = success
-          test "$MACOS_NODE_22_RESULT" = success || test "$MACOS_NODE_22_RESULT" = skipped
+          test "$GO_QUALITY_RESULT" = success
+          test "$CROSS_COMPILE_RESULT" = success
+          test "$PLATFORM_SMOKE_RESULT" = success
+          test "$GO_CONFORMANCE_RESULT" = success
+          test "$NPM_SMOKE_RESULT" = success
+          test "$DOCS_RESULT" = success
