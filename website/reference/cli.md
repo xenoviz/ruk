@@ -35,7 +35,9 @@ ruk acquire <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [
 Assign an available managed workspace or create one. The default TTL is 480
 minutes. `--fetch` refreshes the remote used by `--from` before assignment.
 Without `--from`, it resolves the primary remote's advertised default branch.
-Repeated `--port` options reserve named cooperative host-local ports.
+Ruk pins the start point to an immutable commit in the invoking checkout
+before assignment, so reused pool slots cannot start from a stale detached
+HEAD. Repeated `--port` options reserve named cooperative host-local ports.
 The TTL is the idle window; managed operations renew it while active.
 
 ### `ruk renew <assignment-id>`
@@ -88,7 +90,8 @@ ruk warm --count <n> [--from <ref>] [--fetch] [--json]
 
 Ensure that the pool contains the requested number of available prepared
 workspaces. The count is a target, so an already-warm pool creates nothing.
-Capacity checks are serialized with acquisition.
+Capacity checks are serialized with acquisition. New slots are created from
+the same resolved commit used for capacity validation.
 
 ### `ruk status [--explain] [--json]`
 
@@ -102,6 +105,16 @@ assignment count.
 
 List Git worktrees with Ruk preparation, assignment, activity, and
 primary-checkout information.
+
+### `ruk worktrees [--all] [--json]`
+
+List every worktree Ruk created for the repository, tracked per folder with
+its branch, creating operation (`acquire`, `warm`, or `create`), timestamps,
+and whether the folder still exists on disk. Entries are removed when Ruk
+removes the worktree. `--all` lists every indexed repository on this host and
+works outside a Git checkout. It reads the display-only host index at
+`~/.ruk/repositories.json`; per-repo registries stay authoritative, deleted
+repositories are pruned on write, and empty registries are omitted.
 
 ### `ruk stats [--disk] [--json]`
 

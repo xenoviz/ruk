@@ -38,7 +38,10 @@ type MutationAdapterOptions struct {
 	NewID func() string
 	Sync  SyncRouteOperation
 	// StartPointResolver resolves acquire --from before any lifecycle state or
-	// worktree mutation. Nil selects the same resolver used by create.
+	// worktree mutation. Nil selects the acquire resolver that pins an
+	// immutable commit in the invoking checkout. Create keeps its own lazy
+	// resolver because ruk create has no reuse path and always resolves refs
+	// in the invoking checkout.
 	StartPointResolver CreateStartPointResolver
 
 	CreateWorkspace func(git.Repository) (CreateWorkspace, error)
@@ -50,6 +53,10 @@ type MutationAdapterOptions struct {
 	ReleaseGit       func(git.Repository) (lifecycle.ReleaseGitter, error)
 	ReleaseProcesses func() lifecycle.ReleaseProcesser
 	PortRegistry     func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error)
+	// WorktreeRecorder builds the durable per-repository registry that tracks
+	// every worktree Ruk creates. Nil selects the native registry beside the
+	// repository state file.
+	WorktreeRecorder WorktreeRecorderFactory
 }
 
 // heldWorkspaceLocker is used only while acquireRepository already owns the
@@ -129,8 +136,12 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 		if err != nil {
 			return CreateCommandResult{}, err
 		}
+		recorder, err := resolveWorktreeRecorder(ctx, options.WorktreeRecorder, input.Repository)
+		if err != nil {
+			return CreateCommandResult{}, err
+		}
 		command := NewCreateCommand(CreateCommandOptions{
-			Workspace: workspace, Fence: fence,
+			Workspace: recordingCreateWorkspace{inner: workspace, recorder: recorder}, Fence: fence,
 			Sync: func(ctx context.Context, request CreateSyncRequest) (SyncCommandResult, error) {
 				return syncRoute(ctx, SyncCommandInput{
 					Repository: request.Repository, JSON: request.JSON, Emit: false, Output: request.Output,
@@ -155,7 +166,9 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 
 	return MutationAdapters{
 		Sync: syncRoute, Create: createRoute, Acquire: acquireRoute,
-		Release: releaseRoute, Remove: func(ctx context.Context, input RemoveInput) error { return removeRepository(ctx, input) },
+		Release: releaseRoute, Remove: func(ctx context.Context, input RemoveInput) error {
+			return removeRepository(ctx, input, options.WorktreeRecorder)
+		},
 	}, nil
 }
 
@@ -355,13 +368,31 @@ func defaultReleaseGit(repository git.Repository) (lifecycle.ReleaseGitter, erro
 	return releaseGitAdapter{service: service}, nil
 }
 
+// defaultAcquireStartPoint pins the start point to an immutable commit in the
+// invoking checkout before any lifecycle state or worktree mutation. Reuse
+// assignment executes Git inside the recycled slot, where worktree-relative
+// refs such as HEAD resolve against the slot's stale detached commit; pinning
+// in the invoking checkout makes fresh and reused acquisition start from the
+// same commit and also fences against the ref moving mid-acquisition.
+func defaultAcquireStartPoint(ctx context.Context, repository git.Repository, requested string, fetch bool) (string, error) {
+	startPoint, err := defaultCreateStartPoint(ctx, repository, requested, fetch)
+	if err != nil {
+		return "", err
+	}
+	result, err := runGit(ctx, repository.Root, nil, []string{"rev-parse", "--verify", startPoint + "^{commit}"})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result.Stdout), nil
+}
+
 func acquireRepository(ctx context.Context, repository git.Repository, input AcquireOperationInput, now func() time.Time, newID func() string, options MutationAdapterOptions, syncRoute SyncRouteOperation) (lifecycle.AcquisitionResult, error) {
 	if err := validateRepositoryContext(repository); err != nil {
 		return lifecycle.AcquisitionResult{}, err
 	}
 	resolver := options.StartPointResolver
 	if resolver == nil {
-		resolver = defaultCreateStartPoint
+		resolver = defaultAcquireStartPoint
 	}
 	startPoint, err := resolver(ctx, repository, input.From, input.Fetch)
 	if err != nil {
@@ -378,10 +409,15 @@ func acquireRepository(ctx context.Context, repository git.Repository, input Acq
 	if worktreeFactory == nil {
 		worktreeFactory = defaultAcquireWorktree
 	}
-	worktree, err := worktreeFactory(repository)
+	innerWorktree, err := worktreeFactory(repository)
 	if err != nil {
 		return lifecycle.AcquisitionResult{}, err
 	}
+	recorder, err := resolveWorktreeRecorder(ctx, options.WorktreeRecorder, repository)
+	if err != nil {
+		return lifecycle.AcquisitionResult{}, err
+	}
+	worktree := lifecycle.AcquisitionWorktree(recordingAcquisitionWorktree{inner: innerWorktree, recorder: recorder})
 	prepare := func(ctx context.Context, root string) (dependencies.EnsureResult, error) {
 		repo := repository
 		repo.Root = root
@@ -513,7 +549,7 @@ func assignmentProjections(snapshot *state.State, assignmentID string) []string 
 	return nil
 }
 
-func removeRepository(ctx context.Context, input RemoveInput) error {
+func removeRepository(ctx context.Context, input RemoveInput, recorderFactory WorktreeRecorderFactory) error {
 	if err := validateRepositoryContext(input.Repository); err != nil {
 		return err
 	}
@@ -522,6 +558,10 @@ func removeRepository(ctx context.Context, input RemoveInput) error {
 		return err
 	}
 	store := state.NewStore(input.Repository.CommonDir, locker)
+	recorder, err := resolveWorktreeRecorder(ctx, recorderFactory, input.Repository)
+	if err != nil {
+		return err
+	}
 	client := git.NewClient(nil)
 	return (RemoveCommand{
 		Canonicalize: func(path string) (string, error) { return filepath.EvalSymlinks(path) },
@@ -545,7 +585,10 @@ func removeRepository(ctx context.Context, input RemoveInput) error {
 			if err != nil {
 				return err
 			}
-			return store.Update(ctx, func(current *state.State) error { delete(current.Trees, key); return nil })
+			if err := store.Update(ctx, func(current *state.State) error { delete(current.Trees, key); return nil }); err != nil {
+				return err
+			}
+			return recorder.ForgetWorktree(ctx, path)
 		},
 	}).Run(ctx, input)
 }

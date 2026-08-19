@@ -246,6 +246,11 @@ func runtimeWarm(ctx context.Context, repository git.Repository, request WarmReq
 	if err != nil {
 		return lifecycle.WarmResult{}, err
 	}
+	recorder, err := resolveWorktreeRecorder(ctx, options.Mutations.WorktreeRecorder, repository)
+	if err != nil {
+		return lifecycle.WarmResult{}, err
+	}
+	worktree = lifecycle.WarmWorkspaceService(recordingWarmWorkspace{inner: worktree, recorder: recorder})
 	heads := options.WarmHeads
 	if heads == nil {
 		heads = func(ctx context.Context, repository git.Repository) (map[string]string, error) {
@@ -369,10 +374,14 @@ func runtimeGC(ctx context.Context, repository git.Repository, options lifecycle
 	if processes == nil {
 		return lifecycle.GCResult{}, errors.New("native GC process adapter is unavailable")
 	}
+	recorder, err := resolveWorktreeRecorder(ctx, runtimeOptions.Mutations.WorktreeRecorder, repository)
+	if err != nil {
+		return lifecycle.GCResult{}, err
+	}
 	paths := state.StorePaths(repository.CommonDir)
 	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{
 		Reader: store, Lifecycle: service, Release: release, Git: workspace,
-		Processes: processes, TreeState: stateTreeDeleter{store: store}, Locker: locker, LocksRoot: paths.Locks,
+		Processes: processes, TreeState: stateTreeDeleter{store: store, recorder: recorder}, Locker: locker, LocksRoot: paths.Locks,
 		Canonicalize: func(_ context.Context, path string) (string, error) { return canonicalRuntimePath(path) },
 	})
 	return gc.Run(ctx, options)
@@ -424,14 +433,23 @@ func canonicalRuntimePath(path string) (string, error) {
 	}
 }
 
-type stateTreeDeleter struct{ store *state.Store }
+type stateTreeDeleter struct {
+	store    *state.Store
+	recorder WorktreeRecorder
+}
 
 func (deleter stateTreeDeleter) DeleteTreeState(ctx context.Context, path string) error {
 	key, err := state.TreeKey(path)
 	if err != nil {
 		return err
 	}
-	return deleter.store.Update(ctx, func(current *state.State) error { delete(current.Trees, key); return nil })
+	if err := deleter.store.Update(ctx, func(current *state.State) error { delete(current.Trees, key); return nil }); err != nil {
+		return err
+	}
+	if deleter.recorder != nil {
+		return deleter.recorder.ForgetWorktree(ctx, path)
+	}
+	return nil
 }
 
 type gcWorkspaceAdapter struct {

@@ -5,6 +5,15 @@ versioning.
 
 ## Unreleased
 
+- Track every worktree created by `acquire`, `warm`, and `create` in a
+  per-repository registry at `<git-common-dir>/ruk/worktrees.json`, removed
+  again by `remove`, applied `gc`, and create-failure cleanup.
+- Add `ruk worktrees [--all] [--json]` to list tracked worktrees for the
+  current repository or, with `--all`, across every repository named by the
+  new per-user discovery index at `~/.ruk/repositories.json`.
+- Pin acquire and warm start points to an immutable commit in the invoking
+  checkout before assignment, so a reused pool slot can no longer adopt its
+  stale detached `HEAD`.
 - Skip the Windows release-to-release update smoke when the current tag is a
   prerelease and no prior ready Windows executable exists on that channel,
   instead of expecting a stable install to jump onto beta.
