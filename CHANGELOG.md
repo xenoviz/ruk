@@ -14,6 +14,9 @@ versioning.
 - Pin acquire and warm start points to an immutable commit in the invoking
   checkout before assignment, so a reused pool slot can no longer adopt its
   stale detached `HEAD`.
+- Skip the Windows release-to-release update smoke when the current tag is a
+  prerelease and no prior ready Windows executable exists on that channel,
+  instead of expecting a stable install to jump onto beta.
 
 ## 0.3.0-beta.1 - 2026-08-16
 

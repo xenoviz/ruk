@@ -145,7 +145,7 @@ jobs:
       - name: Install conformance tooling
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Test migration tooling
-        run: bun test test/conformance/*.test.ts test/benchmark.test.ts
+        run: bun test test/conformance/*.test.ts test/benchmark.test.ts test/release-update-verification.test.ts
       - name: Compare Go CLI with frozen golden
         env:
           RUK_CONFORMANCE_VERBOSE: "1"
