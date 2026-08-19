@@ -111,7 +111,7 @@ and the tracked Ruk-created worktrees sorted by `path`:
 none are tracked.
 
 `ruk worktrees --all --json` aggregates those per-repository objects from the
-host index at `~/.config/ruk/host/repositories.json`:
+host index at `~/.ruk/repositories.json`:
 
 ```json
 {

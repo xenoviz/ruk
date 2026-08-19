@@ -132,11 +132,11 @@ worktree created by acquire, warm, and create, keyed per folder. Entries are
 removed when Ruk removes the worktree. Like state, the registry is an
 optimization — Git remains authoritative for which worktrees exist.
 
-A host index at `~/.config/ruk/host/repositories.json` sits beside the port
-registry and maps repositories to those per-repo files. It is display-only
-discovery metadata: it never authorizes a mutation, and every registry it
-points at is independently validated on read. Deleted repositories are pruned
-on write.
+A host index at `~/.ruk/repositories.json` maps repositories to those per-repo
+files. The index lives in the per-user `~/.ruk` folder, while the port registry
+remains at `~/.config/ruk/host`. It is display-only discovery metadata: it never
+authorizes a mutation, and every registry it points at is independently
+validated on read. Deleted repositories are pruned on write.
 
 ## Workspace lifecycle
 

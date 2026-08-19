@@ -54,6 +54,40 @@ func newTestStore(t *testing.T, root string, exists func(string) bool, now func(
 	return store
 }
 
+func TestDefaultIndexRootUsesHomeRukFolder(t *testing.T) {
+	home := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
+	got, err := worktrees.DefaultIndexRoot()
+	if err != nil {
+		t.Fatalf("DefaultIndexRoot returned an error: %v", err)
+	}
+	want := filepath.Join(home, ".ruk")
+	if got != want {
+		t.Fatalf("DefaultIndexRoot = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultIndexRootFallsBackToUserConfigDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX HOME/XDG_CONFIG_HOME fallback is the documented Unix path")
+	}
+	config := t.TempDir()
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", config)
+	got, err := worktrees.DefaultIndexRoot()
+	if err != nil {
+		t.Fatalf("DefaultIndexRoot returned an error: %v", err)
+	}
+	want := filepath.Join(config, "ruk")
+	if got != want {
+		t.Fatalf("DefaultIndexRoot fallback = %q, want %q", got, want)
+	}
+}
+
 func TestIndexStoreReadMissingReturnsCanonicalEmptyIndex(t *testing.T) {
 	t.Parallel()
 

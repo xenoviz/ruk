@@ -174,7 +174,7 @@ cleanup). Git remains authoritative for which worktrees exist; the registry
 records which of them Ruk created.
 
 `ruk worktrees --all` works outside a repository. It reads the host index at
-`~/.config/ruk/host/repositories.json` and aggregates each per-repo registry.
+`~/.ruk/repositories.json` and aggregates each per-repo registry.
 The index is display-only discovery metadata: it maps repositories to their
 registries and contains no worktree records. Per-repo registries stay
 authoritative. Deleted repositories are skipped on read and pruned from the

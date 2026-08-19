@@ -64,13 +64,13 @@ type IndexStore struct {
 	exists   func(string) bool
 }
 
-// DefaultIndexRoot returns a stable per-user path, deliberately avoiding
-// os.TempDir. The fallback only applies when the platform cannot report a
-// home directory, in which case UserConfigDir is the least surprising choice.
+// DefaultIndexRoot returns the stable per-user ~/.ruk folder, uniform across
+// operating systems and deliberately avoiding os.TempDir. The UserConfigDir
+// fallback only applies when the platform cannot report a home directory.
 func DefaultIndexRoot() (string, error) {
 	home, homeErr := os.UserHomeDir()
 	if homeErr == nil && strings.TrimSpace(home) != "" {
-		return filepath.Join(home, ".config", "ruk", "host"), nil
+		return filepath.Join(home, ".ruk"), nil
 	}
 	config, configErr := os.UserConfigDir()
 	if configErr != nil {
@@ -79,7 +79,7 @@ func DefaultIndexRoot() (string, error) {
 		}
 		return "", fmt.Errorf("resolve per-user repository index root: %w", configErr)
 	}
-	return filepath.Join(config, "ruk", "host"), nil
+	return filepath.Join(config, "ruk"), nil
 }
 
 // EmptyIndex returns the canonical zero index.
