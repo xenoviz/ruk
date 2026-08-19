@@ -17,8 +17,9 @@ import (
 )
 
 func TestHandleWorktreesSortsByPathAndReportsExistence(t *testing.T) {
-	later := filepath.Join(string(filepath.Separator), "z-workspace")
-	earlier := filepath.Join(string(filepath.Separator), "a-workspace")
+	base := t.TempDir()
+	later := filepath.Join(base, "z-workspace")
+	earlier := filepath.Join(base, "a-workspace")
 	laterKey, err := state.TreeKey(later)
 	if err != nil {
 		t.Fatal(err)
@@ -229,12 +230,15 @@ func TestParseWorktreesJSONAndRejectsPositionalArguments(t *testing.T) {
 }
 
 func TestHandleAllWorktreesAggregatesSortedRepositories(t *testing.T) {
-	laterRoot := filepath.Join(string(filepath.Separator), "z-repo")
-	earlierRoot := filepath.Join(string(filepath.Separator), "a-repo")
+	base := t.TempDir()
+	laterRoot := filepath.Join(base, "z-repo")
+	earlierRoot := filepath.Join(base, "a-repo")
 	laterCommon := filepath.Join(laterRoot, ".git")
 	earlierCommon := filepath.Join(earlierRoot, ".git")
-	missingCommon := filepath.Join(string(filepath.Separator), "missing", ".git")
-	emptyCommon := filepath.Join(string(filepath.Separator), "empty", ".git")
+	missingRoot := filepath.Join(base, "missing")
+	emptyRoot := filepath.Join(base, "empty")
+	missingCommon := filepath.Join(missingRoot, ".git")
+	emptyCommon := filepath.Join(emptyRoot, ".git")
 	laterPath := filepath.Join(laterRoot, "z-slot")
 	earlierLate := filepath.Join(earlierRoot, "z-slot")
 	earlierEarly := filepath.Join(earlierRoot, "a-slot")
@@ -273,8 +277,8 @@ func TestHandleAllWorktreesAggregatesSortedRepositories(t *testing.T) {
 				Repositories: map[string]worktrees.RepositoryRecord{
 					laterKey:   {CommonDir: laterCommon, Root: laterRoot, UpdatedAt: "2026-08-19T11:00:00.000Z"},
 					earlierKey: {CommonDir: earlierCommon, Root: earlierRoot, UpdatedAt: "2026-08-19T10:00:00.000Z"},
-					missingKey: {CommonDir: missingCommon, Root: filepath.Join(string(filepath.Separator), "missing"), UpdatedAt: "2026-08-19T09:00:00.000Z"},
-					emptyKey:   {CommonDir: emptyCommon, Root: filepath.Join(string(filepath.Separator), "empty"), UpdatedAt: "2026-08-19T08:00:00.000Z"},
+					missingKey: {CommonDir: missingCommon, Root: missingRoot, UpdatedAt: "2026-08-19T09:00:00.000Z"},
+					emptyKey:   {CommonDir: emptyCommon, Root: emptyRoot, UpdatedAt: "2026-08-19T08:00:00.000Z"},
 				},
 			}, nil
 		},
@@ -325,7 +329,7 @@ func TestHandleAllWorktreesRequiresDependenciesAndWrapsRegistryErrors(t *testing
 	if err == nil || !strings.Contains(err.Error(), "worktrees query dependencies are incomplete") {
 		t.Fatalf("empty dependencies error = %v", err)
 	}
-	root := filepath.Join(string(filepath.Separator), "broken")
+	root := filepath.Join(t.TempDir(), "broken")
 	commonDir := filepath.Join(root, ".git")
 	key, err := state.TreeKey(commonDir)
 	if err != nil {

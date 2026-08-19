@@ -26,6 +26,17 @@ type runtimeDefaultsWarmWorktree struct {
 
 type runtimeShellTerminalStub struct{ called bool }
 
+type testMutexLocker struct{ mu sync.Mutex }
+
+func (locker *testMutexLocker) With(ctx context.Context, _ string, fn func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	locker.mu.Lock()
+	defer locker.mu.Unlock()
+	return fn()
+}
+
 func TestRetainedRuntimeExecutionErrorUsesCurrentAssignmentExpiry(t *testing.T) {
 	acquired := AcquireResult{AcquireRecord: AcquireRecord{
 		AssignmentID: "assignment-exec",
@@ -205,7 +216,7 @@ func TestStateTreeDeleterForgetsWorktreeAfterDeletingTreeRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := state.NewStore(filepath.Join(root, "common"), lock.NewDirectoryLocker(lock.Config{}))
+	store := state.NewStore(filepath.Join(root, "common"), &testMutexLocker{})
 	if err := store.Update(context.Background(), func(current *state.State) error {
 		current.Trees[key] = state.TreeRecord{
 			Path: path, Fingerprint: "fingerprint", Mode: "managed-install",
@@ -235,7 +246,7 @@ func TestStateTreeDeleterForgetsWorktreeAfterDeletingTreeRecord(t *testing.T) {
 func TestStateTreeDeleterSurfacesForgetFailureAfterDeletingTreeRecord(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "workspace")
-	store := state.NewStore(filepath.Join(root, "common"), lock.NewDirectoryLocker(lock.Config{}))
+	store := state.NewStore(filepath.Join(root, "common"), &testMutexLocker{})
 	recorder := &capturingWorktreeRecorder{forgetErr: errors.New("forget failed")}
 	deleter := stateTreeDeleter{store: store, recorder: recorder}
 	if err := deleter.DeleteTreeState(context.Background(), path); err == nil || !strings.Contains(err.Error(), "forget failed") {
@@ -245,7 +256,7 @@ func TestStateTreeDeleterSurfacesForgetFailureAfterDeletingTreeRecord(t *testing
 
 func TestStateTreeDeleterConcurrentForgetKeepsEveryCall(t *testing.T) {
 	root := t.TempDir()
-	store := state.NewStore(filepath.Join(root, "common"), lock.NewDirectoryLocker(lock.Config{}))
+	store := state.NewStore(filepath.Join(root, "common"), &testMutexLocker{})
 	recorder := &capturingWorktreeRecorder{}
 	deleter := stateTreeDeleter{store: store, recorder: recorder}
 	const count = 8

@@ -137,7 +137,7 @@ func TestWorktreeStoreRejectsInvalidInput(t *testing.T) {
 func TestWorktreeRegistryDecodeFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	workspace := filepath.Join(string(filepath.Separator), "workspaces", "repo-agent-task")
+	workspace := filepath.Join(t.TempDir(), "repo-agent-task")
 	key, err := state.TreeKey(workspace)
 	if err != nil {
 		t.Fatalf("TreeKey returned an error: %v", err)
@@ -170,15 +170,34 @@ func TestWorktreeRegistryDecodeFailsClosed(t *testing.T) {
 		t.Fatalf("valid registry failed to decode: %v", err)
 	}
 	cases := map[string][]byte{
-		"not JSON":        []byte("{"),
-		"wrong version":   mutate(func(document map[string]any) { document["version"] = 2 }),
-		"missing map":     mutate(func(document map[string]any) { delete(document, "worktrees") }),
-		"mismatched key":  mutate(func(document map[string]any) { worktrees := document["worktrees"].(map[string]any); worktrees["0123456789abcdef0123"] = worktrees[key]; delete(worktrees, key) }),
-		"relative path":   mutate(func(document map[string]any) { record := document["worktrees"].(map[string]any)[key].(map[string]any); record["path"] = "relative/path" }),
-		"empty branch":    mutate(func(document map[string]any) { record := document["worktrees"].(map[string]any)[key].(map[string]any); record["branch"] = "" }),
-		"unknown source":  mutate(func(document map[string]any) { record := document["worktrees"].(map[string]any)[key].(map[string]any); record["source"] = "adopted" }),
-		"bad timestamp":   mutate(func(document map[string]any) { record := document["worktrees"].(map[string]any)[key].(map[string]any); record["createdAt"] = "yesterday" }),
-		"bad update time": mutate(func(document map[string]any) { record := document["worktrees"].(map[string]any)[key].(map[string]any); record["updatedAt"] = "2026-08-19T10:00:00Z" }),
+		"not JSON":      []byte("{"),
+		"wrong version": mutate(func(document map[string]any) { document["version"] = 2 }),
+		"missing map":   mutate(func(document map[string]any) { delete(document, "worktrees") }),
+		"mismatched key": mutate(func(document map[string]any) {
+			worktrees := document["worktrees"].(map[string]any)
+			worktrees["0123456789abcdef0123"] = worktrees[key]
+			delete(worktrees, key)
+		}),
+		"relative path": mutate(func(document map[string]any) {
+			record := document["worktrees"].(map[string]any)[key].(map[string]any)
+			record["path"] = "relative/path"
+		}),
+		"empty branch": mutate(func(document map[string]any) {
+			record := document["worktrees"].(map[string]any)[key].(map[string]any)
+			record["branch"] = ""
+		}),
+		"unknown source": mutate(func(document map[string]any) {
+			record := document["worktrees"].(map[string]any)[key].(map[string]any)
+			record["source"] = "adopted"
+		}),
+		"bad timestamp": mutate(func(document map[string]any) {
+			record := document["worktrees"].(map[string]any)[key].(map[string]any)
+			record["createdAt"] = "yesterday"
+		}),
+		"bad update time": mutate(func(document map[string]any) {
+			record := document["worktrees"].(map[string]any)[key].(map[string]any)
+			record["updatedAt"] = "2026-08-19T10:00:00Z"
+		}),
 	}
 	for name, data := range cases {
 		if _, err := state.DecodeWorktreeRegistry(data, "worktrees.json"); err == nil {

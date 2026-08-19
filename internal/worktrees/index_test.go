@@ -72,8 +72,8 @@ func TestDefaultIndexRootUsesHomeRukFolder(t *testing.T) {
 }
 
 func TestDefaultIndexRootFallsBackToUserConfigDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX HOME/XDG_CONFIG_HOME fallback is the documented Unix path")
+	if runtime.GOOS != "linux" {
+		t.Skip("the XDG_CONFIG_HOME fallback expectation is Linux-specific; Darwin's UserConfigDir requires HOME and Windows uses USERPROFILE")
 	}
 	config := t.TempDir()
 	t.Setenv("HOME", "")
@@ -215,8 +215,8 @@ func TestIndexStorePruneRemovesMissingRepositoriesAndKeepsPresentOnes(t *testing
 func TestDecodeIndexFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	commonDir := filepath.Join(string(filepath.Separator), "repos", "app", ".git")
-	root := filepath.Join(string(filepath.Separator), "repos", "app")
+	root := filepath.Join(t.TempDir(), "app")
+	commonDir := filepath.Join(root, ".git")
 	key, err := state.TreeKey(commonDir)
 	if err != nil {
 		t.Fatal(err)
