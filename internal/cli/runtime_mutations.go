@@ -38,7 +38,10 @@ type MutationAdapterOptions struct {
 	NewID func() string
 	Sync  SyncRouteOperation
 	// StartPointResolver resolves acquire --from before any lifecycle state or
-	// worktree mutation. Nil selects the same resolver used by create.
+	// worktree mutation. Nil selects the acquire resolver that pins an
+	// immutable commit in the invoking checkout. Create keeps its own lazy
+	// resolver because ruk create has no reuse path and always resolves refs
+	// in the invoking checkout.
 	StartPointResolver CreateStartPointResolver
 
 	CreateWorkspace func(git.Repository) (CreateWorkspace, error)
@@ -365,13 +368,31 @@ func defaultReleaseGit(repository git.Repository) (lifecycle.ReleaseGitter, erro
 	return releaseGitAdapter{service: service}, nil
 }
 
+// defaultAcquireStartPoint pins the start point to an immutable commit in the
+// invoking checkout before any lifecycle state or worktree mutation. Reuse
+// assignment executes Git inside the recycled slot, where worktree-relative
+// refs such as HEAD resolve against the slot's stale detached commit; pinning
+// in the invoking checkout makes fresh and reused acquisition start from the
+// same commit and also fences against the ref moving mid-acquisition.
+func defaultAcquireStartPoint(ctx context.Context, repository git.Repository, requested string, fetch bool) (string, error) {
+	startPoint, err := defaultCreateStartPoint(ctx, repository, requested, fetch)
+	if err != nil {
+		return "", err
+	}
+	result, err := runGit(ctx, repository.Root, nil, []string{"rev-parse", "--verify", startPoint + "^{commit}"})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result.Stdout), nil
+}
+
 func acquireRepository(ctx context.Context, repository git.Repository, input AcquireOperationInput, now func() time.Time, newID func() string, options MutationAdapterOptions, syncRoute SyncRouteOperation) (lifecycle.AcquisitionResult, error) {
 	if err := validateRepositoryContext(repository); err != nil {
 		return lifecycle.AcquisitionResult{}, err
 	}
 	resolver := options.StartPointResolver
 	if resolver == nil {
-		resolver = defaultCreateStartPoint
+		resolver = defaultAcquireStartPoint
 	}
 	startPoint, err := resolver(ctx, repository, input.From, input.Fetch)
 	if err != nil {

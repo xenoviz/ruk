@@ -42,6 +42,7 @@ func (locker *warmLockerFake) With(_ context.Context, path string, callback func
 
 type warmWorktreeFake struct {
 	created     []string
+	startPoints []string
 	locked      []string
 	createError error
 	lockError   error
@@ -55,6 +56,7 @@ func (worktree *warmWorktreeFake) Create(_ context.Context, path, branch, startP
 		return errors.New("invalid warm create request")
 	}
 	worktree.created = append(worktree.created, path)
+	worktree.startPoints = append(worktree.startPoints, startPoint)
 	return nil
 }
 
@@ -140,6 +142,9 @@ func TestWarmCountsOnlyValidCapacityAndCreatesMissingAvailableSlot(t *testing.T)
 	if len(worktree.created) != 1 || len(worktree.locked) != 1 || locker.paths[0] != "pool-maintenance.lock" || locker.paths[1] != "warm.lock" {
 		t.Fatalf("warm operations = %#v / %#v", worktree, locker.paths)
 	}
+	if len(worktree.startPoints) != 1 || worktree.startPoints[0] != "head" {
+		t.Fatalf("warm create start point = %#v, want resolved target head", worktree.startPoints)
+	}
 	createdKey, _ := state.TreeKey(result.Created[0])
 	if store.current.Workspaces[createdKey].Lifecycle != state.LifecycleAvailable || store.current.Workspaces[createdKey].Assignment != nil {
 		t.Fatalf("created workspace = %#v", store.current.Workspaces[createdKey])
@@ -196,6 +201,9 @@ func TestWarmRetainsUnsafeInstallerProcessWhenPreparationFails(t *testing.T) {
 	}
 	if len(worktree.created) != 1 {
 		t.Fatalf("created worktrees=%#v, want one failed preparation", worktree.created)
+	}
+	if len(worktree.startPoints) != 1 || worktree.startPoints[0] != "head" {
+		t.Fatalf("warm create start point = %#v, want resolved target head", worktree.startPoints)
 	}
 	key, keyErr := state.TreeKey(worktree.created[0])
 	if keyErr != nil {

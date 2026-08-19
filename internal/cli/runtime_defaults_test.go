@@ -193,6 +193,9 @@ func TestRuntimeWarmRecordsCreatedWorktrees(t *testing.T) {
 	if result.Status != "warmed" || len(worktree.created) != 1 || len(recorder.records) != 1 || recorder.records[0].source != state.WorktreeSourceWarm {
 		t.Fatalf("warm result=%#v created=%#v records=%#v", result, worktree.created, recorder.records)
 	}
+	if !strings.Contains(worktree.created[0], "|target-commit|") {
+		t.Fatalf("warm create used %q, want the resolved target commit", worktree.created[0])
+	}
 }
 
 func TestStateTreeDeleterForgetsWorktreeAfterDeletingTreeRecord(t *testing.T) {
