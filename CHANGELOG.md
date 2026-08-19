@@ -3,7 +3,7 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.3.0-beta.3 - 2026-08-19
 
 - Keep standalone self-update downloads readable after the HTTP response
   returns, so a mid-stream `context canceled` can no longer abort the binary
