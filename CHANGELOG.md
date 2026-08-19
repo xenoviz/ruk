@@ -3,6 +3,13 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Keep standalone self-update downloads readable after the HTTP response
+  returns, so a mid-stream `context canceled` can no longer abort the binary
+  asset. Updates from 0.3.0-beta.1 and 0.3.0-beta.2 standalone executables
+  required a manual reinstall because of this.
+
 ## 0.3.0-beta.2 - 2026-08-19
 
 - Track every worktree created by `acquire`, `warm`, and `create` in a
