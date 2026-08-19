@@ -150,8 +150,12 @@ absent -> preparing -> assigned -> returning -> available
 ```
 
 Each assignment has an immutable assignment ID so delayed automation cannot
-return a workspace that has since been reassigned. Leases expire for reporting;
-reclaiming expired assignments requires an explicit forced GC operation.
+return a workspace that has since been reassigned. Acquisition resolves its
+start point to an immutable commit in the invoking checkout before any state
+or worktree mutation, so reused pool slots cannot adopt their stale detached
+HEAD. Warm creates slots from the same resolved commit its capacity validation
+used. Leases expire for reporting; reclaiming expired assignments requires an
+explicit forced GC operation.
 Managed `run`, `exec`, `shell`, and assigned `sync` operations register a
 short-lived keeper and renew from the assignment's stored lease duration while
 work continues. Multiple keepers can coexist, and each removes only its own

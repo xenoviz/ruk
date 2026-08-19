@@ -65,6 +65,11 @@ qualified remote-tracking refs fail if their named remote is missing. Named
 ports are unique among active Ruk assignments and are injected into assigned
 commands as normalized variables such as `RUK_PORT_APP`.
 
+The start point is pinned to an immutable commit in the checkout where the
+command runs before any state or worktree mutation. `--from` accepts refs;
+worktree-relative refs such as `HEAD` are resolved in that checkout, not in a
+recycled pool slot.
+
 ## Renew
 
 ```text
@@ -222,7 +227,8 @@ index on the next write.
 
 `source` is `acquire`, `warm`, or `create`. Records are sorted by `path`.
 `worktrees` is an empty array when none are tracked. `exists` is true when the
-folder is present on disk.
+folder is present on disk. `--all` omits repositories whose registries have
+zero records; the host-wide JSON shape is `{"repositories":[]}` when none remain.
 
 ## Inspecting and running
 

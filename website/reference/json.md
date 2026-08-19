@@ -134,8 +134,10 @@ host index at `~/.ruk/repositories.json`:
 }
 ```
 
-`repositories` is an empty array when none are tracked. The host index is
-display-only discovery metadata; per-repo registries stay authoritative.
+`repositories` is an empty array when none are tracked. Repositories whose
+registries have zero records are omitted. The host index is display-only
+discovery metadata; per-repo registries stay authoritative and deleted
+repositories are pruned from the index on write.
 
 ## Failure behavior
 
