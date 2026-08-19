@@ -163,7 +163,7 @@ current fenced lease keeper even when their stored expiry has just elapsed.
 ## Worktrees
 
 ```text
-ruk worktrees [--json]
+ruk worktrees [--all] [--json]
 ```
 
 All worktrees created by `ruk acquire`, `ruk warm`, and `ruk create` are tracked
@@ -172,6 +172,13 @@ that registry for the discovered repository. Entries are removed when Ruk
 removes the worktree (`ruk remove`, `ruk gc --apply`, and create-failure
 cleanup). Git remains authoritative for which worktrees exist; the registry
 records which of them Ruk created.
+
+`ruk worktrees --all` works outside a repository. It reads the host index at
+`~/.config/ruk/host/repositories.json` and aggregates each per-repo registry.
+The index is display-only discovery metadata: it maps repositories to their
+registries and contains no worktree records. Per-repo registries stay
+authoritative. Deleted repositories are skipped on read and pruned from the
+index on the next write.
 
 ```json
 {
@@ -185,6 +192,29 @@ records which of them Ruk created.
       "createdAt": "2026-08-19T10:00:00.000Z",
       "updatedAt": "2026-08-19T10:00:00.000Z",
       "exists": true
+    }
+  ]
+}
+```
+
+`--all` wraps those per-repository objects:
+
+```json
+{
+  "repositories": [
+    {
+      "repository": "/absolute/path/to/repo",
+      "commonDir": "/absolute/path/to/repo/.git",
+      "worktrees": [
+        {
+          "path": "/absolute/path/to/workspace",
+          "branch": "agent/my-task",
+          "source": "acquire",
+          "createdAt": "2026-08-19T10:00:00.000Z",
+          "updatedAt": "2026-08-19T10:00:00.000Z",
+          "exists": true
+        }
+      ]
     }
   ]
 }

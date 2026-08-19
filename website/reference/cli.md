@@ -103,12 +103,13 @@ assignment count.
 List Git worktrees with Ruk preparation, assignment, activity, and
 primary-checkout information.
 
-### `ruk worktrees [--json]`
+### `ruk worktrees [--all] [--json]`
 
 List every worktree Ruk created for the repository, tracked per folder with
 its branch, creating operation (`acquire`, `warm`, or `create`), timestamps,
 and whether the folder still exists on disk. Entries are removed when Ruk
-removes the worktree.
+removes the worktree. `--all` lists every indexed repository on this host and
+works outside a Git checkout.
 
 ### `ruk stats [--disk] [--json]`
 

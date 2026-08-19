@@ -110,6 +110,33 @@ and the tracked Ruk-created worktrees sorted by `path`:
 `source` is `acquire`, `warm`, or `create`. `worktrees` is an empty array when
 none are tracked.
 
+`ruk worktrees --all --json` aggregates those per-repository objects from the
+host index at `~/.config/ruk/host/repositories.json`:
+
+```json
+{
+  "repositories": [
+    {
+      "repository": "/work/app",
+      "commonDir": "/work/app/.git",
+      "worktrees": [
+        {
+          "path": "/work/app-ruk-agent-task-1a2b3c4d",
+          "branch": "agent/task",
+          "source": "acquire",
+          "createdAt": "2026-08-19T10:00:00.000Z",
+          "updatedAt": "2026-08-19T10:00:00.000Z",
+          "exists": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+`repositories` is an empty array when none are tracked. The host index is
+display-only discovery metadata; per-repo registries stay authoritative.
+
 ## Failure behavior
 
 A failed JSON command exits nonzero, emits no success record on stdout, and
