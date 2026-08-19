@@ -66,3 +66,11 @@ export function compareVersions(left: string, right: string): number {
   }
   return comparePrerelease(leftParts.prerelease, rightParts.prerelease);
 }
+
+export function versionIsPrerelease(version: string): boolean {
+  return versionParts(version).prerelease.length > 0;
+}
+
+export function versionPrereleaseChannel(version: string): string | undefined {
+  return versionParts(version).prerelease[0];
+}

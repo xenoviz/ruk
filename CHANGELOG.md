@@ -3,6 +3,12 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Skip the Windows release-to-release update smoke when the current tag is a
+  prerelease and no prior ready Windows executable exists on that channel,
+  instead of expecting a stable install to jump onto beta.
+
 ## 0.3.0-beta.1 - 2026-08-16
 
 - Replace the shipped TypeScript/Node command with one dependency-free native

@@ -64,7 +64,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/verify-release.ts
       - name: Test migration tooling
-        run: bun test test/conformance/*.test.ts test/benchmark.test.ts
+        run: bun test test/conformance/*.test.ts test/benchmark.test.ts test/release-update-verification.test.ts
       - name: Compare Go CLI with frozen golden
         run: bun run test:conformance
 

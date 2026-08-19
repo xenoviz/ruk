@@ -5,17 +5,11 @@ import { fileURLToPath } from "node:url";
 import { run } from "./lib/process.js";
 import { readPackageVersion } from "./lib/package.js";
 import { compareVersions } from "./lib/release.js";
-import { isRecord } from "./lib/types.js";
-
-function hasAsset(value: unknown, name: string): boolean {
-  return Array.isArray(value) && value.some(
-    (asset) => isRecord(asset) && asset["name"] === name,
-  );
-}
+import { planWindowsUpdateVerification } from "./lib/release-update-verification.js";
 
 const currentTag = process.env["RELEASE_TAG"];
 const VERSION = await readPackageVersion(path.resolve(fileURLToPath(new URL("..", import.meta.url))));
-if (currentTag !== `v${VERSION}` && currentTag !== VERSION) {
+if (typeof currentTag !== "string" || (currentTag !== `v${VERSION}` && currentTag !== VERSION)) {
   throw new Error(`Release tag ${String(currentTag)} does not match ${VERSION}`);
 }
 const response = await run(
@@ -23,29 +17,9 @@ const response = await run(
   ["api", "repos/xenoviz/ruk/releases?per_page=100"],
 );
 const releases: unknown = JSON.parse(response.stdout);
-if (!Array.isArray(releases)) throw new Error("GitHub returned invalid release metadata");
-const previous = releases.find((release) => {
-  if (
-    !isRecord(release) ||
-    release["draft"] !== false ||
-    release["prerelease"] !== false ||
-    typeof release["tag_name"] !== "string" ||
-    release["tag_name"] === currentTag
-  ) {
-    return false;
-  }
-  const version = release["tag_name"].replace(/^v/, "");
-  try {
-    return compareVersions(version, VERSION) < 0 &&
-      hasAsset(release["assets"], "ruk-release.json") &&
-      hasAsset(release["assets"], "ruk-windows-x64.exe");
-  } catch {
-    return false;
-  }
-});
-
-if (!isRecord(previous) || typeof previous["tag_name"] !== "string") {
-  process.stdout.write("No prior ready Windows release exists; the first release has no upgrade source.\n");
+const plan = planWindowsUpdateVerification(releases, currentTag, VERSION);
+if (plan.kind === "skip") {
+  process.stdout.write(plan.message);
   process.exit(0);
 }
 
@@ -56,7 +30,7 @@ try {
     [
       "release",
       "download",
-      previous["tag_name"],
+      plan.previous.tagName,
       "--repo",
       "xenoviz/ruk",
       "--pattern",

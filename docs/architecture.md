@@ -57,7 +57,9 @@ can override it for unusual installation layouts or automation with
 `RUK_UPDATE_INSTALLER`. Starting with the second ready release, release CI
 downloads the prior Windows executable, runs its updater against the newly
 finalized release, and verifies the executable version after deferred
-replacement.
+replacement. A prerelease uses the prior ready Windows executable on that same
+prerelease channel; the first tag on a channel skips because a stable install
+ignores prereleases and is not an upgrade source.
 
 ## Boundaries
 
