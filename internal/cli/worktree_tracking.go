@@ -9,11 +9,13 @@ package cli
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/lifecycle"
 	"github.com/xenoviz/ruk/internal/state"
+	"github.com/xenoviz/ruk/internal/worktrees"
 )
 
 // WorktreeRecorder persists which worktree folders Ruk created for one
@@ -27,6 +29,29 @@ type WorktreeRecorder interface {
 // repository. Nil factories select the native per-repository registry.
 type WorktreeRecorderFactory func(context.Context, git.Repository) (WorktreeRecorder, error)
 
+// RepositoryIndexer upserts a repository into the host-level discovery index.
+type RepositoryIndexer interface {
+	RecordRepository(ctx context.Context, commonDir, root string) error
+}
+
+type indexedWorktreeRecorder struct {
+	repo      WorktreeRecorder
+	index     RepositoryIndexer
+	commonDir string
+	root      string
+}
+
+func (recorder indexedWorktreeRecorder) RecordWorktree(ctx context.Context, path, branch, source string) error {
+	if err := recorder.repo.RecordWorktree(ctx, path, branch, source); err != nil {
+		return err
+	}
+	return recorder.index.RecordRepository(ctx, recorder.commonDir, recorder.root)
+}
+
+func (recorder indexedWorktreeRecorder) ForgetWorktree(ctx context.Context, path string) error {
+	return recorder.repo.ForgetWorktree(ctx, path)
+}
+
 func defaultWorktreeRecorder(ctx context.Context, repository git.Repository) (WorktreeRecorder, error) {
 	if err := validateRepositoryContext(repository); err != nil {
 		return nil, err
@@ -35,7 +60,20 @@ func defaultWorktreeRecorder(ctx context.Context, repository git.Repository) (Wo
 	if err != nil {
 		return nil, err
 	}
-	return state.NewWorktreeStore(repository.CommonDir, locker, time.Now), nil
+	root := repository.PrimaryRoot
+	if strings.TrimSpace(root) == "" {
+		root = repository.Root
+	}
+	index, err := worktrees.NewIndexStore(worktrees.IndexStoreOptions{Locker: locker})
+	if err != nil {
+		return nil, err
+	}
+	return indexedWorktreeRecorder{
+		repo:      state.NewWorktreeStore(repository.CommonDir, locker, time.Now),
+		index:     index,
+		commonDir: repository.CommonDir,
+		root:      root,
+	}, nil
 }
 
 func resolveWorktreeRecorder(ctx context.Context, factory WorktreeRecorderFactory, repository git.Repository) (WorktreeRecorder, error) {

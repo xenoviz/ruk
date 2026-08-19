@@ -13,6 +13,7 @@ import (
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/state"
 	"github.com/xenoviz/ruk/internal/statistics"
+	"github.com/xenoviz/ruk/internal/worktrees"
 )
 
 func defaultQueryDependencies() QueryDependencies {
@@ -82,6 +83,24 @@ func defaultQueryDependencies() QueryDependencies {
 			// report as missing rather than failing the query.
 			_, err := os.Stat(path)
 			return err == nil
+		},
+		ReadWorktreeIndex: func(ctx context.Context) (worktrees.Index, error) {
+			locker, err := newNativeDirectoryLocker(ctx)
+			if err != nil {
+				return worktrees.Index{}, err
+			}
+			store, err := worktrees.NewIndexStore(worktrees.IndexStoreOptions{Locker: locker})
+			if err != nil {
+				return worktrees.Index{}, err
+			}
+			index, err := store.Read(ctx)
+			if err != nil {
+				return worktrees.Index{}, err
+			}
+			if index == nil {
+				return worktrees.Index{}, errors.New("host repository index store returned nil index")
+			}
+			return *index, nil
 		},
 	}
 }
@@ -156,6 +175,9 @@ func mergeQueryDependencies(value, defaults QueryDependencies) QueryDependencies
 	}
 	if value.WorktreePathExists == nil {
 		value.WorktreePathExists = defaults.WorktreePathExists
+	}
+	if value.ReadWorktreeIndex == nil {
+		value.ReadWorktreeIndex = defaults.ReadWorktreeIndex
 	}
 	return value
 }

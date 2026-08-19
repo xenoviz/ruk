@@ -224,3 +224,75 @@ func TestResolveWorktreeRecorderRejectsNilRecorderAndFactoryErrors(t *testing.T)
 		t.Fatalf("nil recorder error = %v", err)
 	}
 }
+
+type capturingRepositoryIndexer struct {
+	records []indexedRepository
+	err     error
+	called  int
+}
+
+type indexedRepository struct {
+	commonDir, root string
+}
+
+func (indexer *capturingRepositoryIndexer) RecordRepository(_ context.Context, commonDir, root string) error {
+	indexer.called++
+	indexer.records = append(indexer.records, indexedRepository{commonDir: commonDir, root: root})
+	return indexer.err
+}
+
+func TestIndexedWorktreeRecorderRecordsRepoThenIndex(t *testing.T) {
+	repo := &capturingWorktreeRecorder{}
+	index := &capturingRepositoryIndexer{}
+	recorder := indexedWorktreeRecorder{repo: repo, index: index, commonDir: "/repo/.git", root: "/repo"}
+	if err := recorder.RecordWorktree(context.Background(), "/workspace/slot", "agent/task", state.WorktreeSourceAcquire); err != nil {
+		t.Fatalf("RecordWorktree returned an error: %v", err)
+	}
+	if len(repo.records) != 1 || repo.records[0].path != "/workspace/slot" {
+		t.Fatalf("repo records = %#v", repo.records)
+	}
+	if len(index.records) != 1 || index.records[0] != (indexedRepository{commonDir: "/repo/.git", root: "/repo"}) {
+		t.Fatalf("index records = %#v", index.records)
+	}
+}
+
+func TestIndexedWorktreeRecorderRepoFailureShortCircuitsIndex(t *testing.T) {
+	repo := &capturingWorktreeRecorder{recordErr: errors.New("registry write failed")}
+	index := &capturingRepositoryIndexer{}
+	recorder := indexedWorktreeRecorder{repo: repo, index: index, commonDir: "/repo/.git", root: "/repo"}
+	err := recorder.RecordWorktree(context.Background(), "/workspace/slot", "agent/task", state.WorktreeSourceCreate)
+	if err == nil || !strings.Contains(err.Error(), "registry write failed") {
+		t.Fatalf("RecordWorktree error = %v", err)
+	}
+	if index.called != 0 {
+		t.Fatalf("index was called after repo failure: %#v", index.records)
+	}
+}
+
+func TestIndexedWorktreeRecorderIndexFailureSurfacesAfterRepoSuccess(t *testing.T) {
+	repo := &capturingWorktreeRecorder{}
+	index := &capturingRepositoryIndexer{err: errors.New("index write failed")}
+	recorder := indexedWorktreeRecorder{repo: repo, index: index, commonDir: "/repo/.git", root: "/repo"}
+	err := recorder.RecordWorktree(context.Background(), "/workspace/slot", "agent/task", state.WorktreeSourceWarm)
+	if err == nil || !strings.Contains(err.Error(), "index write failed") {
+		t.Fatalf("RecordWorktree error = %v", err)
+	}
+	if len(repo.records) != 1 {
+		t.Fatalf("repo was not recorded before index failure: %#v", repo.records)
+	}
+}
+
+func TestIndexedWorktreeRecorderForgetDoesNotTouchIndex(t *testing.T) {
+	repo := &capturingWorktreeRecorder{}
+	index := &capturingRepositoryIndexer{}
+	recorder := indexedWorktreeRecorder{repo: repo, index: index, commonDir: "/repo/.git", root: "/repo"}
+	if err := recorder.ForgetWorktree(context.Background(), "/workspace/slot"); err != nil {
+		t.Fatalf("ForgetWorktree returned an error: %v", err)
+	}
+	if len(repo.forgets) != 1 || repo.forgets[0] != "/workspace/slot" {
+		t.Fatalf("forgets = %#v", repo.forgets)
+	}
+	if index.called != 0 {
+		t.Fatalf("ForgetWorktree touched the index: %#v", index.records)
+	}
+}

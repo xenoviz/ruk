@@ -13,6 +13,7 @@ import (
 	"github.com/xenoviz/ruk/internal/cli"
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/state"
+	"github.com/xenoviz/ruk/internal/worktrees"
 )
 
 func TestHandleWorktreesSortsByPathAndReportsExistence(t *testing.T) {
@@ -217,5 +218,195 @@ func TestParseWorktreesJSONAndRejectsPositionalArguments(t *testing.T) {
 	_, err = cli.Parse([]string{"worktrees", "extra"})
 	if err == nil || !strings.Contains(err.Error(), "worktrees does not accept positional arguments") {
 		t.Fatalf("positional error = %v", err)
+	}
+	got, err = cli.Parse([]string{"worktrees", "--all", "--json"})
+	if err != nil {
+		t.Fatalf("Parse --all returned an error: %v", err)
+	}
+	if got.Name != "worktrees" || !got.JSON || !got.All {
+		t.Fatalf("invocation = %#v", got)
+	}
+}
+
+func TestHandleAllWorktreesAggregatesSortedRepositories(t *testing.T) {
+	laterRoot := filepath.Join(string(filepath.Separator), "z-repo")
+	earlierRoot := filepath.Join(string(filepath.Separator), "a-repo")
+	laterCommon := filepath.Join(laterRoot, ".git")
+	earlierCommon := filepath.Join(earlierRoot, ".git")
+	missingCommon := filepath.Join(string(filepath.Separator), "missing", ".git")
+	emptyCommon := filepath.Join(string(filepath.Separator), "empty", ".git")
+	laterPath := filepath.Join(laterRoot, "z-slot")
+	earlierLate := filepath.Join(earlierRoot, "z-slot")
+	earlierEarly := filepath.Join(earlierRoot, "a-slot")
+	laterKey, err := state.TreeKey(laterCommon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	earlierKey, err := state.TreeKey(earlierCommon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingKey, err := state.TreeKey(missingCommon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyKey, err := state.TreeKey(emptyCommon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	laterWorktreeKey, err := state.TreeKey(laterPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	earlierLateKey, err := state.TreeKey(earlierLate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	earlierEarlyKey, err := state.TreeKey(earlierEarly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := cli.QueryDependencies{
+		ReadWorktreeIndex: func(context.Context) (worktrees.Index, error) {
+			return worktrees.Index{
+				Version: worktrees.IndexVersion,
+				Repositories: map[string]worktrees.RepositoryRecord{
+					laterKey:   {CommonDir: laterCommon, Root: laterRoot, UpdatedAt: "2026-08-19T11:00:00.000Z"},
+					earlierKey: {CommonDir: earlierCommon, Root: earlierRoot, UpdatedAt: "2026-08-19T10:00:00.000Z"},
+					missingKey: {CommonDir: missingCommon, Root: filepath.Join(string(filepath.Separator), "missing"), UpdatedAt: "2026-08-19T09:00:00.000Z"},
+					emptyKey:   {CommonDir: emptyCommon, Root: filepath.Join(string(filepath.Separator), "empty"), UpdatedAt: "2026-08-19T08:00:00.000Z"},
+				},
+			}, nil
+		},
+		WorktreePathExists: func(path string) bool {
+			return path != missingCommon && path != earlierLate
+		},
+		ReadWorktreeRegistry: func(_ context.Context, commonDir string) (state.WorktreeRegistry, error) {
+			switch commonDir {
+			case laterCommon:
+				return state.WorktreeRegistry{
+					Version: state.WorktreeRegistryVersion,
+					Worktrees: map[string]state.WorktreeRecord{
+						laterWorktreeKey: {Path: laterPath, Branch: "agent/later", Source: state.WorktreeSourceWarm, CreatedAt: "2026-08-19T11:00:00.000Z", UpdatedAt: "2026-08-19T11:00:00.000Z"},
+					},
+				}, nil
+			case earlierCommon:
+				return state.WorktreeRegistry{
+					Version: state.WorktreeRegistryVersion,
+					Worktrees: map[string]state.WorktreeRecord{
+						earlierLateKey:  {Path: earlierLate, Branch: "agent/late", Source: state.WorktreeSourceCreate, CreatedAt: "2026-08-19T10:30:00.000Z", UpdatedAt: "2026-08-19T10:30:00.000Z"},
+						earlierEarlyKey: {Path: earlierEarly, Branch: "agent/early", Source: state.WorktreeSourceAcquire, CreatedAt: "2026-08-19T10:00:00.000Z", UpdatedAt: "2026-08-19T10:00:00.000Z"},
+					},
+				}, nil
+			case emptyCommon:
+				return *state.EmptyWorktreeRegistry(), nil
+			default:
+				return state.WorktreeRegistry{}, errors.New("unexpected common dir " + commonDir)
+			}
+		},
+	}
+	got, err := queries.HandleAllWorktrees(context.Background())
+	if err != nil {
+		t.Fatalf("HandleAllWorktrees returned an error: %v", err)
+	}
+	if len(got.Repositories) != 2 || got.Repositories[0].Repository != earlierRoot || got.Repositories[1].Repository != laterRoot {
+		t.Fatalf("repositories = %#v", got.Repositories)
+	}
+	if len(got.Repositories[0].Worktrees) != 2 || got.Repositories[0].Worktrees[0].Path != earlierEarly || got.Repositories[0].Worktrees[1].Path != earlierLate {
+		t.Fatalf("earlier records were not sorted by path: %#v", got.Repositories[0].Worktrees)
+	}
+	if !got.Repositories[0].Worktrees[0].Exists || got.Repositories[0].Worktrees[1].Exists {
+		t.Fatalf("exists flags = %#v", got.Repositories[0].Worktrees)
+	}
+}
+
+func TestHandleAllWorktreesRequiresDependenciesAndWrapsRegistryErrors(t *testing.T) {
+	_, err := (cli.QueryDependencies{}).HandleAllWorktrees(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "worktrees query dependencies are incomplete") {
+		t.Fatalf("empty dependencies error = %v", err)
+	}
+	root := filepath.Join(string(filepath.Separator), "broken")
+	commonDir := filepath.Join(root, ".git")
+	key, err := state.TreeKey(commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := cli.QueryDependencies{
+		ReadWorktreeIndex: func(context.Context) (worktrees.Index, error) {
+			return worktrees.Index{Version: worktrees.IndexVersion, Repositories: map[string]worktrees.RepositoryRecord{
+				key: {CommonDir: commonDir, Root: root, UpdatedAt: "2026-08-19T10:00:00.000Z"},
+			}}, nil
+		},
+		WorktreePathExists: func(string) bool { return true },
+		ReadWorktreeRegistry: func(context.Context, string) (state.WorktreeRegistry, error) {
+			return state.WorktreeRegistry{}, errors.New("registry unreadable")
+		},
+	}
+	_, err = queries.HandleAllWorktrees(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "read worktree registry for "+root) || !strings.Contains(err.Error(), "registry unreadable") {
+		t.Fatalf("wrapped error = %v", err)
+	}
+}
+
+func TestFormatAllWorktreesJSONEmitsExactlyOneValueWithEmptyArray(t *testing.T) {
+	encoded, err := cli.FormatAllWorktrees(cli.AllWorktreesResponse{Repositories: []cli.WorktreesResponse{}}, true)
+	if err != nil {
+		t.Fatalf("FormatAllWorktrees returned an error: %v", err)
+	}
+	if !strings.HasSuffix(encoded, "\n") || strings.Count(encoded, "\n") != 1 {
+		t.Fatalf("JSON output = %q, want exactly one JSON value ending in a newline", encoded)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+		t.Fatalf("JSON output is not one value: %v", err)
+	}
+	repositories, ok := decoded["repositories"].([]any)
+	if !ok || repositories == nil {
+		t.Fatalf("repositories = %#v, want []", decoded["repositories"])
+	}
+	if len(repositories) != 0 {
+		t.Fatalf("repositories = %#v, want empty array", repositories)
+	}
+}
+
+func TestFormatAllWorktreesHumanEmptyAndPopulated(t *testing.T) {
+	empty := cli.FormatAllWorktreesHuman(cli.AllWorktreesResponse{Repositories: []cli.WorktreesResponse{}})
+	if empty != "No Ruk-created worktrees are tracked on this host.\n" {
+		t.Fatalf("empty human output = %q", empty)
+	}
+	populated := cli.FormatAllWorktreesHuman(cli.AllWorktreesResponse{Repositories: []cli.WorktreesResponse{
+		{Repository: "/a", Worktrees: []cli.WorktreesRecord{{Path: "/a/one", Branch: "agent/one", Source: "acquire", Exists: true}}},
+		{Repository: "/b", Worktrees: []cli.WorktreesRecord{{Path: "/b/two", Branch: "agent/two", Source: "create", Exists: false}}},
+	}})
+	want := "/a:\n  agent/one                    acquire  present    /a/one\n\n/b:\n  agent/two                    create   missing    /b/two\n"
+	if populated != want {
+		t.Fatalf("populated human output = %q, want %q", populated, want)
+	}
+}
+
+func TestApplicationRoutesWorktreesAllWithoutDiscoveringARepository(t *testing.T) {
+	queries := cli.QueryDependencies{
+		ReadWorktreeIndex: func(context.Context) (worktrees.Index, error) {
+			return *worktrees.EmptyIndex(), nil
+		},
+		ReadWorktreeRegistry: func(context.Context, string) (state.WorktreeRegistry, error) {
+			return *state.EmptyWorktreeRegistry(), nil
+		},
+		WorktreePathExists: func(string) bool { return true },
+	}
+	var stdout bytes.Buffer
+	application := cli.New(cli.Options{
+		Version: "0.3.0-test", CWD: "/missing", Stdout: &stdout,
+		DiscoverRepository: func(context.Context, string) (git.Repository, error) {
+			return git.Repository{}, errors.New("discovery must not run for worktrees --all")
+		},
+		Queries: queries,
+	})
+	code, err := application.Run(context.Background(), []string{"worktrees", "--all", "--json"})
+	if err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v", code, err)
+	}
+	if strings.Count(stdout.String(), "\n") != 1 || !strings.Contains(stdout.String(), `"repositories":[]`) {
+		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

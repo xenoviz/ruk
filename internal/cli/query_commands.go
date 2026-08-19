@@ -14,6 +14,7 @@ import (
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/state"
 	"github.com/xenoviz/ruk/internal/statistics"
+	"github.com/xenoviz/ruk/internal/worktrees"
 )
 
 // ListRecord is the JSON-facing record returned by list. Pointer fields are
@@ -239,6 +240,12 @@ type WorktreesResponse struct {
 	Worktrees  []WorktreesRecord `json:"worktrees"`
 }
 
+// AllWorktreesResponse is the host-wide JSON result for worktrees --all.
+// Repositories is never null; an empty index serializes as an empty array.
+type AllWorktreesResponse struct {
+	Repositories []WorktreesResponse `json:"repositories"`
+}
+
 // QueryDependencies is the narrow I/O seam used by the command handlers.
 // Production composition supplies the repository/state/dependency functions;
 // tests can provide deterministic fakes without creating a repository.
@@ -251,6 +258,7 @@ type QueryDependencies struct {
 	MeasureDisk          func(context.Context, state.State) (statistics.DiskStatistics, error)
 	ReadWorktreeRegistry func(context.Context, string) (state.WorktreeRegistry, error)
 	WorktreePathExists   func(string) bool
+	ReadWorktreeIndex    func(context.Context) (worktrees.Index, error)
 }
 
 // HandleList loads query inputs through injected readers and builds list
@@ -343,6 +351,39 @@ func (dependencies QueryDependencies) HandleWorktrees(ctx context.Context, repos
 	if err != nil {
 		return WorktreesResponse{}, err
 	}
+	return buildWorktreesResponse(repository.Root, repository.CommonDir, registry, dependencies.WorktreePathExists), nil
+}
+
+// HandleAllWorktrees aggregates per-repository registries named by the host
+// index. Missing common directories are skipped; empty registries are omitted.
+func (dependencies QueryDependencies) HandleAllWorktrees(ctx context.Context) (AllWorktreesResponse, error) {
+	if dependencies.ReadWorktreeIndex == nil || dependencies.ReadWorktreeRegistry == nil || dependencies.WorktreePathExists == nil {
+		return AllWorktreesResponse{}, errors.New("worktrees query dependencies are incomplete")
+	}
+	index, err := dependencies.ReadWorktreeIndex(ctx)
+	if err != nil {
+		return AllWorktreesResponse{}, err
+	}
+	repositories := make([]WorktreesResponse, 0)
+	for _, record := range index.Repositories {
+		if !dependencies.WorktreePathExists(record.CommonDir) {
+			continue
+		}
+		registry, err := dependencies.ReadWorktreeRegistry(ctx, record.CommonDir)
+		if err != nil {
+			return AllWorktreesResponse{}, fmt.Errorf("read worktree registry for %s: %w", record.Root, err)
+		}
+		response := buildWorktreesResponse(record.Root, record.CommonDir, registry, dependencies.WorktreePathExists)
+		if len(response.Worktrees) == 0 {
+			continue
+		}
+		repositories = append(repositories, response)
+	}
+	sort.Slice(repositories, func(i, j int) bool { return repositories[i].Repository < repositories[j].Repository })
+	return AllWorktreesResponse{Repositories: repositories}, nil
+}
+
+func buildWorktreesResponse(root, commonDir string, registry state.WorktreeRegistry, exists func(string) bool) WorktreesResponse {
 	records := make([]WorktreesRecord, 0, len(registry.Worktrees))
 	for _, record := range registry.Worktrees {
 		records = append(records, WorktreesRecord{
@@ -351,11 +392,11 @@ func (dependencies QueryDependencies) HandleWorktrees(ctx context.Context, repos
 			Source:    record.Source,
 			CreatedAt: record.CreatedAt,
 			UpdatedAt: record.UpdatedAt,
-			Exists:    dependencies.WorktreePathExists(record.Path),
+			Exists:    exists(record.Path),
 		})
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Path < records[j].Path })
-	return WorktreesResponse{Repository: repository.Root, CommonDir: repository.CommonDir, Worktrees: records}, nil
+	return WorktreesResponse{Repository: root, CommonDir: commonDir, Worktrees: records}
 }
 
 // FormatListHuman preserves the TypeScript list table layout.
@@ -493,6 +534,37 @@ func FormatWorktrees(response WorktreesResponse, jsonMode bool) (string, error) 
 		return FormatQueryJSON(response)
 	}
 	return FormatWorktreesHuman(response), nil
+}
+
+// FormatAllWorktreesHuman prints tracked worktrees grouped by repository, or a
+// stable empty message when none are indexed on this host.
+func FormatAllWorktreesHuman(response AllWorktreesResponse) string {
+	if len(response.Repositories) == 0 {
+		return "No Ruk-created worktrees are tracked on this host.\n"
+	}
+	var output strings.Builder
+	for index, repository := range response.Repositories {
+		if index > 0 {
+			output.WriteByte('\n')
+		}
+		fmt.Fprintf(&output, "%s:\n", repository.Repository)
+		for _, record := range repository.Worktrees {
+			presence := "missing"
+			if record.Exists {
+				presence = "present"
+			}
+			fmt.Fprintf(&output, "  %-28s %-8s %-10s %s\n", record.Branch, record.Source, presence, record.Path)
+		}
+	}
+	return output.String()
+}
+
+// FormatAllWorktrees chooses the machine-readable or human --all formatter.
+func FormatAllWorktrees(response AllWorktreesResponse, jsonMode bool) (string, error) {
+	if jsonMode {
+		return FormatQueryJSON(response)
+	}
+	return FormatAllWorktreesHuman(response), nil
 }
 
 func stringPointer(value string) *string { return &value }

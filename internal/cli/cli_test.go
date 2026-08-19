@@ -24,7 +24,7 @@ Usage:
   ruk warm --count <n> [--from <ref>] [--fetch] [--json]
   ruk shell <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...]
   ruk list [--json]
-  ruk worktrees [--json]
+  ruk worktrees [--all] [--json]
   ruk remove <path> [--force]
   ruk status [--explain] [--json]
   ruk stats [--disk] [--json]
