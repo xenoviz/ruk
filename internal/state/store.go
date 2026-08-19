@@ -16,10 +16,12 @@ type Locker interface {
 
 // Paths names the durable state and lock locations below a Git common directory.
 type Paths struct {
-	Root      string
-	Locks     string
-	State     string
-	StateLock string
+	Root          string
+	Locks         string
+	State         string
+	StateLock     string
+	Worktrees     string
+	WorktreesLock string
 }
 
 // StorePaths returns the canonical repository-local state paths.
@@ -27,10 +29,12 @@ func StorePaths(commonDir string) Paths {
 	root := filepath.Join(commonDir, "ruk")
 	locks := filepath.Join(root, "locks")
 	return Paths{
-		Root:      root,
-		Locks:     locks,
-		State:     filepath.Join(root, "state.json"),
-		StateLock: filepath.Join(locks, "state.lock"),
+		Root:          root,
+		Locks:         locks,
+		State:         filepath.Join(root, "state.json"),
+		StateLock:     filepath.Join(locks, "state.lock"),
+		Worktrees:     filepath.Join(root, "worktrees.json"),
+		WorktreesLock: filepath.Join(locks, "worktrees.lock"),
 	}
 }
 
