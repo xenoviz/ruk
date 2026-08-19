@@ -1,6 +1,6 @@
 {
   "name": "@xenoviz/ruk",
-  "version": "0.3.0-beta.1",
+  "version": "0.3.0-beta.2",
   "description": "Dependency-aware Git workspaces for parallel coding agents",
   "keywords": [
     "git",
@@ -25,13 +25,13 @@
     "postinstall": "node scripts/npm/install.mjs"
   },
   "optionalDependencies": {
-    "@xenoviz/ruk-linux-x64": "0.3.0-beta.1",
-    "@xenoviz/ruk-linux-arm64": "0.3.0-beta.1",
-    "@xenoviz/ruk-linux-x64-musl": "0.3.0-beta.1",
-    "@xenoviz/ruk-darwin-x64": "0.3.0-beta.1",
-    "@xenoviz/ruk-darwin-arm64": "0.3.0-beta.1",
-    "@xenoviz/ruk-windows-x64": "0.3.0-beta.1",
-    "@xenoviz/ruk-windows-arm64": "0.3.0-beta.1"
+    "@xenoviz/ruk-linux-x64": "0.3.0-beta.2",
+    "@xenoviz/ruk-linux-arm64": "0.3.0-beta.2",
+    "@xenoviz/ruk-linux-x64-musl": "0.3.0-beta.2",
+    "@xenoviz/ruk-darwin-x64": "0.3.0-beta.2",
+    "@xenoviz/ruk-darwin-arm64": "0.3.0-beta.2",
+    "@xenoviz/ruk-windows-x64": "0.3.0-beta.2",
+    "@xenoviz/ruk-windows-arm64": "0.3.0-beta.2"
   },
   "ruk": {
     "distribution": "package",
