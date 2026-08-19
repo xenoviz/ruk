@@ -62,6 +62,27 @@ func defaultQueryDependencies() QueryDependencies {
 		MeasureDisk: func(ctx context.Context, snapshot state.State) (statistics.DiskStatistics, error) {
 			return statistics.MeasureDiskStatistics(ctx, snapshot)
 		},
+		ReadWorktreeRegistry: func(ctx context.Context, commonDir string) (state.WorktreeRegistry, error) {
+			locker, err := newNativeDirectoryLocker(ctx)
+			if err != nil {
+				return state.WorktreeRegistry{}, err
+			}
+			store := state.NewWorktreeStore(commonDir, locker, nil)
+			registry, err := store.Read(ctx)
+			if err != nil {
+				return state.WorktreeRegistry{}, err
+			}
+			if registry == nil {
+				return state.WorktreeRegistry{}, errors.New("worktree registry store returned nil registry")
+			}
+			return *registry, nil
+		},
+		WorktreePathExists: func(path string) bool {
+			// This is a display-only fact; unreadable paths conservatively
+			// report as missing rather than failing the query.
+			_, err := os.Stat(path)
+			return err == nil
+		},
 	}
 }
 
@@ -129,6 +150,12 @@ func mergeQueryDependencies(value, defaults QueryDependencies) QueryDependencies
 	}
 	if value.MeasureDisk == nil {
 		value.MeasureDisk = defaults.MeasureDisk
+	}
+	if value.ReadWorktreeRegistry == nil {
+		value.ReadWorktreeRegistry = defaults.ReadWorktreeRegistry
+	}
+	if value.WorktreePathExists == nil {
+		value.WorktreePathExists = defaults.WorktreePathExists
 	}
 	return value
 }

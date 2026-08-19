@@ -50,6 +50,10 @@ type MutationAdapterOptions struct {
 	ReleaseGit       func(git.Repository) (lifecycle.ReleaseGitter, error)
 	ReleaseProcesses func() lifecycle.ReleaseProcesser
 	PortRegistry     func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error)
+	// WorktreeRecorder builds the durable per-repository registry that tracks
+	// every worktree Ruk creates. Nil selects the native registry beside the
+	// repository state file.
+	WorktreeRecorder WorktreeRecorderFactory
 }
 
 // heldWorkspaceLocker is used only while acquireRepository already owns the
@@ -129,8 +133,12 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 		if err != nil {
 			return CreateCommandResult{}, err
 		}
+		recorder, err := resolveWorktreeRecorder(ctx, options.WorktreeRecorder, input.Repository)
+		if err != nil {
+			return CreateCommandResult{}, err
+		}
 		command := NewCreateCommand(CreateCommandOptions{
-			Workspace: workspace, Fence: fence,
+			Workspace: recordingCreateWorkspace{inner: workspace, recorder: recorder}, Fence: fence,
 			Sync: func(ctx context.Context, request CreateSyncRequest) (SyncCommandResult, error) {
 				return syncRoute(ctx, SyncCommandInput{
 					Repository: request.Repository, JSON: request.JSON, Emit: false, Output: request.Output,
@@ -155,7 +163,9 @@ func NewMutationAdapters(options MutationAdapterOptions) (MutationAdapters, erro
 
 	return MutationAdapters{
 		Sync: syncRoute, Create: createRoute, Acquire: acquireRoute,
-		Release: releaseRoute, Remove: func(ctx context.Context, input RemoveInput) error { return removeRepository(ctx, input) },
+		Release: releaseRoute, Remove: func(ctx context.Context, input RemoveInput) error {
+			return removeRepository(ctx, input, options.WorktreeRecorder)
+		},
 	}, nil
 }
 
@@ -378,10 +388,15 @@ func acquireRepository(ctx context.Context, repository git.Repository, input Acq
 	if worktreeFactory == nil {
 		worktreeFactory = defaultAcquireWorktree
 	}
-	worktree, err := worktreeFactory(repository)
+	innerWorktree, err := worktreeFactory(repository)
 	if err != nil {
 		return lifecycle.AcquisitionResult{}, err
 	}
+	recorder, err := resolveWorktreeRecorder(ctx, options.WorktreeRecorder, repository)
+	if err != nil {
+		return lifecycle.AcquisitionResult{}, err
+	}
+	worktree := lifecycle.AcquisitionWorktree(recordingAcquisitionWorktree{inner: innerWorktree, recorder: recorder})
 	prepare := func(ctx context.Context, root string) (dependencies.EnsureResult, error) {
 		repo := repository
 		repo.Root = root
@@ -513,7 +528,7 @@ func assignmentProjections(snapshot *state.State, assignmentID string) []string 
 	return nil
 }
 
-func removeRepository(ctx context.Context, input RemoveInput) error {
+func removeRepository(ctx context.Context, input RemoveInput, recorderFactory WorktreeRecorderFactory) error {
 	if err := validateRepositoryContext(input.Repository); err != nil {
 		return err
 	}
@@ -522,6 +537,10 @@ func removeRepository(ctx context.Context, input RemoveInput) error {
 		return err
 	}
 	store := state.NewStore(input.Repository.CommonDir, locker)
+	recorder, err := resolveWorktreeRecorder(ctx, recorderFactory, input.Repository)
+	if err != nil {
+		return err
+	}
 	client := git.NewClient(nil)
 	return (RemoveCommand{
 		Canonicalize: func(path string) (string, error) { return filepath.EvalSymlinks(path) },
@@ -545,7 +564,10 @@ func removeRepository(ctx context.Context, input RemoveInput) error {
 			if err != nil {
 				return err
 			}
-			return store.Update(ctx, func(current *state.State) error { delete(current.Trees, key); return nil })
+			if err := store.Update(ctx, func(current *state.State) error { delete(current.Trees, key); return nil }); err != nil {
+				return err
+			}
+			return recorder.ForgetWorktree(ctx, path)
 		},
 	}).Run(ctx, input)
 }

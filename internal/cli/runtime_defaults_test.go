@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -158,6 +160,111 @@ func TestNewRuntimeDefaultsProvidesApplicationRoutesAndNativeExecuteFallback(t *
 	}
 	if runner := processpkg.NewRunner(); runner.Spawner == nil || runner.Describer == nil || runner.Cleaner == nil {
 		t.Fatal("native process runner is incomplete")
+	}
+}
+
+func TestRuntimeWarmRecordsCreatedWorktrees(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	worktree := &runtimeDefaultsWarmWorktree{}
+	recorder := &capturingWorktreeRecorder{}
+	defaults, err := NewRuntimeDefaults(RuntimeDefaultsOptions{
+		Now:   func() time.Time { return clock },
+		NewID: func() string { return "00000000-0000-4000-8000-000000000041" },
+		Mutations: MutationAdapterOptions{
+			Sync: func(_ context.Context, input SyncCommandInput) (SyncCommandResult, error) {
+				return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
+			},
+			WorktreeRecorder: func(context.Context, git.Repository) (WorktreeRecorder, error) { return recorder, nil },
+		},
+		WarmWorkspace:          func(git.Repository) (lifecycle.WarmWorkspaceService, error) { return worktree, nil },
+		WarmHeads:              func(context.Context, git.Repository) (map[string]string, error) { return map[string]string{}, nil },
+		WarmTargetHead:         func(context.Context, git.Repository, string, bool) (string, error) { return "target-commit", nil },
+		WarmValidateDependency: func(context.Context, git.Repository, string, state.TreeRecord) (bool, error) { return false, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := defaults.Warm(context.Background(), repository, WarmRequest{Count: 1, From: "HEAD", JSON: true})
+	if err != nil {
+		t.Fatalf("warm route returned an error: %v", err)
+	}
+	if result.Status != "warmed" || len(worktree.created) != 1 || len(recorder.records) != 1 || recorder.records[0].source != state.WorktreeSourceWarm {
+		t.Fatalf("warm result=%#v created=%#v records=%#v", result, worktree.created, recorder.records)
+	}
+}
+
+func TestStateTreeDeleterForgetsWorktreeAfterDeletingTreeRecord(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "workspace")
+	key, err := state.TreeKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(filepath.Join(root, "common"), lock.NewDirectoryLocker(lock.Config{}))
+	if err := store.Update(context.Background(), func(current *state.State) error {
+		current.Trees[key] = state.TreeRecord{
+			Path: path, Fingerprint: "fingerprint", Mode: "managed-install",
+			Projections: []string{"node_modules"}, Branch: "agent/task", UpdatedAt: "2026-08-16T12:00:00.000Z",
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &capturingWorktreeRecorder{}
+	deleter := stateTreeDeleter{store: store, recorder: recorder}
+	if err := deleter.DeleteTreeState(context.Background(), path); err != nil {
+		t.Fatalf("DeleteTreeState returned an error: %v", err)
+	}
+	snapshot, err := store.Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := snapshot.Trees[key]; exists {
+		t.Fatal("tree record was not deleted")
+	}
+	if len(recorder.forgets) != 1 || recorder.forgets[0] != path {
+		t.Fatalf("forgets = %#v", recorder.forgets)
+	}
+}
+
+func TestStateTreeDeleterSurfacesForgetFailureAfterDeletingTreeRecord(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "workspace")
+	store := state.NewStore(filepath.Join(root, "common"), lock.NewDirectoryLocker(lock.Config{}))
+	recorder := &capturingWorktreeRecorder{forgetErr: errors.New("forget failed")}
+	deleter := stateTreeDeleter{store: store, recorder: recorder}
+	if err := deleter.DeleteTreeState(context.Background(), path); err == nil || !strings.Contains(err.Error(), "forget failed") {
+		t.Fatalf("DeleteTreeState error = %v, want forget failure", err)
+	}
+}
+
+func TestStateTreeDeleterConcurrentForgetKeepsEveryCall(t *testing.T) {
+	root := t.TempDir()
+	store := state.NewStore(filepath.Join(root, "common"), lock.NewDirectoryLocker(lock.Config{}))
+	recorder := &capturingWorktreeRecorder{}
+	deleter := stateTreeDeleter{store: store, recorder: recorder}
+	const count = 8
+	var wait sync.WaitGroup
+	failures := make(chan error, count)
+	for index := range count {
+		path := filepath.Join(root, fmt.Sprintf("workspace-%d", index))
+		wait.Add(1)
+		go func(path string) {
+			defer wait.Done()
+			if err := deleter.DeleteTreeState(context.Background(), path); err != nil {
+				failures <- err
+			}
+		}(path)
+	}
+	wait.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatalf("concurrent DeleteTreeState returned an error: %v", err)
+	}
+	if len(recorder.forgets) != count {
+		t.Fatalf("forgets = %#v, want %d calls", recorder.forgets, count)
 	}
 }
 

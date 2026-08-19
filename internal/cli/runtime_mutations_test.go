@@ -544,3 +544,88 @@ func (createWorkspaceAdapterStub) Create(context.Context, string, string, string
 	return nil
 }
 func (createWorkspaceAdapterStub) Remove(context.Context, string, bool) error { return nil }
+
+func TestMutationRoutesRecordCreatedWorktrees(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	recorder := &capturingWorktreeRecorder{}
+	factory := func(context.Context, git.Repository) (WorktreeRecorder, error) { return recorder, nil }
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	syncOK := func(context.Context, SyncCommandInput) (SyncCommandResult, error) {
+		return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
+	}
+
+	createWorkspace := &createWorkspaceStub{}
+	createAdapters, err := NewMutationAdapters(MutationAdapterOptions{
+		StartPointResolver: func(context.Context, git.Repository, string, bool) (string, error) { return "HEAD", nil },
+		CreateWorkspace:    func(git.Repository) (CreateWorkspace, error) { return createWorkspace, nil },
+		WorktreeRecorder:   factory,
+		Sync:               syncOK,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdPath := filepath.Join(root, "created")
+	if _, err := createAdapters.Create(context.Background(), CreateCommandInput{
+		Repository: repository, CWD: root, Branch: "agent/create", Path: createdPath,
+	}); err != nil {
+		t.Fatalf("Create returned an error: %v", err)
+	}
+	if len(recorder.records) != 1 || recorder.records[0].source != state.WorktreeSourceCreate || recorder.records[0].path != createdPath {
+		t.Fatalf("create records = %#v", recorder.records)
+	}
+
+	acquireWorkspace := &runtimeWorkspaceStub{}
+	acquireAdapters, err := NewMutationAdapters(MutationAdapterOptions{
+		Now:   func() time.Time { return clock },
+		NewID: func() string { return "00000000-0000-4000-8000-000000000031" },
+		Sync:  syncOK,
+		AcquireWorktree: func(git.Repository) (lifecycle.AcquisitionWorktree, error) {
+			return acquireWorkspace, nil
+		},
+		PortRegistry: func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error) {
+			return nil, nil, nil
+		},
+		WorktreeRecorder: factory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acquireAdapters.Acquire(context.Background(), repository, AcquireInput{
+		Branch: "agent/acquire", Owner: "owner", Hostname: "host", Now: clock,
+	}); err != nil {
+		t.Fatalf("Acquire returned an error: %v", err)
+	}
+	if len(recorder.records) < 2 {
+		t.Fatalf("acquire did not record a worktree: %#v", recorder.records)
+	}
+	foundAcquire := false
+	for _, record := range recorder.records {
+		if record.source == state.WorktreeSourceAcquire {
+			foundAcquire = true
+			break
+		}
+	}
+	if !foundAcquire {
+		t.Fatalf("acquire records missing source acquire: %#v", recorder.records)
+	}
+}
+
+func TestRemoveRepositoryFailsWhenWorktreeRecorderIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	adapters, err := NewMutationAdapters(MutationAdapterOptions{
+		WorktreeRecorder: func(context.Context, git.Repository) (WorktreeRecorder, error) {
+			return nil, errors.New("recorder unavailable")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = adapters.Remove(context.Background(), RemoveInput{
+		Repository: repository, CWD: root, Path: filepath.Join(root, "slot"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "recorder unavailable") {
+		t.Fatalf("Remove error = %v, want recorder failure", err)
+	}
+}

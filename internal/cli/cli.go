@@ -30,6 +30,7 @@ Usage:
   ruk warm --count <n> [--from <ref>] [--fetch] [--json]
   ruk shell <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...]
   ruk list [--json]
+  ruk worktrees [--json]
   ruk remove <path> [--force]
   ruk status [--explain] [--json]
   ruk stats [--disk] [--json]
@@ -578,7 +579,7 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 		}
 		return 0, nil
 	}
-	if invocation.Name == "list" || invocation.Name == "status" || invocation.Name == "stats" {
+	if invocation.Name == "list" || invocation.Name == "status" || invocation.Name == "stats" || invocation.Name == "worktrees" {
 		repository, err := application.discover(ctx, application.cwd)
 		if err != nil {
 			return 1, err
@@ -609,6 +610,15 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 				return 1, err
 			}
 			output, err = FormatStats(record, invocation.JSON)
+			if err != nil {
+				return 1, err
+			}
+		case "worktrees":
+			record, err := application.queries.HandleWorktrees(ctx, repository)
+			if err != nil {
+				return 1, err
+			}
+			output, err = FormatWorktrees(record, invocation.JSON)
 			if err != nil {
 				return 1, err
 			}
