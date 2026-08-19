@@ -160,6 +160,40 @@ Forced collection rechecks the current expiry in the lifecycle state transaction
 so a concurrent renewal prevents collection. It also skips assignments with a
 current fenced lease keeper even when their stored expiry has just elapsed.
 
+## Worktrees
+
+```text
+ruk worktrees [--json]
+```
+
+All worktrees created by `ruk acquire`, `ruk warm`, and `ruk create` are tracked
+per repository in `<git-common-dir>/ruk/worktrees.json`. `ruk worktrees` lists
+that registry for the discovered repository. Entries are removed when Ruk
+removes the worktree (`ruk remove`, `ruk gc --apply`, and create-failure
+cleanup). Git remains authoritative for which worktrees exist; the registry
+records which of them Ruk created.
+
+```json
+{
+  "repository": "/absolute/path/to/repo",
+  "commonDir": "/absolute/path/to/repo/.git",
+  "worktrees": [
+    {
+      "path": "/absolute/path/to/workspace",
+      "branch": "agent/my-task",
+      "source": "acquire",
+      "createdAt": "2026-08-19T10:00:00.000Z",
+      "updatedAt": "2026-08-19T10:00:00.000Z",
+      "exists": true
+    }
+  ]
+}
+```
+
+`source` is `acquire`, `warm`, or `create`. Records are sorted by `path`.
+`worktrees` is an empty array when none are tracked. `exists` is true when the
+folder is present on disk.
+
 ## Inspecting and running
 
 `ruk list --json` and `ruk status --json` include `lifecycle`, `assignmentId`,

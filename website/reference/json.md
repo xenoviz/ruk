@@ -85,6 +85,31 @@ the operating system to terminate.
 are `null` when no assignment is active. `autoRenewing` is derived from current
 fenced keepers rather than stored as a durable status.
 
+## Worktrees
+
+`ruk worktrees --json` returns the repository root, its Git common directory,
+and the tracked Ruk-created worktrees sorted by `path`:
+
+```json
+{
+  "repository": "/work/app",
+  "commonDir": "/work/app/.git",
+  "worktrees": [
+    {
+      "path": "/work/app-ruk-agent-task-1a2b3c4d",
+      "branch": "agent/task",
+      "source": "acquire",
+      "createdAt": "2026-08-19T10:00:00.000Z",
+      "updatedAt": "2026-08-19T10:00:00.000Z",
+      "exists": true
+    }
+  ]
+}
+```
+
+`source` is `acquire`, `warm`, or `create`. `worktrees` is an empty array when
+none are tracked.
+
 ## Failure behavior
 
 A failed JSON command exits nonzero, emits no success record on stdout, and

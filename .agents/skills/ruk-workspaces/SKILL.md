@@ -26,6 +26,7 @@ launch PowerShell.
 4. Inspect with `ruk status --json`. Managed `run`, `exec`, `shell`, and
    assigned `sync` operations renew automatically while active. Use
    `ruk renew <assignmentId> --json` for long idle work outside those commands.
+   Use `ruk worktrees --json` to list worktrees Ruk created for this repository.
 5. Finish with `ruk release <assignmentId> --json`, even when the workspace was
    reused. Report a release failure instead of substituting another ID.
 

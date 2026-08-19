@@ -126,6 +126,12 @@ On Windows, state commits use atomic replace-with-write-through and retry only
 transient access, sharing, and lock violations; permanent replacement errors
 still fail immediately without deleting the last valid state.
 
+Version-1 worktree registry metadata is stored at
+`<git-common-dir>/ruk/worktrees.json` beside the state file. It records every
+worktree created by acquire, warm, and create, keyed per folder. Entries are
+removed when Ruk removes the worktree. Like state, the registry is an
+optimization — Git remains authoritative for which worktrees exist.
+
 ## Workspace lifecycle
 
 Ruk manages reusable agent workspaces with this lifecycle:
