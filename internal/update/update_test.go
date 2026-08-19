@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -585,22 +587,63 @@ func TestDefaultHTTPClientAppliesTimeout(t *testing.T) {
 	}
 }
 
-func TestBoundHTTPContextPreservesExistingDeadline(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	bounded, stop := boundHTTPContext(ctx, time.Second)
-	defer stop()
-	if bounded != ctx {
-		t.Fatal("existing request deadline was replaced")
+func TestDownloadFuncReadsStreamedBodyAfterDoHTTPReturns(t *testing.T) {
+	chunk := bytes.Repeat([]byte{0xab}, 256*1024)
+	const chunks = 16
+	want := bytes.Repeat(chunk, chunks)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/octet-stream")
+		writer.WriteHeader(http.StatusOK)
+		flusher, ok := writer.(http.Flusher)
+		if !ok {
+			http.Error(writer, "response cannot flush", http.StatusInternalServerError)
+			return
+		}
+		flusher.Flush()
+		for range chunks {
+			if _, err := writer.Write(chunk); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	got, err := New(Hooks{}).downloadFunc()(context.Background(), Asset{Name: "ruk-linux-x64", URL: server.URL})
+	if err != nil {
+		t.Fatalf("downloadFunc returned an error: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("downloaded %d bytes, want %d streamed bytes", len(got), len(want))
 	}
 }
 
-func TestBoundHTTPContextAddsDeadlineWhenMissing(t *testing.T) {
-	bounded, stop := boundHTTPContext(context.Background(), time.Second)
-	defer stop()
-	deadline, ok := bounded.Deadline()
-	if !ok || time.Until(deadline) > time.Second || time.Until(deadline) <= 0 {
-		t.Fatalf("deadline = %v ok=%v, want ~1s", deadline, ok)
+func TestDoHTTPTimeoutInterruptsUnreadBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-request.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	response, err := New(Hooks{}).doHTTP(context.Background(), request, 300*time.Millisecond)
+	if err == nil {
+		_, err = io.ReadAll(response.Body)
+		response.Body.Close()
+	}
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("hung body completed without a timeout")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("client timeout took %s, want under 2s", elapsed)
 	}
 }
 

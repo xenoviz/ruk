@@ -380,23 +380,13 @@ func (updater *Updater) doHTTP(ctx context.Context, request *http.Request, timeo
 	}
 	client := updater.httpClient
 	if client == nil {
-		var cancel context.CancelFunc
-		ctx, cancel = boundHTTPContext(ctx, timeout)
-		defer cancel()
-		request = request.WithContext(ctx)
+		// Rely on http.Client.Timeout, which bounds the whole exchange
+		// including body reads. Wrapping the request context with a
+		// deferred cancel here would cancel the body stream as soon as
+		// this function returns, before callers finish reading it.
 		client = defaultHTTPClient(timeout)
 	}
 	return client.Do(request)
-}
-
-func boundHTTPContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if _, ok := ctx.Deadline(); ok {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, timeout)
 }
 
 func defaultHTTPClient(timeout time.Duration) *http.Client {
