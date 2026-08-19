@@ -126,6 +126,18 @@ On Windows, state commits use atomic replace-with-write-through and retry only
 transient access, sharing, and lock violations; permanent replacement errors
 still fail immediately without deleting the last valid state.
 
+Version-1 worktree registry metadata is stored at
+`<git-common-dir>/ruk/worktrees.json` beside the state file. It records every
+worktree created by acquire, warm, and create, keyed per folder. Entries are
+removed when Ruk removes the worktree. Like state, the registry is an
+optimization — Git remains authoritative for which worktrees exist.
+
+A host index at `~/.ruk/repositories.json` maps repositories to those per-repo
+files. The index lives in the per-user `~/.ruk` folder, while the port registry
+remains at `~/.config/ruk/host`. It is display-only discovery metadata: it never
+authorizes a mutation, and every registry it points at is independently
+validated on read. Deleted repositories are pruned on write.
+
 ## Workspace lifecycle
 
 Ruk manages reusable agent workspaces with this lifecycle:
@@ -138,8 +150,12 @@ absent -> preparing -> assigned -> returning -> available
 ```
 
 Each assignment has an immutable assignment ID so delayed automation cannot
-return a workspace that has since been reassigned. Leases expire for reporting;
-reclaiming expired assignments requires an explicit forced GC operation.
+return a workspace that has since been reassigned. Acquisition resolves its
+start point to an immutable commit in the invoking checkout before any state
+or worktree mutation, so reused pool slots cannot adopt their stale detached
+HEAD. Warm creates slots from the same resolved commit its capacity validation
+used. Leases expire for reporting; reclaiming expired assignments requires an
+explicit forced GC operation.
 Managed `run`, `exec`, `shell`, and assigned `sync` operations register a
 short-lived keeper and renew from the assignment's stored lease duration while
 work continues. Multiple keepers can coexist, and each removes only its own

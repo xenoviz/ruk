@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -95,6 +96,7 @@ func TestNewMutationAdaptersBuildsAllRoutesAndCreateOrchestratesFreshWorktree(t 
 		PortRegistry: func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error) {
 			return nil, nil, nil
 		},
+		StartPointResolver: func(context.Context, git.Repository, string, bool) (string, error) { return "HEAD", nil },
 	})
 	if err != nil {
 		t.Fatalf("NewMutationAdapters returned an error: %v", err)
@@ -261,6 +263,7 @@ func TestAcquirePreparationDoesNotReenterWorkspaceHandoffLock(t *testing.T) {
 		PortRegistry: func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error) {
 			return nil, nil, nil
 		},
+		StartPointResolver: func(context.Context, git.Repository, string, bool) (string, error) { return "HEAD", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -419,6 +422,7 @@ func TestAcquirePreparationFailureReturnsNativeWorktree(t *testing.T) {
 		PortRegistry: func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error) {
 			return nil, nil, nil
 		},
+		StartPointResolver: func(context.Context, git.Repository, string, bool) (string, error) { return "HEAD", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -544,3 +548,231 @@ func (createWorkspaceAdapterStub) Create(context.Context, string, string, string
 	return nil
 }
 func (createWorkspaceAdapterStub) Remove(context.Context, string, bool) error { return nil }
+
+func TestMutationRoutesRecordCreatedWorktrees(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	recorder := &capturingWorktreeRecorder{}
+	factory := func(context.Context, git.Repository) (WorktreeRecorder, error) { return recorder, nil }
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	syncOK := func(context.Context, SyncCommandInput) (SyncCommandResult, error) {
+		return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
+	}
+
+	createWorkspace := &createWorkspaceStub{}
+	createAdapters, err := NewMutationAdapters(MutationAdapterOptions{
+		StartPointResolver: func(context.Context, git.Repository, string, bool) (string, error) { return "HEAD", nil },
+		CreateWorkspace:    func(git.Repository) (CreateWorkspace, error) { return createWorkspace, nil },
+		WorktreeRecorder:   factory,
+		Sync:               syncOK,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdPath := filepath.Join(root, "created")
+	if _, err := createAdapters.Create(context.Background(), CreateCommandInput{
+		Repository: repository, CWD: root, Branch: "agent/create", Path: createdPath,
+	}); err != nil {
+		t.Fatalf("Create returned an error: %v", err)
+	}
+	if len(recorder.records) != 1 || recorder.records[0].source != state.WorktreeSourceCreate || recorder.records[0].path != createdPath {
+		t.Fatalf("create records = %#v", recorder.records)
+	}
+
+	acquireWorkspace := &runtimeWorkspaceStub{}
+	acquireAdapters, err := NewMutationAdapters(MutationAdapterOptions{
+		Now:   func() time.Time { return clock },
+		NewID: func() string { return "00000000-0000-4000-8000-000000000031" },
+		Sync:  syncOK,
+		AcquireWorktree: func(git.Repository) (lifecycle.AcquisitionWorktree, error) {
+			return acquireWorkspace, nil
+		},
+		PortRegistry: func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error) {
+			return nil, nil, nil
+		},
+		WorktreeRecorder:   factory,
+		StartPointResolver: func(context.Context, git.Repository, string, bool) (string, error) { return "HEAD", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acquireAdapters.Acquire(context.Background(), repository, AcquireInput{
+		Branch: "agent/acquire", Owner: "owner", Hostname: "host", Now: clock,
+	}); err != nil {
+		t.Fatalf("Acquire returned an error: %v", err)
+	}
+	if len(recorder.records) < 2 {
+		t.Fatalf("acquire did not record a worktree: %#v", recorder.records)
+	}
+	foundAcquire := false
+	for _, record := range recorder.records {
+		if record.source == state.WorktreeSourceAcquire {
+			foundAcquire = true
+			break
+		}
+	}
+	if !foundAcquire {
+		t.Fatalf("acquire records missing source acquire: %#v", recorder.records)
+	}
+}
+
+func TestRemoveRepositoryFailsWhenWorktreeRecorderIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	repository := git.Repository{Root: filepath.Join(root, "repo"), CommonDir: filepath.Join(root, "common")}
+	adapters, err := NewMutationAdapters(MutationAdapterOptions{
+		WorktreeRecorder: func(context.Context, git.Repository) (WorktreeRecorder, error) {
+			return nil, errors.New("recorder unavailable")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = adapters.Remove(context.Background(), RemoveInput{
+		Repository: repository, CWD: root, Path: filepath.Join(root, "slot"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "recorder unavailable") {
+		t.Fatalf("Remove error = %v, want recorder failure", err)
+	}
+}
+
+type idleReleaseProcesses struct{}
+
+func (idleReleaseProcesses) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	return false, nil
+}
+
+func (idleReleaseProcesses) Terminate(context.Context, state.TrackedProcessRecord, bool) (bool, error) {
+	return true, nil
+}
+
+func runRepoGit(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = root
+	command.Env = append(os.Environ(),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=Ruk Test",
+		"GIT_AUTHOR_EMAIL=ruk@example.test",
+		"GIT_COMMITTER_NAME=Ruk Test",
+		"GIT_COMMITTER_EMAIL=ruk@example.test",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func initPinnedStartPointRepo(t *testing.T) (git.Repository, string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	root := t.TempDir()
+	runRepoGit(t, root, "init", "-q")
+	runRepoGit(t, root, "config", "user.name", "Ruk Test")
+	runRepoGit(t, root, "config", "user.email", "ruk@example.test")
+	runRepoGit(t, root, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(root, "README"), []byte("commit A\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runRepoGit(t, root, "add", "README")
+	runRepoGit(t, root, "commit", "-q", "-m", "A")
+	sha := runRepoGit(t, root, "rev-parse", "HEAD")
+	return git.Repository{
+		Root: root, CommonDir: filepath.Join(root, ".git"),
+		PrimaryRoot: root, PrimaryCheckout: true,
+	}, sha
+}
+
+func TestDefaultAcquireStartPointPinsInvokingCheckoutHEAD(t *testing.T) {
+	repository, sha := initPinnedStartPointRepo(t)
+	got, err := defaultAcquireStartPoint(context.Background(), repository, "", false)
+	if err != nil {
+		t.Fatalf("defaultAcquireStartPoint returned an error: %v", err)
+	}
+	if got != sha {
+		t.Fatalf("pinned HEAD = %q, want invoking checkout %q", got, sha)
+	}
+}
+
+func TestDefaultAcquireStartPointResolvesRequestedSHAAndRejectsUnknownRef(t *testing.T) {
+	repository, sha := initPinnedStartPointRepo(t)
+	got, err := defaultAcquireStartPoint(context.Background(), repository, sha, false)
+	if err != nil {
+		t.Fatalf("defaultAcquireStartPoint(existing SHA) returned an error: %v", err)
+	}
+	if got != sha {
+		t.Fatalf("pinned SHA = %q, want full commit %q", got, sha)
+	}
+	_, err = defaultAcquireStartPoint(context.Background(), repository, "refs/heads/does-not-exist", false)
+	if err == nil {
+		t.Fatal("unknown ref was accepted")
+	}
+}
+
+type idleReleasePorter struct{}
+
+func (idleReleasePorter) Release(context.Context, string) error { return nil }
+
+func TestAcquireReusePinsStartPointFromInvokingCheckoutNotStaleSlotHEAD(t *testing.T) {
+	repository, commitA := initPinnedStartPointRepo(t)
+	clock := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	var id int
+	adapters, err := NewMutationAdapters(MutationAdapterOptions{
+		Now:   func() time.Time { return clock },
+		NewID: func() string { id++; return fmt.Sprintf("00000000-0000-4000-8000-%012d", id) },
+		Sync: func(context.Context, SyncCommandInput) (SyncCommandResult, error) {
+			return SyncCommandResult{Status: "prepared", Fingerprint: "fingerprint", Mode: "managed-install"}, nil
+		},
+		PortRegistry: func(*state.Store, string) (lifecycle.PortAllocator, lifecycle.ReleasePorter, error) {
+			return nil, idleReleasePorter{}, nil
+		},
+		ReleaseProcesses: func() lifecycle.ReleaseProcesser { return idleReleaseProcesses{} },
+		WorktreeRecorder: func(context.Context, git.Repository) (WorktreeRecorder, error) {
+			return &capturingWorktreeRecorder{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := adapters.Acquire(context.Background(), repository, AcquireInput{
+		Branch: "agent/task-1", Owner: "owner", Hostname: "host", Now: clock,
+	})
+	if err != nil {
+		t.Fatalf("first Acquire returned an error: %v", err)
+	}
+	if first.Reused || first.Path == "" {
+		t.Fatalf("first acquire = %#v, want a fresh workspace", first.AcquireRecord)
+	}
+	if _, err := adapters.Release(context.Background(), ReleaseInput{
+		Repository: repository, AssignmentID: first.AssignmentID, Force: true,
+	}); err != nil {
+		t.Fatalf("Release returned an error: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repository.Root, "README"), []byte("commit B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runRepoGit(t, repository.Root, "add", "README")
+	runRepoGit(t, repository.Root, "commit", "-q", "-m", "B")
+	commitB := runRepoGit(t, repository.Root, "rev-parse", "HEAD")
+	if commitB == commitA {
+		t.Fatal("primary checkout did not advance")
+	}
+
+	second, err := adapters.Acquire(context.Background(), repository, AcquireInput{
+		Branch: "agent/task-5", Owner: "owner", Hostname: "host", Now: clock,
+	})
+	if err != nil {
+		t.Fatalf("second Acquire returned an error: %v", err)
+	}
+	if !second.Reused || second.Path != first.Path {
+		t.Fatalf("second acquire = %#v, want reuse of %s", second.AcquireRecord, first.Path)
+	}
+	got := runRepoGit(t, second.Path, "rev-parse", "HEAD")
+	if got != commitB {
+		t.Fatalf("reused worktree HEAD = %q, want invoking checkout %q (not stale %q)", got, commitB, commitA)
+	}
+}

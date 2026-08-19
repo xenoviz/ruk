@@ -13,6 +13,7 @@ import (
 	"github.com/xenoviz/ruk/internal/git"
 	"github.com/xenoviz/ruk/internal/state"
 	"github.com/xenoviz/ruk/internal/statistics"
+	"github.com/xenoviz/ruk/internal/worktrees"
 )
 
 func defaultQueryDependencies() QueryDependencies {
@@ -61,6 +62,45 @@ func defaultQueryDependencies() QueryDependencies {
 		},
 		MeasureDisk: func(ctx context.Context, snapshot state.State) (statistics.DiskStatistics, error) {
 			return statistics.MeasureDiskStatistics(ctx, snapshot)
+		},
+		ReadWorktreeRegistry: func(ctx context.Context, commonDir string) (state.WorktreeRegistry, error) {
+			locker, err := newNativeDirectoryLocker(ctx)
+			if err != nil {
+				return state.WorktreeRegistry{}, err
+			}
+			store := state.NewWorktreeStore(commonDir, locker, nil)
+			registry, err := store.Read(ctx)
+			if err != nil {
+				return state.WorktreeRegistry{}, err
+			}
+			if registry == nil {
+				return state.WorktreeRegistry{}, errors.New("worktree registry store returned nil registry")
+			}
+			return *registry, nil
+		},
+		WorktreePathExists: func(path string) bool {
+			// This is a display-only fact; unreadable paths conservatively
+			// report as missing rather than failing the query.
+			_, err := os.Stat(path)
+			return err == nil
+		},
+		ReadWorktreeIndex: func(ctx context.Context) (worktrees.Index, error) {
+			locker, err := newNativeDirectoryLocker(ctx)
+			if err != nil {
+				return worktrees.Index{}, err
+			}
+			store, err := worktrees.NewIndexStore(worktrees.IndexStoreOptions{Locker: locker})
+			if err != nil {
+				return worktrees.Index{}, err
+			}
+			index, err := store.Read(ctx)
+			if err != nil {
+				return worktrees.Index{}, err
+			}
+			if index == nil {
+				return worktrees.Index{}, errors.New("host repository index store returned nil index")
+			}
+			return *index, nil
 		},
 	}
 }
@@ -129,6 +169,15 @@ func mergeQueryDependencies(value, defaults QueryDependencies) QueryDependencies
 	}
 	if value.MeasureDisk == nil {
 		value.MeasureDisk = defaults.MeasureDisk
+	}
+	if value.ReadWorktreeRegistry == nil {
+		value.ReadWorktreeRegistry = defaults.ReadWorktreeRegistry
+	}
+	if value.WorktreePathExists == nil {
+		value.WorktreePathExists = defaults.WorktreePathExists
+	}
+	if value.ReadWorktreeIndex == nil {
+		value.ReadWorktreeIndex = defaults.ReadWorktreeIndex
 	}
 	return value
 }

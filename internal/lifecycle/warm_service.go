@@ -186,7 +186,7 @@ func (service *WarmService) warmLocked(ctx context.Context, input WarmInput, res
 	}
 	created := make([]string, 0)
 	for index := available; index < input.Count; index++ {
-		path, createErr := service.createSlot(ctx, index, input.StartPoint)
+		path, createErr := service.createSlot(ctx, index, target)
 		if createErr != nil {
 			return createErr
 		}

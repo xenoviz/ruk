@@ -43,6 +43,12 @@ function keyIsPort(key: string | undefined): boolean {
   return key !== undefined && /^(?:port|portNumber)$/i.test(key);
 }
 
+// Assignment records persist os.Hostname(), which differs per CI runner and
+// developer machine. Frozen comparisons must not depend on where they run.
+function keyIsHostname(key: string | undefined): boolean {
+  return key !== undefined && /^hostname$/i.test(key);
+}
+
 function keyIsPreparationDuration(key: string | undefined): boolean {
   return key !== undefined && (/^(?:total|last|average)PreparationMs$/i.test(key) || key === "leaseDurationMinutes");
 }
@@ -56,6 +62,7 @@ function normalizeValue(value: unknown, context: NormalizationContext, key?: str
     if (keyIsTimestamp(key)) return "<timestamp>";
     if (keyIsPID(key)) return "<pid>";
     if (keyIsFingerprint(key)) return "<fingerprint>";
+    if (keyIsHostname(key)) return "<hostname>";
     return normalizeText(value, context);
   }
   if (typeof value === "number" && keyIsPreparationDuration(key)) return "<duration>";

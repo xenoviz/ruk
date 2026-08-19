@@ -31,6 +31,7 @@ type Invocation struct {
 	Explain             bool
 	Disk                bool
 	AllowSharedCheckout bool
+	All                 bool
 }
 
 type optionSpec struct {
@@ -177,6 +178,8 @@ func commandGrammar(name string) (optionSpec, int, string, bool) {
 		return spec([]string{"--from", "--ttl", "--owner", "--port"}, []string{"--fetch"}), 1, "shell requires exactly one branch name", true
 	case "list":
 		return spec(nil, []string{"--json"}), 0, "list does not accept positional arguments", true
+	case "worktrees":
+		return spec(nil, []string{"--json", "--all"}), 0, "worktrees does not accept positional arguments", true
 	case "remove":
 		return spec(nil, []string{"--force"}), 1, "remove requires exactly one workspace path", true
 	case "status":
@@ -250,6 +253,8 @@ func setFlag(invocation *Invocation, option string) {
 		invocation.Disk = true
 	case "--allow-shared-checkout":
 		invocation.AllowSharedCheckout = true
+	case "--all":
+		invocation.All = true
 	}
 }
 

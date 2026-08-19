@@ -65,6 +65,11 @@ qualified remote-tracking refs fail if their named remote is missing. Named
 ports are unique among active Ruk assignments and are injected into assigned
 commands as normalized variables such as `RUK_PORT_APP`.
 
+The start point is pinned to an immutable commit in the checkout where the
+command runs before any state or worktree mutation. `--from` accepts refs;
+worktree-relative refs such as `HEAD` are resolved in that checkout, not in a
+recycled pool slot.
+
 ## Renew
 
 ```text
@@ -159,6 +164,71 @@ omitted from `expired`, and apply output is recomputed from final lifecycle stat
 Forced collection rechecks the current expiry in the lifecycle state transaction,
 so a concurrent renewal prevents collection. It also skips assignments with a
 current fenced lease keeper even when their stored expiry has just elapsed.
+
+## Worktrees
+
+```text
+ruk worktrees [--all] [--json]
+```
+
+All worktrees created by `ruk acquire`, `ruk warm`, and `ruk create` are tracked
+per repository in `<git-common-dir>/ruk/worktrees.json`. `ruk worktrees` lists
+that registry for the discovered repository. Entries are removed when Ruk
+removes the worktree (`ruk remove`, `ruk gc --apply`, and create-failure
+cleanup). Git remains authoritative for which worktrees exist; the registry
+records which of them Ruk created.
+
+`ruk worktrees --all` works outside a repository. It reads the host index at
+`~/.ruk/repositories.json` and aggregates each per-repo registry.
+The index is display-only discovery metadata: it maps repositories to their
+registries and contains no worktree records. Per-repo registries stay
+authoritative. Deleted repositories are skipped on read and pruned from the
+index on the next write.
+
+```json
+{
+  "repository": "/absolute/path/to/repo",
+  "commonDir": "/absolute/path/to/repo/.git",
+  "worktrees": [
+    {
+      "path": "/absolute/path/to/workspace",
+      "branch": "agent/my-task",
+      "source": "acquire",
+      "createdAt": "2026-08-19T10:00:00.000Z",
+      "updatedAt": "2026-08-19T10:00:00.000Z",
+      "exists": true
+    }
+  ]
+}
+```
+
+`--all` wraps those per-repository objects:
+
+```json
+{
+  "repositories": [
+    {
+      "repository": "/absolute/path/to/repo",
+      "commonDir": "/absolute/path/to/repo/.git",
+      "worktrees": [
+        {
+          "path": "/absolute/path/to/workspace",
+          "branch": "agent/my-task",
+          "source": "acquire",
+          "createdAt": "2026-08-19T10:00:00.000Z",
+          "updatedAt": "2026-08-19T10:00:00.000Z",
+          "exists": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+`source` is `acquire`, `warm`, or `create`. Records are sorted by `path`.
+`worktrees` is an empty array when none are tracked. `exists` is true when the
+folder is present on disk. `--all` omits repositories whose registries have
+zero records; the host-wide JSON shape is `{"repositories":[]}` when none remain.
 
 ## Inspecting and running
 

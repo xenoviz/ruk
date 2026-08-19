@@ -30,6 +30,7 @@ Usage:
   ruk warm --count <n> [--from <ref>] [--fetch] [--json]
   ruk shell <branch> [--from <ref>] [--fetch] [--ttl <minutes>] [--owner <id>] [--port <name>...]
   ruk list [--json]
+  ruk worktrees [--all] [--json]
   ruk remove <path> [--force]
   ruk status [--explain] [--json]
   ruk stats [--disk] [--json]
@@ -272,6 +273,20 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 	invocation, err := Parse(args)
 	if err != nil {
 		return 1, err
+	}
+	if invocation.Name == "worktrees" && invocation.All {
+		record, err := application.queries.HandleAllWorktrees(ctx)
+		if err != nil {
+			return 1, err
+		}
+		output, err := FormatAllWorktrees(record, invocation.JSON)
+		if err != nil {
+			return 1, err
+		}
+		if _, err := io.WriteString(application.stdout, output); err != nil {
+			return 1, fmt.Errorf("write worktrees result: %w", err)
+		}
+		return 0, nil
 	}
 	if invocation.Name == "update" {
 		result, err := application.update(ctx, updatepkg.Options{
@@ -578,7 +593,7 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 		}
 		return 0, nil
 	}
-	if invocation.Name == "list" || invocation.Name == "status" || invocation.Name == "stats" {
+	if invocation.Name == "list" || invocation.Name == "status" || invocation.Name == "stats" || invocation.Name == "worktrees" {
 		repository, err := application.discover(ctx, application.cwd)
 		if err != nil {
 			return 1, err
@@ -609,6 +624,15 @@ func (application *Application) Run(ctx context.Context, args []string) (int, er
 				return 1, err
 			}
 			output, err = FormatStats(record, invocation.JSON)
+			if err != nil {
+				return 1, err
+			}
+		case "worktrees":
+			record, err := application.queries.HandleWorktrees(ctx, repository)
+			if err != nil {
+				return 1, err
+			}
+			output, err = FormatWorktrees(record, invocation.JSON)
 			if err != nil {
 				return 1, err
 			}
