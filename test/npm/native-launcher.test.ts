@@ -9,8 +9,10 @@ import test from "node:test";
 import {
   installerFromEnvironment,
   installNativeLauncher,
+  ensureNativeLauncher,
   platformTarget,
   replaceWindowsOutputs,
+  runPackageCommand,
   windowsCommandDestination,
   windowsUpdateProcessID,
 } from "../../scripts/npm/launcher.mjs";
@@ -507,4 +509,79 @@ test("installer reports missing optional packages and unsupported hosts clearly"
     installNativeLauncher({ root: value.root, platform: "linux", arch: "x64", libc: "glibc" }),
     /optional native package .* is missing/,
   );
+});
+
+test("ensureNativeLauncher reuses a verified placement and installs when scripts were skipped", async (t) => {
+  const value = await fixture();
+  t.after(() => fs.rm(value.root, { recursive: true, force: true }));
+  const destination = path.join(value.root, "bin", "ruk");
+  await fs.writeFile(destination, "#!/usr/bin/env node\nexport {};\n");
+
+  const installed = await ensureNativeLauncher({ root: value.root, platform: "linux", arch: "x64", libc: "glibc" });
+  assert.equal(installed.reused, false);
+  assert.deepEqual(await fs.readFile(destination), value.contents);
+
+  const reused = await ensureNativeLauncher({ root: value.root, platform: "linux", arch: "x64", libc: "glibc" });
+  assert.equal(reused.reused, true);
+  assert.equal(reused.destination, destination);
+  assert.deepEqual(await fs.readFile(destination), value.contents);
+});
+
+test("runPackageCommand installs when needed then executes the native binary", async (t) => {
+  const value = await fixture();
+  t.after(() => fs.rm(value.root, { recursive: true, force: true }));
+  const destination = path.join(value.root, "bin", "ruk");
+  await fs.writeFile(destination, "#!/usr/bin/env node\nexport {};\n");
+
+  let exitCode: number | undefined;
+  let spawned: { command: string; args: string[] } | undefined;
+  const result = await runPackageCommand({
+    root: value.root,
+    platform: "linux",
+    arch: "x64",
+    libc: "glibc",
+    args: ["--version"],
+    exit: (code) => {
+      exitCode = code;
+    },
+    spawnSync: (command, args) => {
+      spawned = { command, args };
+      return { status: 0, signal: null };
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(exitCode, 0);
+  assert.equal(spawned?.command, destination);
+  assert.deepEqual(spawned?.args, ["--version"]);
+  assert.deepEqual(await fs.readFile(destination), value.contents);
+  assert.equal(result.reused, false);
+
+  exitCode = undefined;
+  spawned = undefined;
+  const reused = await runPackageCommand({
+    root: value.root,
+    platform: "linux",
+    arch: "x64",
+    libc: "glibc",
+    args: ["--help"],
+    exit: (code) => {
+      exitCode = code;
+    },
+    spawnSync: (command, args) => {
+      spawned = { command, args };
+      return { status: 7, signal: null };
+    },
+  });
+  assert.equal(reused.status, 7);
+  assert.equal(exitCode, 7);
+  assert.equal(reused.reused, true);
+  assert.equal(spawned?.command, destination);
+  assert.deepEqual(spawned?.args, ["--help"]);
+});
+
+test("published bin/ruk delegates to runPackageCommand", async () => {
+  const launcher = await fs.readFile(new URL("../../npm/ruk/bin/ruk", import.meta.url), "utf8");
+  assert.match(launcher, /runPackageCommand/);
+  assert.match(launcher, /scripts\/npm\/launcher\.mjs/);
 });

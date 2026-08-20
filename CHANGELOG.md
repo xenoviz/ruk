@@ -3,6 +3,12 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Make the npm `bin/ruk` entry a thin launcher that places the verified native
+  binary on first use when lifecycle scripts are skipped, while keeping
+  postinstall as an eager optimization when scripts are allowed.
+
 ## 0.3.0-beta.3 - 2026-08-19
 
 - Keep standalone self-update downloads readable after the HTTP response

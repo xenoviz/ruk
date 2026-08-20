@@ -74,7 +74,11 @@ if (nativeRoot["dependencies"] !== undefined || nativeRoot["peerDependencies"] !
   throw new Error("npm/ruk must not add runtime or peer dependencies beyond its optional native packages");
 }
 if (!isRecord(nativeRoot["scripts"]) || nativeRoot["scripts"]["postinstall"] !== "node scripts/npm/install.mjs") {
-  throw new Error("npm/ruk must install its native launcher through the postinstall script");
+  throw new Error("npm/ruk must keep postinstall as an eager native placement optimization");
+}
+const binLauncher = await fs.readFile(path.join(root, "npm", "ruk", "bin", "ruk"), "utf8");
+if (!binLauncher.includes("runPackageCommand") || !binLauncher.includes("scripts/npm/launcher.mjs")) {
+  throw new Error("npm/ruk bin/ruk must invoke runPackageCommand so installs work when scripts are blocked");
 }
 const optionalDependencies = nativeRoot["optionalDependencies"];
 if (!isRecord(optionalDependencies) || Object.keys(optionalDependencies).length !== Object.keys(nativePackages).length) {

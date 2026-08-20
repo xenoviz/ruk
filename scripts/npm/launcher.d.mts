@@ -50,7 +50,7 @@ export declare function replaceWindowsOutputs(
 ): Promise<{ cleanupPending: boolean }>;
 
 export declare function installNativeLauncher(options?: {
-  root?: string;
+  root?: string | URL;
   platform?: string;
   arch?: string;
   libc?: string;
@@ -70,4 +70,64 @@ export declare function installNativeLauncher(options?: {
   installer: "bun" | "npm" | "pnpm" | "yarn";
   deferred: boolean;
   cleanupPending: boolean;
+  reused: boolean;
+}>;
+
+export declare function ensureNativeLauncher(options?: {
+  root?: string | URL;
+  platform?: string;
+  arch?: string;
+  libc?: string;
+  commandDestination?: string;
+  environment?: Record<string, string | undefined>;
+  fileSystem?: LauncherFileSystem;
+  spawnReplacement?: (
+    command: string,
+    args: string[],
+    options: { detached: boolean; stdio: "ignore"; windowsHide: boolean },
+  ) => { unref(): void };
+}): Promise<{
+  packageName: string;
+  target: string;
+  destination: string;
+  sha256: string;
+  installer: "bun" | "npm" | "pnpm" | "yarn";
+  deferred: boolean;
+  cleanupPending: boolean;
+  reused: boolean;
+}>;
+
+export declare function runPackageCommand(options?: {
+  root?: string | URL;
+  platform?: string;
+  arch?: string;
+  libc?: string;
+  commandDestination?: string;
+  environment?: Record<string, string | undefined>;
+  args?: string[];
+  exit?: (code: number) => void;
+  writeError?: (message: string) => void;
+  spawnSync?: (
+    command: string,
+    args: string[],
+    options: { stdio: "inherit"; env: NodeJS.ProcessEnv; windowsHide: boolean },
+  ) => { status: number | null; signal: NodeJS.Signals | null; error?: Error };
+  fileSystem?: LauncherFileSystem;
+  spawnReplacement?: (
+    command: string,
+    args: string[],
+    options: { detached: boolean; stdio: "ignore"; windowsHide: boolean },
+  ) => { unref(): void };
+}): Promise<{
+  packageName?: string;
+  target?: string;
+  destination?: string;
+  sha256?: string;
+  installer?: "bun" | "npm" | "pnpm" | "yarn";
+  deferred?: boolean;
+  cleanupPending?: boolean;
+  reused?: boolean;
+  status: number;
+  signal?: NodeJS.Signals;
+  error?: string;
 }>;

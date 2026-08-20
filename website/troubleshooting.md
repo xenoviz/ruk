@@ -10,8 +10,9 @@ ruk --version
 ```
 
 The npm package installs a native platform binary. Node.js or Bun may be needed
-by the package manager during installation, but neither is required to run the
-command afterward.
+by the package manager during installation, and the published command entry may
+briefly run Node to finish native placement when install scripts were skipped,
+but neither remains the command supervisor afterward.
 
 ## The declared package manager is missing
 

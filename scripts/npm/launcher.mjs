@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -400,8 +400,12 @@ export async function replaceWindowsOutputs(outputs, fileSystem = fs) {
   }
 }
 
-export async function installNativeLauncher(options = {}) {
-  const root = path.resolve(options.root ?? fileURLToPath(new URL("../..", import.meta.url)));
+async function resolveNativePackage(options = {}) {
+  const root = path.resolve(
+    options.root instanceof URL
+      ? fileURLToPath(options.root)
+      : options.root ?? fileURLToPath(new URL("../..", import.meta.url)),
+  );
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   const libc = options.libc ?? detectLibc(platform);
@@ -455,52 +459,90 @@ export async function installNativeLauncher(options = {}) {
   }
   if (!stat.isFile() || stat.size <= 0) throw new Error(`Ruk native binary is empty or not a file at ${source}`);
   if (platform !== "win32" && (stat.mode & 0o111) === 0) throw new Error(`Ruk native binary is not executable at ${source}`);
-  const actualDigest = await digest(source);
-  if (actualDigest !== expectedDigest.toLowerCase()) {
+  const sha256 = await digest(source);
+  if (sha256 !== expectedDigest.toLowerCase()) {
     throw new Error(`Ruk native binary checksum mismatch for ${selected.packageName}`);
   }
-  const updatePID = platform === "win32" ? windowsUpdateProcessID(options.environment) : undefined;
-  const deferredEntries = [];
   const commandDestination = options.commandDestination ?? (
     platform === "win32" ? windowsCommandDestination(root, options.environment) : undefined
   );
+  return {
+    root,
+    platform,
+    selected,
+    source,
+    sha256,
+    destination,
+    marker,
+    markerContents,
+    installer,
+    commandDestination,
+  };
+}
+
+async function reuseInstalledNative(resolved) {
+  try {
+    const installedDigest = await digest(resolved.destination);
+    if (installedDigest !== resolved.sha256) return undefined;
+    const marker = await readJSON(resolved.marker, "Ruk distribution marker");
+    if (!isObject(marker) || marker.schemaVersion !== 1 || marker.distribution !== "package") return undefined;
+    if (typeof marker.installer !== "string" || marker.installer === "") return undefined;
+    return {
+      packageName: resolved.selected.packageName,
+      target: resolved.selected.target,
+      destination: resolved.destination,
+      sha256: installedDigest,
+      installer: marker.installer,
+      deferred: false,
+      cleanupPending: false,
+      reused: true,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function installNativeLauncher(options = {}) {
+  const resolved = await resolveNativePackage(options);
+  const updatePID = resolved.platform === "win32" ? windowsUpdateProcessID(options.environment) : undefined;
+  const deferredEntries = [];
   let cleanupPending = false;
   try {
     if (updatePID !== undefined) {
-      deferredEntries.push([await stageWindowsCopy(source, destination), destination]);
-      if (commandDestination !== undefined) {
-        if (platform !== "win32" || path.extname(commandDestination).toLowerCase() !== ".exe") {
+      deferredEntries.push([await stageWindowsCopy(resolved.source, resolved.destination), resolved.destination]);
+      if (resolved.commandDestination !== undefined) {
+        if (resolved.platform !== "win32" || path.extname(resolved.commandDestination).toLowerCase() !== ".exe") {
           throw new Error("Ruk native command destination must be a Windows .exe path");
         }
-        const resolvedCommandDestination = path.resolve(commandDestination);
-        deferredEntries.push([await stageWindowsCopy(source, resolvedCommandDestination), resolvedCommandDestination]);
+        const resolvedCommandDestination = path.resolve(resolved.commandDestination);
+        deferredEntries.push([await stageWindowsCopy(resolved.source, resolvedCommandDestination), resolvedCommandDestination]);
         const commandMarker = `${resolvedCommandDestination}.ruk-distribution`;
-        deferredEntries.push([await stageWindowsContents(markerContents, commandMarker), commandMarker]);
+        deferredEntries.push([await stageWindowsContents(resolved.markerContents, commandMarker), commandMarker]);
       }
-      deferredEntries.push([await stageWindowsContents(markerContents, marker), marker]);
+      deferredEntries.push([await stageWindowsContents(resolved.markerContents, resolved.marker), resolved.marker]);
       await scheduleWindowsReplacement(deferredEntries, updatePID, options.spawnReplacement ?? spawn);
     } else {
-      if (platform !== "win32" && commandDestination !== undefined) {
+      if (resolved.platform !== "win32" && resolved.commandDestination !== undefined) {
         throw new Error("Ruk native command destination must be a Windows .exe path");
       }
-      if (platform === "win32") {
-        const outputs = [{ source, destination }];
-        if (commandDestination !== undefined) {
-          if (path.extname(commandDestination).toLowerCase() !== ".exe") {
+      if (resolved.platform === "win32") {
+        const outputs = [{ source: resolved.source, destination: resolved.destination }];
+        if (resolved.commandDestination !== undefined) {
+          if (path.extname(resolved.commandDestination).toLowerCase() !== ".exe") {
             throw new Error("Ruk native command destination must be a Windows .exe path");
           }
-          const resolvedCommandDestination = path.resolve(commandDestination);
+          const resolvedCommandDestination = path.resolve(resolved.commandDestination);
           outputs.push(
-            { source, destination: resolvedCommandDestination },
-            { contents: markerContents, destination: `${resolvedCommandDestination}.ruk-distribution` },
+            { source: resolved.source, destination: resolvedCommandDestination },
+            { contents: resolved.markerContents, destination: `${resolvedCommandDestination}.ruk-distribution` },
           );
         }
-        outputs.push({ contents: markerContents, destination: marker });
+        outputs.push({ contents: resolved.markerContents, destination: resolved.marker });
         const replacement = await replaceWindowsOutputs(outputs, options.fileSystem ?? fs);
         cleanupPending = replacement.cleanupPending;
       } else {
-        await atomicCopy(source, destination, true);
-        await atomicWrite(marker, markerContents);
+        await atomicCopy(resolved.source, resolved.destination, true);
+        await atomicWrite(resolved.marker, resolved.markerContents);
       }
     }
   } catch (error) {
@@ -508,12 +550,67 @@ export async function installNativeLauncher(options = {}) {
     throw error;
   }
   return {
-    packageName: selected.packageName,
-    target: selected.target,
-    destination,
-    sha256: actualDigest,
-    installer,
+    packageName: resolved.selected.packageName,
+    target: resolved.selected.target,
+    destination: resolved.destination,
+    sha256: resolved.sha256,
+    installer: resolved.installer,
     deferred: updatePID !== undefined,
     cleanupPending,
+    reused: false,
   };
+}
+
+// Ensures the verified native binary is on the package command path. Package
+// managers may skip postinstall; the published bin/ruk entry uses this path so
+// the first command invocation can finish installation and then exec the native
+// binary without requiring lifecycle scripts.
+export async function ensureNativeLauncher(options = {}) {
+  const resolved = await resolveNativePackage(options);
+  const reused = await reuseInstalledNative(resolved);
+  if (reused !== undefined) return reused;
+  return installNativeLauncher(options);
+}
+
+export async function runPackageCommand(options = {}) {
+  const exit = options.exit ?? ((code) => {
+    process.exit(code);
+  });
+  const writeError = options.writeError ?? ((message) => {
+    process.stderr.write(message);
+  });
+  const run = options.spawnSync ?? spawnSync;
+  try {
+    const installed = await ensureNativeLauncher(options);
+    if (installed.deferred) {
+      writeError(`Scheduled native replacement ${installed.target} for ${installed.packageName}.\n`);
+      exit(0);
+      return { ...installed, status: 0 };
+    }
+    if (installed.cleanupPending) {
+      writeError("Ruk native installation succeeded, but temporary backup cleanup is pending; manual cleanup may be required.\n");
+    }
+    const result = run(installed.destination, options.args ?? process.argv.slice(2), {
+      stdio: "inherit",
+      env: options.environment ?? process.env,
+      windowsHide: false,
+    });
+    if (result.error) throw result.error;
+    if (typeof result.signal === "string" && result.signal !== "") {
+      try {
+        process.kill(process.pid, result.signal);
+      } catch {
+        exit(1);
+      }
+      return { ...installed, status: 1, signal: result.signal };
+    }
+    const status = Number.isInteger(result.status) ? result.status : 1;
+    exit(status);
+    return { ...installed, status };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    writeError(`Ruk native launcher failed: ${message}\n`);
+    exit(1);
+    return { status: 1, error: message };
+  }
 }

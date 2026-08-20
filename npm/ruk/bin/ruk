@@ -1,4 +1,8 @@
 #!/usr/bin/env node
 
-console.error("Ruk native binary was not installed; reinstall @xenoviz/ruk for this platform.");
-process.exitCode = 1;
+// Package managers may skip postinstall. This entry installs the verified
+// native binary on first use when needed, then executes it so Node is not the
+// long-lived command supervisor after a successful placement.
+import { runPackageCommand } from "../scripts/npm/launcher.mjs";
+
+await runPackageCommand({ root: new URL("..", import.meta.url) });
