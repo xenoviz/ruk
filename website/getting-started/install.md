@@ -20,8 +20,10 @@ bun install --global @xenoviz/ruk@beta
 ```
 
 The package manager installs the matching optional native package for the host.
-Node.js or Bun may run installation hooks, but neither remains resident when
-the `ruk` command runs.
+When lifecycle scripts are allowed, postinstall places the native binary
+eagerly. When scripts are blocked, the first `ruk` invocation finishes that
+placement and then runs the native command. Node.js or Bun may participate in
+installation, but neither remains resident as the command supervisor afterward.
 
 ## Standalone executable
 

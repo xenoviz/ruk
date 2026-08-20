@@ -116,6 +116,37 @@ try {
   if (versionResult.stdout.trim() !== version) throw new Error(`Installed native executable returned ${versionResult.stdout.trim()}, expected ${version}`);
   const helpResult = await run(executable, ["--help"], { cwd: installRoot });
   if (!helpResult.stdout.startsWith("Ruk —")) throw new Error("Installed native executable failed its help smoke test");
+
+  const ignoredRoot = path.join(temporary, "consumer-ignore-scripts");
+  await fs.mkdir(ignoredRoot);
+  await run("npm", ["init", "-y"], { cwd: ignoredRoot, env: npmEnvironment });
+  await run("npm", ["install", "--ignore-scripts", rootTarball, platformTarball], {
+    cwd: ignoredRoot,
+    env: npmEnvironment,
+  });
+  const packageBin = path.join(ignoredRoot, "node_modules", "@xenoviz", "ruk", "bin", "ruk");
+  const ignoredCommand = await run(process.execPath, [packageBin, "--version"], {
+    cwd: ignoredRoot,
+    env: npmEnvironment,
+  });
+  if (ignoredCommand.stdout.trim() !== version) {
+    throw new Error(`Ignore-scripts package command returned ${ignoredCommand.stdout.trim()}, expected ${version}`);
+  }
+  const placedNative = path.join(
+    ignoredRoot,
+    "node_modules",
+    "@xenoviz",
+    "ruk",
+    "bin",
+    process.platform === "win32" ? "ruk.exe" : "ruk",
+  );
+  if (process.platform === "win32") {
+    await fs.access(placedNative);
+  } else {
+    const placed = await fs.readFile(placedNative);
+    const expected = await fs.readFile(binary);
+    if (!placed.equals(expected)) throw new Error("Ignore-scripts first invocation did not place the native binary");
+  }
   process.stdout.write(`Verified native ${selected.target} package and executable for ${process.platform}/${process.arch}.\n`);
 } finally {
   await fs.rm(temporary, { recursive: true, force: true });

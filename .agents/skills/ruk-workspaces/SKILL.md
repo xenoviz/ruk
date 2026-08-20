@@ -6,11 +6,13 @@ description: Manage Ruk workspaces for coding agents. Use when an agent must acq
 # Ruk Workspaces
 
 Ruk 0.3 runs as one dependency-free native Go binary. The npm distribution
-installs the matching platform package, while standalone downloads provide the
-same command without Node.js or Bun. Package-manager runtimes may still be
-needed to install or update the npm distribution; they are not Ruk's command
-supervisor. On Windows, routine process liveness uses native APIs and does not
-launch PowerShell.
+installs the matching platform package and places that native binary on the
+command path (via postinstall when scripts are allowed, or on first invocation
+when they are not). Standalone downloads provide the same command without
+Node.js or Bun. Package-manager runtimes may still be needed to install or
+update the npm distribution; they are not Ruk's command supervisor after the
+native binary is placed. On Windows, routine process liveness uses native APIs
+and does not launch PowerShell.
 
 ## Workflow
 
@@ -174,9 +176,10 @@ For updates, stable installations select completed stable releases. A current
 prerelease follows newer releases on that same prerelease channel automatically;
 an explicit prerelease opt-in may change channels. Discovery follows GitHub
 pagination, and Bun package updates trust the exact Ruk package so its native
-postinstall can run. Package installations delegate the exact version to their
-owning package manager; standalone installations verify the native asset and
-replace it atomically. On Windows, package and standalone updates report a
-scheduled handoff and replace locked native files only after the running Ruk
-process exits. Never infer installer ownership from a path when the distribution
-marker is available.
+postinstall can run eagerly. When lifecycle scripts are skipped, the published
+command entry finishes native placement on first invocation. Package
+installations delegate the exact version to their owning package manager;
+standalone installations verify the native asset and replace it atomically. On
+Windows, package and standalone updates report a scheduled handoff and replace
+locked native files only after the running Ruk process exits. Never infer
+installer ownership from a path when the distribution marker is available.

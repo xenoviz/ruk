@@ -67,8 +67,10 @@ npm install --global @xenoviz/ruk@beta
 ```
 
 The package manager installs a matching native optional package for the host.
-The `ruk` command then executes the native Go binary directly; Node.js is not
-kept resident as a command supervisor. Bun can also install the package:
+When install scripts are allowed, postinstall places the native binary eagerly;
+when they are blocked, the first `ruk` invocation finishes placement and then
+runs that binary. Node.js is not kept resident as the command supervisor
+afterward. Bun can also install the package:
 
 ```bash
 bun install --global @xenoviz/ruk@beta

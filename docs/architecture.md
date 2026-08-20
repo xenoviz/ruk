@@ -10,16 +10,18 @@ processes; Ruk does not reimplement them.
 The same Go runtime is distributed in two forms:
 
 - a small `@xenoviz/ruk` npm package with one of seven optional native platform
-  packages; the package installer places the verified binary on the user's
-  package-manager path and exits;
+  packages; the published command entry places the verified binary on the user's
+  package-manager path when needed (eagerly via postinstall when lifecycle
+  scripts are allowed, otherwise on first invocation) and then executes that
+  native binary;
 - standalone Linux, macOS, and Windows binaries for x64 and ARM64, including a
   Linux x64 musl build, with checksums and provenance attestations.
 
 Node.js, Bun, pnpm, and Yarn may run package-manager installation or update
-hooks, but none is retained as Ruk's command supervisor. Bun remains a
-repository tool for VitePress and supporting scripts. Both distributions must
-exercise real Git subprocess behavior in CI; a binary that only starts or
-prints its version is not considered verified.
+hooks, but none is retained as Ruk's command supervisor after the native binary
+is placed. Bun remains a repository tool for VitePress and supporting scripts.
+Both distributions must exercise real Git subprocess behavior in CI; a binary
+that only starts or prints its version is not considered verified.
 
 ## Updates and release trust
 
