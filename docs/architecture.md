@@ -56,12 +56,16 @@ which repository workflow produced an executable.
 
 Path-based package-manager detection is a convenience, not an authority. Users
 can override it for unusual installation layouts or automation with
-`RUK_UPDATE_INSTALLER`. Starting with the second ready release, release CI
-downloads the prior Windows executable, runs its updater against the newly
-finalized release, and verifies the executable version after deferred
-replacement. A prerelease uses the prior ready Windows executable on that same
-prerelease channel; the first tag on a channel skips because a stable install
-ignores prereleases and is not an upgrade source.
+`RUK_UPDATE_INSTALLER`. Release discovery may send `GH_TOKEN` or `GITHUB_TOKEN`
+when present so shared CI runners are not blocked by unauthenticated GitHub API
+rate limits; ordinary installs without those variables keep working. Starting
+with the second ready release, release CI downloads the prior Windows
+executable, runs its updater against the newly finalized release, and verifies
+the executable version after deferred replacement. A prerelease uses the prior
+ready Windows executable on that same prerelease channel; the first tag on a
+channel skips because a stable install ignores prereleases and is not an
+upgrade source. The first Go-native stable (`0.3.0`) also skips TypeScript-era
+`0.1.x` Windows executables in that smoke job.
 
 ## Boundaries
 

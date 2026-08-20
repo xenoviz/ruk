@@ -3,6 +3,17 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## 0.3.0 - 2026-08-20
+
+- Promote the Go-native 0.3 line to stable after the beta packaging, update, and
+  install-script fixes.
+- Authenticate GitHub release discovery with `GH_TOKEN` or `GITHUB_TOKEN` when
+  present so shared CI runners are not blocked by unauthenticated API rate
+  limits.
+- Skip the Windows previous→current update smoke for the first Go-native stable
+  instead of selecting TypeScript-era `0.1.x` executables under those rate
+  limits.
+
 ## 0.3.0-beta.4 - 2026-08-20
 
 - Make the npm `bin/ruk` entry a thin launcher that places the verified native

@@ -53,6 +53,14 @@ function isEligibleUpgradeSource(
     if (!isRecord(release) || release["prerelease"] !== false || versionIsPrerelease(candidate.version)) {
       return false;
     }
+    // The Go-native stable line begins at 0.3.0. Earlier TypeScript stables remain
+    // valid human upgrade sources via `ruk update`, but release CI only exercises
+    // Windows previous→current updates inside the Go-native stable line. The first
+    // Go stable therefore skips rather than depending on a 0.1.x updater under
+    // shared-runner GitHub API rate limits.
+    if (compareVersions(currentVersion, "0.3.0") >= 0 && compareVersions(candidate.version, "0.3.0") < 0) {
+      return false;
+    }
     return true;
   } catch {
     return false;

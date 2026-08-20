@@ -418,8 +418,7 @@ func (updater *Updater) discoverHTTP(ctx context.Context) ([]Release, error) {
 		if err != nil {
 			return nil, err
 		}
-		request.Header.Set("Accept", "application/vnd.github+json")
-		request.Header.Set("User-Agent", defaultUserAgent)
+		applyGitHubAPIHeaders(request)
 		response, err := updater.doHTTP(ctx, request, defaultDiscoveryTimeout)
 		if err != nil {
 			return nil, err
@@ -502,6 +501,25 @@ func releasePageURL(base string, page int) (string, error) {
 	query.Set("page", strconv.Itoa(page))
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
+}
+
+// githubAuthorizationToken optionally authenticates release discovery against
+// api.github.com. Shared CI runners often exhaust the unauthenticated quota and
+// return 403; GH_TOKEN/GITHUB_TOKEN raise that limit without changing the public
+// trust model. Asset downloads stay unauthenticated for public release files.
+func githubAuthorizationToken() string {
+	if token := strings.TrimSpace(os.Getenv("GH_TOKEN")); token != "" {
+		return token
+	}
+	return strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+}
+
+func applyGitHubAPIHeaders(request *http.Request) {
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("User-Agent", defaultUserAgent)
+	if token := githubAuthorizationToken(); token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 }
 
 func nextReleasePageURL(link string) (string, error) {
