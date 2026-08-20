@@ -109,7 +109,7 @@ export declare function runPackageCommand(options?: {
   writeError?: (message: string) => void;
   spawnSync?: (
     command: string,
-    args: string[],
+    args: readonly string[],
     options: { stdio: "inherit"; env: NodeJS.ProcessEnv; windowsHide: boolean },
   ) => { status: number | null; signal: NodeJS.Signals | null; error?: Error };
   fileSystem?: LauncherFileSystem;

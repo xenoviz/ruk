@@ -534,7 +534,7 @@ test("runPackageCommand installs when needed then executes the native binary", a
   await fs.writeFile(destination, "#!/usr/bin/env node\nexport {};\n");
 
   let exitCode: number | undefined;
-  let spawned: { command: string; args: string[] } | undefined;
+  const firstSpawn: { command?: string; args?: readonly string[] } = {};
   const result = await runPackageCommand({
     root: value.root,
     platform: "linux",
@@ -545,20 +545,21 @@ test("runPackageCommand installs when needed then executes the native binary", a
       exitCode = code;
     },
     spawnSync: (command, args) => {
-      spawned = { command, args };
+      firstSpawn.command = command;
+      firstSpawn.args = args;
       return { status: 0, signal: null };
     },
   });
 
   assert.equal(result.status, 0);
   assert.equal(exitCode, 0);
-  assert.equal(spawned?.command, destination);
-  assert.deepEqual(spawned?.args, ["--version"]);
+  assert.equal(firstSpawn.command, destination);
+  assert.deepEqual(firstSpawn.args, ["--version"]);
   assert.deepEqual(await fs.readFile(destination), value.contents);
   assert.equal(result.reused, false);
 
   exitCode = undefined;
-  spawned = undefined;
+  const secondSpawn: { command?: string; args?: readonly string[] } = {};
   const reused = await runPackageCommand({
     root: value.root,
     platform: "linux",
@@ -569,15 +570,16 @@ test("runPackageCommand installs when needed then executes the native binary", a
       exitCode = code;
     },
     spawnSync: (command, args) => {
-      spawned = { command, args };
+      secondSpawn.command = command;
+      secondSpawn.args = args;
       return { status: 7, signal: null };
     },
   });
   assert.equal(reused.status, 7);
   assert.equal(exitCode, 7);
   assert.equal(reused.reused, true);
-  assert.equal(spawned?.command, destination);
-  assert.deepEqual(spawned?.args, ["--help"]);
+  assert.equal(secondSpawn.command, destination);
+  assert.deepEqual(secondSpawn.args, ["--help"]);
 });
 
 test("published bin/ruk delegates to runPackageCommand", async () => {
