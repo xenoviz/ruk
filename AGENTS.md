@@ -11,8 +11,13 @@ cd <returned-path>
 ruk run -- <command> [args...]
 ruk sync --json
 ruk status --json
+ruk worktrees --json
 ruk release <returned-assignmentId> --json
 ```
+
+`ruk worktrees --json` lists every worktree Ruk created for the repository;
+`ruk worktrees --all --json` lists them host-wide and works outside a
+repository.
 
 Managed Ruk operations renew automatically while active. Explicitly renew long
 idle work outside those operations. Release the exact assignment ID when

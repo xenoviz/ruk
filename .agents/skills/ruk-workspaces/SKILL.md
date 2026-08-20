@@ -28,7 +28,9 @@ launch PowerShell.
    `ruk renew <assignmentId> --json` for long idle work outside those commands.
    Use `ruk worktrees --json` to list worktrees Ruk created for this repository,
    or `ruk worktrees --all --json` for every Ruk-created worktree on this host
-   (`--all` works outside a repository).
+   (`--all` works outside a repository). Tracking lives per repository in
+   `<git-common-dir>/ruk/worktrees.json`; the host-wide index at
+   `~/.ruk/repositories.json` only maps repositories to those registries.
 5. Finish with `ruk release <assignmentId> --json`, even when the workspace was
    reused. Report a release failure instead of substituting another ID.
 
