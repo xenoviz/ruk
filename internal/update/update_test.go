@@ -570,6 +570,46 @@ func TestHTTPDiscoveryPagesUntilReadyRelease(t *testing.T) {
 	}
 }
 
+func TestGitHubAPIHeadersOptionalToken(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	request, err := http.NewRequest(http.MethodGet, ReleasesURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyGitHubAPIHeaders(request)
+	if request.Header.Get("Authorization") != "" {
+		t.Fatalf("Authorization = %q, want empty", request.Header.Get("Authorization"))
+	}
+	if request.Header.Get("Accept") != "application/vnd.github+json" {
+		t.Fatalf("Accept = %q", request.Header.Get("Accept"))
+	}
+	if request.Header.Get("User-Agent") != defaultUserAgent {
+		t.Fatalf("User-Agent = %q", request.Header.Get("User-Agent"))
+	}
+
+	t.Setenv("GITHUB_TOKEN", "from-github")
+	t.Setenv("GH_TOKEN", "from-gh")
+	request, err = http.NewRequest(http.MethodGet, ReleasesURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyGitHubAPIHeaders(request)
+	if got := request.Header.Get("Authorization"); got != "Bearer from-gh" {
+		t.Fatalf("Authorization = %q, want Bearer from-gh", got)
+	}
+
+	t.Setenv("GH_TOKEN", "")
+	request, err = http.NewRequest(http.MethodGet, ReleasesURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyGitHubAPIHeaders(request)
+	if got := request.Header.Get("Authorization"); got != "Bearer from-github" {
+		t.Fatalf("Authorization = %q, want Bearer from-github", got)
+	}
+}
+
 func TestHTTPDiscoveryRejectsMalformedReleasePage(t *testing.T) {
 	client := &http.Client{Transport: updateRoundTripper(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("{"))}, nil
