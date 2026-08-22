@@ -268,13 +268,25 @@ export class ConformanceHarness {
         }
         const scenarioRoot = await fs.mkdtemp(path.join(temporary, `${scenario.name.replace(/[^a-z0-9-]/gi, "-")}-`));
         const go = await this.runScenario(client, scenario, scenarioRoot);
-        differences.push(...compareGoldenScenario(expected, go, [path.join(scenarioRoot, "go")]).map((difference) => `${scenario.name}: ${difference}`));
+        differences.push(...compareGoldenScenario(expected, go, [await realRepositoryRoot(path.join(scenarioRoot, "go"))]).map((difference) => `${scenario.name}: ${difference}`));
       }
       return differences;
     } finally {
       if (!this.keepTemporary) await fs.rm(temporary, { recursive: true, force: true });
       if (this.temporaryRoot && !this.keepTemporary) await fs.rm(this.temporaryRoot, { recursive: true, force: true });
     }
+  }
+}
+
+// Windows short (8.3) temporary-directory names such as THARUS~1 must not
+// leak into comparisons: the CLI resolves its working directory to the long
+// path, so the substitution root has to be resolved the same way or <repo>
+// replacement never matches.
+async function realRepositoryRoot(repository: string): Promise<string> {
+  try {
+    return await fs.realpath(repository);
+  } catch {
+    return repository;
   }
 }
 
