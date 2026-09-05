@@ -33,7 +33,7 @@ func inspectPlatform(ctx context.Context, pid int) (lock.ProcessState, error) {
 	if err := ctx.Err(); err != nil {
 		return lock.ProcessState{}, err
 	}
-	handle, _, callErr := openProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
+	handle, _, callErr := openProcess.Call(processQueryLimitedInformation|syscall.SYNCHRONIZE, 0, uintptr(pid))
 	if handle == 0 {
 		errno, _ := callErr.(syscall.Errno)
 		switch errno {
@@ -57,6 +57,21 @@ func inspectPlatform(ctx context.Context, pid int) (lock.ProcessState, error) {
 	)
 	if ok == 0 {
 		return unavailableIdentity(pid, callErr)
+	}
+	// A retained handle can keep an exited process object openable. Query its
+	// signal state on this same handle; an exit code of STILL_ACTIVE (259) is
+	// also a valid application exit code and cannot prove liveness.
+	wait, err := syscall.WaitForSingleObject(syscall.Handle(handle), 0)
+	if err != nil {
+		return unavailableIdentity(pid, err)
+	}
+	switch wait {
+	case syscall.WAIT_OBJECT_0:
+		return lock.ProcessState{}, nil
+	case syscall.WAIT_TIMEOUT:
+		// The process was still running at this observation.
+	default:
+		return unavailableIdentity(pid, fmt.Errorf("unexpected process wait result: %d", wait))
 	}
 	raw := uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime)
 	if raw > ^uint64(0)-dotNetEpochOffset {
