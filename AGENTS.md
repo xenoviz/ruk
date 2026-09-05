@@ -1,30 +1,14 @@
 # Agent instructions
 
-## Workspace quickstart
+## Workspace management
 
-Use JSON output for automation and keep the returned path and assignment ID:
-the path tells you where to work; the ID fences renew and release operations.
-
-```text
-ruk acquire agent/my-task --owner <stable-agent-id> --json
-cd <returned-path>
-ruk run -- <command> [args...]
-ruk sync --json
-ruk status --json
-ruk worktrees --json
-ruk release <returned-assignmentId> --json
-```
-
-`ruk worktrees --json` lists every worktree Ruk created for the repository;
-`ruk worktrees --all --json` lists them host-wide and works outside a
-repository.
-
-Managed Ruk operations renew automatically while active. Explicitly renew long
-idle work outside those operations. Release the exact assignment ID when
-finished; never infer an assignment from a path. See
-[docs/agent-interface.md](docs/agent-interface.md) for the JSON contract and
-[the lifecycle design](docs/plans/2026-08-03-workspace-lifecycle-design.md) for
-safety boundaries.
+Before workspace operations, read the [Ruk skill](.agents/skills/ruk-workspaces/SKILL.md).
+Use JSON for automation, work in the returned path, retain the opaque assignment
+ID, and release that exact ID when finished. Never infer ownership from a path.
+Managed operations renew while active; explicitly renew long idle work.
+Never force release or garbage collection without explicit user authorization.
+See the [JSON contract](docs/agent-interface.md) and
+[lifecycle safety boundaries](docs/plans/2026-08-03-workspace-lifecycle-design.md).
 
 ## Repository development
 
