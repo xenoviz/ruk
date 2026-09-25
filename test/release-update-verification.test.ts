@@ -46,24 +46,7 @@ test("first prerelease skips a prior stable Windows executable", () => {
   });
 });
 
-test("first Go-native stable skips TypeScript-era Windows executables", () => {
-  const plan = planWindowsUpdateVerification(
-    [
-      release({ tag: "v0.3.0", prerelease: false }),
-      release({ tag: "v0.3.0-beta.1", prerelease: true }),
-      release({ tag: "v0.1.1", prerelease: false }),
-      release({ tag: "v0.1.2", prerelease: false }),
-    ],
-    "v0.3.0",
-    "0.3.0",
-  );
-  assert.deepEqual(plan, {
-    kind: "skip",
-    message: "No prior ready Windows release exists; the first release has no upgrade source.\n",
-  });
-});
-
-test("later Go-native stable selects the latest prior Go-native Windows executable", () => {
+test("later stable selects the latest prior stable Windows executable", () => {
   const plan = planWindowsUpdateVerification(
     [
       release({ tag: "v0.3.1", prerelease: false }),

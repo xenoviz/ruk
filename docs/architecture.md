@@ -64,8 +64,7 @@ executable, runs its updater against the newly finalized release, and verifies
 the executable version after deferred replacement. A prerelease uses the prior
 ready Windows executable on that same prerelease channel; the first tag on a
 channel skips because a stable install ignores prereleases and is not an
-upgrade source. The first Go-native stable (`0.3.0`) also skips TypeScript-era
-`0.1.x` Windows executables in that smoke job.
+upgrade source.
 
 ## Boundaries
 
