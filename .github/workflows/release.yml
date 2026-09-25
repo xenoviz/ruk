@@ -5,6 +5,9 @@ on:
     # This includes stable and prerelease tags such as v0.3.0-beta.1.
     tags:
       - "v*"
+  # tag-release.yml dispatches this workflow on the tag it creates, because a
+  # tag pushed with GITHUB_TOKEN does not trigger the push event above.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,6 +29,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+      - name: Require a version tag ref
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "Releases run only from a v* tag, not ${GITHUB_REF}." >&2
+            exit 1
+          fi
       - name: Require ancestry from protected main
         run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
