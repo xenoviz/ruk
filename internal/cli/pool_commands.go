@@ -46,7 +46,7 @@ type WarmResult struct {
 }
 
 // Warm validates count, invokes the injected operation, validates its stable
-// result, and renders the TypeScript-compatible output.
+// result, and renders the public output.
 func Warm(ctx context.Context, input WarmInput, operation WarmOperation) (WarmResult, error) {
 	count, err := parsePositiveSafeInt(input.Count, 0, "--count")
 	if err != nil {

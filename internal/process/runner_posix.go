@@ -84,3 +84,23 @@ func processExitStatus(state *os.ProcessState, waitErr error) ExitStatus {
 }
 
 func defaultGroupSignaler() GroupSignaler { return NativeGroupSignaler{} }
+
+type osChild struct {
+	command    *exec.Cmd
+	foreground *foregroundTerminal
+}
+
+func (child *osChild) PID() int { return child.command.Process.Pid }
+
+func (child *osChild) Wait() ExitStatus {
+	err := child.command.Wait()
+	status := processExitStatus(child.command.ProcessState, err)
+	if child.foreground != nil {
+		if restoreErr := child.foreground.restore(); restoreErr != nil {
+			status.BoundaryError = restoreErr
+		}
+	}
+	return status
+}
+
+func (child *osChild) Signal(signal os.Signal) error { return child.command.Process.Signal(signal) }

@@ -5,8 +5,8 @@ set -euo pipefail
 
 # Keep this in sync with package.json "packageManager" / "engines".
 BUN_VERSION="1.4.2"
-# Keep this in sync with go.mod and .github/workflows/ci.yml (Go migration).
-GO_VERSION="1.24.6"
+# Keep this in sync with the toolchain directive in go.mod.
+GO_VERSION="1.27.1"
 
 export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export PATH="$BUN_INSTALL/bin:/usr/local/go/bin:$PATH"

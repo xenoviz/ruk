@@ -63,8 +63,9 @@ type InstallResult struct {
 	Stderr  string
 }
 
-// DependencyPreparationError preserves the TypeScript public error prefix,
-// while retaining the original cause for errors.Is/errors.As callers.
+// DependencyPreparationError keeps the public "Dependency installation failed"
+// prefix that agents match on, while retaining the original cause for
+// errors.Is/errors.As callers.
 type DependencyPreparationError struct {
 	Cause  error
 	Stdout string

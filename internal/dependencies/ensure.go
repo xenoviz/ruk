@@ -33,7 +33,7 @@ type DirectoryLocker interface {
 
 // DependencyFileLister returns repository-relative paths used for dependency
 // fingerprinting. A lister is called again after installation when supplied,
-// matching the TypeScript implementation's post-install source rescan.
+// so files the installer adds or rewrites are part of the recorded state.
 type DependencyFileLister func(context.Context, string) ([]string, error)
 
 // CurrentBranchReader supplies the branch recorded with preparation metadata.

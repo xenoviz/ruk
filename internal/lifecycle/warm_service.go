@@ -11,20 +11,6 @@ import (
 	"github.com/xenoviz/ruk/internal/state"
 )
 
-// WarmStateReader supplies a read-only state snapshot for capacity counting.
-// It intentionally does not use Store.Update; the maintenance locks serialize
-// this snapshot with pool mutation performed by cooperating callers.
-type WarmStateReader interface {
-	Read(context.Context) (*state.State, error)
-}
-
-// WarmLocker is the common directory-lock seam used for pool maintenance and
-// warm operations. Production callers should use one shared pool-maintenance
-// path for warm, acquisition, and collection.
-type WarmLocker interface {
-	With(context.Context, string, func() error) error
-}
-
 // WarmWorkspaceService is the Git worktree seam needed to create detached,
 // dependency-ready pool capacity. WorkspaceService satisfies this interface.
 type WarmWorkspaceService interface {
@@ -51,8 +37,8 @@ type WarmDependencyPreparer func(context.Context, string) (dependencies.EnsureRe
 // WarmOptions configures the warm orchestration service.
 type WarmOptions struct {
 	Lifecycle *Service
-	Reader    WarmStateReader
-	Locker    WarmLocker
+	Reader    StateReader
+	Locker    Locker
 	Worktree  WarmWorkspaceService
 
 	PoolMaintenanceLockPath string
@@ -71,8 +57,8 @@ type WarmOptions struct {
 // WarmService ensures a requested number of valid, available prepared slots.
 type WarmService struct {
 	lifecycle            *Service
-	reader               WarmStateReader
-	locker               WarmLocker
+	reader               StateReader
+	locker               Locker
 	worktree             WarmWorkspaceService
 	poolMaintenanceLock  string
 	warmLock             string

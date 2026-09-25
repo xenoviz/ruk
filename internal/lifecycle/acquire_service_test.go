@@ -64,7 +64,7 @@ func (ports acquisitionPortsFake) Allocate(context.Context, string, []string) (s
 	return state.WorkspaceRecord{}, ports.err
 }
 
-func acquisitionTestService(t *testing.T, store *memoryStore, ids []string, worktree *acquisitionWorktreeFake, prepare lifecycle.DependencyPreparer, ports lifecycle.PortAllocator, lock lifecycle.AcquisitionLocker, cleanup func(context.Context, string, bool) error, freshPath ...func(context.Context, string) (string, error)) *lifecycle.AcquisitionService {
+func acquisitionTestService(t *testing.T, store *memoryStore, ids []string, worktree *acquisitionWorktreeFake, prepare lifecycle.DependencyPreparer, ports lifecycle.PortAllocator, lock lifecycle.Locker, cleanup func(context.Context, string, bool) error, freshPath ...func(context.Context, string) (string, error)) *lifecycle.AcquisitionService {
 	t.Helper()
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	service := lifecycle.New(store, lifecycle.Options{

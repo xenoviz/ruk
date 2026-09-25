@@ -256,8 +256,8 @@ bun run pack:check
 The shipped runtime is written in Go and has no third-party runtime
 dependencies. Bun remains the repository toolchain for VitePress, documentation,
 and supporting scripts; it is not required to run the installed Ruk command.
-The module targets Go 1.24, and release CI pins Go 1.24.6 for reproducible
-native builds.
+The module targets Go 1.27, and `go.mod` pins the Go 1.27.1 toolchain that CI
+and release builds read for reproducible native builds.
 
 This repository commits managed mode in `.rukrc.json` because Bun's isolated
 global-store linker does not reliably install the VitePress dependency graph on

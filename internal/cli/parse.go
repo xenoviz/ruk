@@ -39,9 +39,9 @@ type optionSpec struct {
 	flags  map[string]bool
 }
 
-// Parse validates the command/option grammar while preserving the TypeScript
-// CLI's public behavior, including repeated --port values, last-scalar-wins,
-// and delimiter-less run/exec command forms.
+// Parse validates the command/option grammar of the public CLI contract,
+// including repeated --port values, last-scalar-wins, and delimiter-less
+// run/exec command forms. The conformance golden pins this behavior.
 func Parse(args []string) (Invocation, error) {
 	if len(args) == 0 {
 		return Invocation{}, errors.New("command is required")

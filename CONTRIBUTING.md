@@ -24,9 +24,13 @@ bun run binary:cross-check
 bun run pack:check
 ```
 
-CI runs Go vet, unit, race, frozen-conformance, cross-compilation, native npm
-installation, and platform smoke checks. It builds and exercises the native
-executable on Linux, Windows, and macOS.
+CI runs Go vet, staticcheck for Linux, macOS, and Windows, govulncheck, unit
+tests with a statement-coverage floor, race, frozen-conformance,
+cross-compilation, native npm installation, and platform smoke checks. It
+builds and exercises the native executable on Linux, Windows, and macOS, and
+runs the concurrency packages under the race detector on all three. Raise the
+coverage floor in `.github/workflows/ci.yml` as coverage grows; never lower it
+to make a change pass.
 
 ## Pull requests
 

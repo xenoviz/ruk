@@ -78,8 +78,8 @@ func NewCreateCommand(options CreateCommandOptions) *CreateCommand {
 }
 
 // CreateCommandInput is the parsed create request plus the repository context
-// supplied by the command router. Path is interpreted relative to CWD, as in
-// the TypeScript CLI; an empty Path selects the documented default.
+// supplied by the command router. Path is interpreted relative to CWD; an
+// empty Path selects the documented default.
 type CreateCommandInput struct {
 	Repository git.Repository
 	CWD        string

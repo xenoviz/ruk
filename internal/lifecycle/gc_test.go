@@ -72,11 +72,11 @@ func TestIdentifyGCCandidatesDefaultsToSafeRecordsAndDoesNotMutate(t *testing.T)
 	}
 	before := cloneStateForGC(store.current)
 
-	candidates, err := lifecycle.IdentifyGcCandidates(store.current, time.Date(2026, time.January, 1, 1, 0, 0, 0, time.UTC), now, false)
+	candidates, err := lifecycle.IdentifyGCCandidates(store.current, time.Date(2026, time.January, 1, 1, 0, 0, 0, time.UTC), now, false)
 	if err != nil {
-		t.Fatalf("IdentifyGcCandidates returned an error: %v", err)
+		t.Fatalf("IdentifyGCCandidates returned an error: %v", err)
 	}
-	if len(candidates) != 2 || candidates[0].Reason != lifecycle.GcAvailable || candidates[1].Reason != lifecycle.GcExpiredAssignment {
+	if len(candidates) != 2 || candidates[0].Reason != lifecycle.GCAvailable || candidates[1].Reason != lifecycle.GCExpiredAssignment {
 		t.Fatalf("safe dry-run candidates = %#v", candidates)
 	}
 	if !reflect.DeepEqual(store.current, before) {

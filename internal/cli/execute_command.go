@@ -35,16 +35,17 @@ type ExecuteActivityRunner func(context.Context, string, func(context.Context) e
 // and its tracked process record has been removed.
 type ExecuteRelease func(context.Context, string) error
 
-// ExecuteProcesser proves whether a detached process tree still belongs to
-// the exact durable identity recorded for the assignment.
-type ExecuteProcesser interface {
+// TrackedProcessChecker proves whether a recorded process tree still belongs
+// to the exact durable identity recorded for the assignment. Implementations
+// must fail closed when identity or enumeration is unavailable.
+type TrackedProcessChecker interface {
 	Exists(context.Context, state.TrackedProcessRecord) (bool, error)
 }
 
-// ExecuteHandoffLocker exposes one native directory-lock guard. The guard is
+// HandoffLocker exposes one native directory-lock guard. The guard is
 // released by the process runner immediately after registration (or failed
-// registration cleanup), before a long-lived child is waited on.
-type ExecuteHandoffLocker interface {
+// registration cleanup), before a long-lived child or shell is waited on.
+type HandoffLocker interface {
 	Acquire(context.Context, string) (*lock.Guard, error)
 }
 
@@ -53,11 +54,11 @@ type ExecuteOptions struct {
 	Lifecycle     *lifecycle.Service
 	Reader        ExecuteStateReader
 	Runner        processpkg.Runner
-	Processes     ExecuteProcesser
+	Processes     TrackedProcessChecker
 	Synchronize   ExecuteDependencySynchronizer
 	Activity      ExecuteActivityRunner
 	Release       ExecuteRelease
-	HandoffLocker ExecuteHandoffLocker
+	HandoffLocker HandoffLocker
 	HandoffPath   func(string) (string, error)
 }
 
@@ -66,11 +67,11 @@ type ExecuteService struct {
 	lifecycle        *lifecycle.Service
 	reader           ExecuteStateReader
 	runner           processpkg.Runner
-	processes        ExecuteProcesser
+	processes        TrackedProcessChecker
 	synchronize      ExecuteDependencySynchronizer
 	activity         ExecuteActivityRunner
 	releaseOperation ExecuteRelease
-	handoffLocker    ExecuteHandoffLocker
+	handoffLocker    HandoffLocker
 	handoffPath      func(string) (string, error)
 }
 

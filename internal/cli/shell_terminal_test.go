@@ -60,7 +60,7 @@ func shellProcessRecord() state.TrackedProcessRecord {
 	return state.TrackedProcessRecord{PID: 42, GroupID: &groupID, StartedAt: "identity-42"}
 }
 
-func shellTerminalOptions(runner cli.ShellProcessRunner, tracker cli.ShellProcessTracker) cli.ShellTerminalOptions {
+func shellTerminalOptions(runner cli.ShellProcessRunner, tracker cli.TrackedProcessChecker) cli.ShellTerminalOptions {
 	return cli.ShellTerminalOptions{
 		Runner: runner, Tracker: tracker,
 		Register: func(context.Context, string, state.TrackedProcessRecord) error { return nil },

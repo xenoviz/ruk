@@ -394,7 +394,7 @@ func (guard *Guard) Release() error {
 	if stat.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing to release symlink lock %s", guard.path)
 	}
-	owner, valid, err := readOwner(guard.path)
+	owner, valid, err := readOwnerSettled(guard.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -413,14 +413,14 @@ func (guard *Guard) Release() error {
 	// fenced by its token while this guard runs; this does not claim a
 	// cross-host serialization guarantee for shared filesystems.
 	releasedPath := guard.path + ".released-" + releaseToken(guard.token)
-	if err := os.Rename(guard.path, releasedPath); err != nil {
+	if err := retryTransient(func() error { return os.Rename(guard.path, releasedPath) }, renameBusy); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("logically release lock %s: %w", guard.path, err)
 	}
 	guard.releasedPath = releasedPath
-	movedOwner, movedValid, movedErr := readOwner(releasedPath)
+	movedOwner, movedValid, movedErr := readOwnerSettled(releasedPath)
 	if errors.Is(movedErr, os.ErrNotExist) || errors.Is(movedErr, os.ErrPermission) {
 		// A contender's Acquire removes released tombstones only after proving
 		// their owner token hashes to the suffix, and only this guard renames
@@ -477,6 +477,43 @@ func cleanupReleasedTombstones(path string) {
 		}
 		_ = os.RemoveAll(tombstone)
 	}
+}
+
+const (
+	transientAttempts = 8
+	transientMaxDelay = 80 * time.Millisecond
+)
+
+// readOwnerSettled reads lock metadata, waiting out the brief Windows sharing
+// violations caused by a contender reading the same owner.json. Access denied
+// is not retried: on a tombstone it means the owner file is delete-pending.
+func readOwnerSettled(path string) (Owner, bool, error) {
+	var (
+		owner Owner
+		valid bool
+	)
+	err := retryTransient(func() error {
+		var err error
+		owner, valid, err = readOwner(path)
+		return err
+	}, sharingViolation)
+	return owner, valid, err
+}
+
+// retryTransient runs attempt with bounded exponential backoff while its error
+// satisfies transient, returning the last error otherwise.
+func retryTransient(attempt func() error, transient func(error) bool) error {
+	delay := 5 * time.Millisecond
+	var err error
+	for index := 0; index < transientAttempts; index++ {
+		err = attempt()
+		if err == nil || !transient(err) || index == transientAttempts-1 {
+			return err
+		}
+		time.Sleep(delay)
+		delay = min(delay*2, transientMaxDelay)
+	}
+	return err
 }
 
 func releaseToken(token string) string {

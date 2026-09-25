@@ -140,7 +140,7 @@ func NewRetainedAssignmentError(assignmentID, path, expiresAt string, cause erro
 }
 
 // RetainedAssignmentFailure wraps an error only when process safety cannot be
-// proved. This mirrors the TypeScript retainedAssignmentFailure helper.
+// proved, so agents can still identify and later release the assignment.
 func RetainedAssignmentFailure(assignmentID, path, expiresAt string, err error) *RetainedAssignmentError {
 	if !ContainsProcessSafetyError(err) {
 		return nil
@@ -321,9 +321,9 @@ var (
 func classifyMessage(message string) (ErrorCode, bool) {
 	lower := strings.ToLower(message)
 
-	// Package-manager discovery is part of dependency preparation. Preserve
-	// the TypeScript automation contract instead of reporting a generic
-	// operation failure when the repository's selected manager is absent.
+	// Package-manager discovery is part of dependency preparation. Report it
+	// with the dependency error code agents automate on, not a generic
+	// operation failure, when the repository's selected manager is absent.
 	if strings.Contains(lower, "is required but was not found on path") {
 		return DependencyPreparationCode, true
 	}
@@ -335,7 +335,7 @@ func classifyMessage(message string) (ErrorCode, bool) {
 	}
 
 	// Parse/configuration failures are intentionally checked before broad
-	// dependency and Git terms, as in the TypeScript classifier.
+	// dependency and Git terms, whose words they can contain.
 	if strings.Contains(lower, ".rukrc.json") ||
 		strings.Contains(lower, "unknown option") ||
 		strings.Contains(lower, "unknown command") ||

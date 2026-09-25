@@ -10,7 +10,7 @@ import (
 
 // WorktreeRecord describes one checkout reported by Git. Branch is
 // "(detached)" when Git reports a detached checkout (or does not provide a
-// branch field), matching the TypeScript Git boundary.
+// branch field); this value is part of the list and worktrees output.
 type WorktreeRecord struct {
 	Path   string
 	Branch string
