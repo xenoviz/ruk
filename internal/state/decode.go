@@ -53,39 +53,27 @@ type rawAssignment struct {
 	Ports                map[string]int64     `json:"ports"`
 }
 
-// Decode parses, migrates, and validates one persisted Ruk state document.
+// Decode parses and validates one persisted Ruk state document.
 func Decode(data []byte, source string) (*State, error) {
 	var persisted rawState
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		return nil, fmt.Errorf("Cannot parse Ruk state in %s: %w", source, err)
 	}
+	if persisted.Version >= 1 && persisted.Version < CurrentVersion {
+		return nil, fmt.Errorf("Ruk state in %s uses version %d from Ruk 0.2 or earlier, which is no longer supported; release its assignments with Ruk 0.3, or remove the file to start fresh", strings.TrimSpace(source), persisted.Version)
+	}
 	trees, validTrees := decodeTrees(persisted.Trees)
-	if !validTrees {
+	if !validTrees || persisted.Version != CurrentVersion || persisted.Workspaces == nil {
 		return nil, invalidState(source)
 	}
-	if persisted.Version == 1 {
-		return &State{
-			Version:    CurrentVersion,
-			Trees:      trees,
-			Workspaces: map[string]WorkspaceRecord{},
-			Metrics:    EmptyMetrics(),
-		}, nil
-	}
-	if persisted.Version < 2 || persisted.Version > CurrentVersion || persisted.Workspaces == nil {
+	if persisted.Metrics == nil || !validMetrics(*persisted.Metrics) {
 		return nil, invalidState(source)
 	}
-
-	metrics := EmptyMetrics()
-	if persisted.Version != 2 {
-		if persisted.Metrics == nil || !validMetrics(*persisted.Metrics) {
-			return nil, invalidState(source)
-		}
-		metrics = *persisted.Metrics
-	}
+	metrics := *persisted.Metrics
 
 	workspaces := make(map[string]WorkspaceRecord, len(persisted.Workspaces))
 	for key, raw := range persisted.Workspaces {
-		workspace, err := migrateWorkspace(raw, persisted.Version)
+		workspace, err := decodeWorkspace(raw)
 		if err != nil {
 			return nil, invalidState(source)
 		}
@@ -118,7 +106,7 @@ func TreeKey(treePath string) (string, error) {
 	return hex.EncodeToString(digest[:])[:20], nil
 }
 
-func migrateWorkspace(raw rawWorkspace, version int) (WorkspaceRecord, error) {
+func decodeWorkspace(raw rawWorkspace) (WorkspaceRecord, error) {
 	workspace := WorkspaceRecord{
 		Path:        raw.Path,
 		Managed:     raw.Managed,
@@ -131,49 +119,27 @@ func migrateWorkspace(raw rawWorkspace, version int) (WorkspaceRecord, error) {
 		AvailableAt: raw.AvailableAt,
 		Failure:     raw.Failure,
 	}
-	if raw.Assignment == nil {
+	assignment := raw.Assignment
+	if assignment == nil {
 		return workspace, nil
 	}
-
-	ports := raw.Assignment.Ports
-	if version == 2 {
-		ports = map[string]int64{}
-	}
-	if ports == nil {
+	if assignment.Ports == nil {
 		return WorkspaceRecord{}, fmt.Errorf("assignment ports are missing")
 	}
-
-	leaseDuration := raw.Assignment.LeaseDurationMinutes
-	lastActivity := raw.Assignment.LastActivityAt
-	leaseKeepers := raw.Assignment.LeaseKeepers
-	if version != CurrentVersion {
-		renewedAt, renewedOK := canonicalTimestamp(raw.Assignment.RenewedAt)
-		expiresAt, expiresOK := canonicalTimestamp(raw.Assignment.ExpiresAt)
-		if !renewedOK || !expiresOK {
-			return WorkspaceRecord{}, fmt.Errorf("assignment timestamps are invalid")
-		}
-		minutes := expiresAt.Sub(renewedAt).Minutes()
-		leaseDuration = &minutes
-		activity := raw.Assignment.RenewedAt
-		lastActivity = &activity
-		emptyKeepers := []LeaseKeeperRecord{}
-		leaseKeepers = &emptyKeepers
-	}
-	if leaseDuration == nil || lastActivity == nil || leaseKeepers == nil {
+	if assignment.LeaseDurationMinutes == nil || assignment.LastActivityAt == nil || assignment.LeaseKeepers == nil {
 		return WorkspaceRecord{}, fmt.Errorf("assignment activity fields are missing")
 	}
-
 	workspace.Assignment = &AssignmentRecord{
-		ID:                   raw.Assignment.ID,
-		Owner:                raw.Assignment.Owner,
-		Hostname:             raw.Assignment.Hostname,
-		AssignedAt:           raw.Assignment.AssignedAt,
-		RenewedAt:            raw.Assignment.RenewedAt,
-		ExpiresAt:            raw.Assignment.ExpiresAt,
-		LeaseDurationMinutes: *leaseDuration,
-		LastActivityAt:       *lastActivity,
-		LeaseKeepers:         *leaseKeepers,
-		Ports:                ports,
+		ID:                   assignment.ID,
+		Owner:                assignment.Owner,
+		Hostname:             assignment.Hostname,
+		AssignedAt:           assignment.AssignedAt,
+		RenewedAt:            assignment.RenewedAt,
+		ExpiresAt:            assignment.ExpiresAt,
+		LeaseDurationMinutes: *assignment.LeaseDurationMinutes,
+		LastActivityAt:       *assignment.LastActivityAt,
+		LeaseKeepers:         *assignment.LeaseKeepers,
+		Ports:                assignment.Ports,
 	}
 	return workspace, nil
 }

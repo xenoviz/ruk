@@ -1,4 +1,4 @@
-// Package state owns Ruk's durable repository state and compatibility migrations.
+// Package state owns Ruk's durable repository state.
 package state
 
 // CurrentVersion is the canonical state schema written by the Go runtime.

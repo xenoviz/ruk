@@ -122,7 +122,7 @@ export function defaultScenarioFiles(root: string): readonly string[] {
   return [
     path.join(fixtures, "core.json"),
     path.join(fixtures, "lifecycle.json"),
-    path.join(fixtures, "state-migrations.json"),
+    path.join(fixtures, "state-load.json"),
     path.join(fixtures, "configuration.json"),
     path.join(fixtures, "dependencies.json"),
   ];

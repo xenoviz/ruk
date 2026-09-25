@@ -121,10 +121,10 @@ Version 4 state is stored in `<git-common-dir>/ruk/state.json`, so linked worktr
 metadata without committing it. Per-workspace preparation locks and the state
 lock live beside it.
 
-Loading migrates version 1 through version 3 records in memory. Existing
-assignment IDs, ownership, expiry, and process records stay intact. Version 4
-adds the lease duration, last observed activity, and fenced lease keepers needed
-for automatic renewal.
+Only version 4 is accepted. Version 1 through 3 files written by the
+TypeScript 0.1 and 0.2 releases fail with guidance to release their
+assignments with Ruk 0.3 or remove the file; because state is an
+optimization, removing it only discards recorded preparation and assignments.
 
 State is an optimization, not source of truth. Git and the dependency
 fingerprint remain authoritative. Invalid state fails visibly rather than being
