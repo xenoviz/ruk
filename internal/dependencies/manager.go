@@ -127,8 +127,8 @@ func (resolver ManagerResolver) probeVersion(ctx context.Context, root, name str
 		return "", fmt.Errorf("Could not inspect %s for dependency preparation: %w", name, err)
 	}
 	if result.ExitCode != 0 {
-		// A failed --version invocation follows the TypeScript contract: retain
-		// an unknown version so shared-backend validation emits the stable
+		// A failed --version invocation leaves the version unknown, so
+		// shared-backend validation emits the stable
 		// minimum-version error. The bounded streams are intentionally discarded
 		// here; version output is not an installer diagnostic surface.
 		return UnknownManagerVersion, nil

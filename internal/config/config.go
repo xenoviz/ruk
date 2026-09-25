@@ -182,8 +182,8 @@ func loadWithEnvironment(root string, environment map[string]string, caseInsensi
 		}
 	}
 
-	// JSON null is intentionally treated as no override, matching the
-	// TypeScript contract's nullish fallback to the file configuration. The
+	// JSON null is intentionally treated as no override, so the setting falls
+	// back to the file configuration. The
 	// file value is validated only when it is the effective value, so a valid
 	// environment override masks an invalid file value.
 	command := environmentCommand

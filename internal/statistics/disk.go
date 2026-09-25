@@ -50,8 +50,8 @@ type linkedTarget struct {
 }
 
 // MeasureDiskStatistics scans recorded dependency projections with a bounded
-// worker pool. Filesystem errors are treated as missing/unreadable content,
-// matching the TypeScript stats command. Cancellation is returned to the
+// worker pool. Filesystem errors are counted as missing or unreadable content
+// rather than failing the stats command. Cancellation is returned to the
 // caller and never leaves scan workers behind.
 func MeasureDiskStatistics(ctx context.Context, snapshot state.State, options ...DiskOptions) (DiskStatistics, error) {
 	if ctx == nil {

@@ -34,9 +34,8 @@ type PortFinder interface {
 }
 
 // AllocationService reserves host ports before publishing them into an
-// assignment. Its lock order is host registry then repository state, matching
-// the TypeScript implementation and preventing two repositories from claiming
-// one host-local port.
+// assignment. Its lock order is host registry then repository state, which
+// prevents two repositories from claiming one host-local port.
 type AllocationService struct {
 	Store     AssignmentStore
 	Registry  ReservationRegistry

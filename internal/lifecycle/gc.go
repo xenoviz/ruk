@@ -9,26 +9,26 @@ import (
 	"github.com/xenoviz/ruk/internal/state"
 )
 
-// GcCandidateReason explains why a workspace is eligible for collection.
-type GcCandidateReason string
+// GCCandidateReason explains why a workspace is eligible for collection.
+type GCCandidateReason string
 
 const (
-	GcAvailable             GcCandidateReason = "available"
-	GcFailed                GcCandidateReason = "failed"
-	GcAbandonedPreparation  GcCandidateReason = "abandoned-preparation"
-	GcAbandonedAcquisition  GcCandidateReason = "abandoned-acquisition"
-	GcInterruptedCollection GcCandidateReason = "interrupted-collection"
-	GcExpiredAssignment     GcCandidateReason = "expired-assignment"
+	GCAvailable             GCCandidateReason = "available"
+	GCFailed                GCCandidateReason = "failed"
+	GCAbandonedPreparation  GCCandidateReason = "abandoned-preparation"
+	GCAbandonedAcquisition  GCCandidateReason = "abandoned-acquisition"
+	GCInterruptedCollection GCCandidateReason = "interrupted-collection"
+	GCExpiredAssignment     GCCandidateReason = "expired-assignment"
 )
 
-// GcCandidate is an immutable snapshot of a workspace eligible for GC.
+// GCCandidate is an immutable snapshot of a workspace eligible for GC.
 //
 // The expected fields are copied out explicitly because collection is normally
 // performed after releasing the state lock. They are fences, not hints: a
 // collector must revalidate these values before mutating or deleting anything.
-type GcCandidate struct {
+type GCCandidate struct {
 	Workspace            state.WorkspaceRecord
-	Reason               GcCandidateReason
+	Reason               GCCandidateReason
 	RequiresForce        bool
 	ExpectedUpdatedAt    string
 	ExpectedOperationID  *string
@@ -38,12 +38,12 @@ type GcCandidate struct {
 }
 
 const (
-	GCReasonAvailable             = GcAvailable
-	GCReasonFailed                = GcFailed
-	GCReasonAbandonedPreparation  = GcAbandonedPreparation
-	GCReasonAbandonedAcquisition  = GcAbandonedAcquisition
-	GCReasonInterruptedCollection = GcInterruptedCollection
-	GCReasonExpiredAssignment     = GcExpiredAssignment
+	GCReasonAvailable             = GCAvailable
+	GCReasonFailed                = GCFailed
+	GCReasonAbandonedPreparation  = GCAbandonedPreparation
+	GCReasonAbandonedAcquisition  = GCAbandonedAcquisition
+	GCReasonInterruptedCollection = GCInterruptedCollection
+	GCReasonExpiredAssignment     = GCExpiredAssignment
 )
 
 // IdentifyGCCandidates returns a read-only, deterministic GC plan from a
@@ -51,7 +51,7 @@ const (
 // in-flight records are considered only when includeAbandoned is true,
 // matching the explicit recovery policy. Expired assignments are reported but
 // never become safe candidates.
-func IdentifyGCCandidates(current *state.State, olderThan, now time.Time, includeAbandoned bool) ([]GcCandidate, error) {
+func IdentifyGCCandidates(current *state.State, olderThan, now time.Time, includeAbandoned bool) ([]GCCandidate, error) {
 	if current == nil {
 		return nil, errors.New("lifecycle: nil state")
 	}
@@ -70,7 +70,7 @@ func IdentifyGCCandidates(current *state.State, olderThan, now time.Time, includ
 		return nil, errors.New("now must be a valid timestamp")
 	}
 
-	result := make([]GcCandidate, 0)
+	result := make([]GCCandidate, 0)
 	for _, workspace := range current.Workspaces {
 		candidate, ok, err := gcCandidate(workspace, cutoff, now, includeAbandoned)
 		if err != nil {
@@ -86,27 +86,21 @@ func IdentifyGCCandidates(current *state.State, olderThan, now time.Time, includ
 	return result, nil
 }
 
-// IdentifyGcCandidates is the spelling retained for callers that mirror the
-// TypeScript lifecycle API.
-func IdentifyGcCandidates(current *state.State, olderThan, now time.Time, includeAbandoned bool) ([]GcCandidate, error) {
-	return IdentifyGCCandidates(current, olderThan, now, includeAbandoned)
-}
-
-func gcCandidate(workspace state.WorkspaceRecord, cutoff, now time.Time, includeAbandoned bool) (GcCandidate, bool, error) {
+func gcCandidate(workspace state.WorkspaceRecord, cutoff, now time.Time, includeAbandoned bool) (GCCandidate, bool, error) {
 	workspace = cloneWorkspace(workspace)
 	updatedAt, err := parseTimestamp(workspace.UpdatedAt)
 	if err != nil {
-		return GcCandidate{}, false, fmt.Errorf("workspace %s: %w", workspace.Path, err)
+		return GCCandidate{}, false, fmt.Errorf("workspace %s: %w", workspace.Path, err)
 	}
 	if workspace.OperationID != nil && includeAbandoned {
 		switch workspace.Lifecycle {
 		case state.LifecyclePreparing:
 			if !updatedAt.After(cutoff) {
-				return makeGCCandidate(workspace, GcAbandonedPreparation, false), true, nil
+				return makeGCCandidate(workspace, GCAbandonedPreparation, false), true, nil
 			}
 		case state.LifecycleAssigned:
 			if !updatedAt.After(cutoff) {
-				return makeGCCandidate(workspace, GcAbandonedAcquisition, false), true, nil
+				return makeGCCandidate(workspace, GCAbandonedAcquisition, false), true, nil
 			}
 		case state.LifecycleAvailable, state.LifecycleFailed:
 			// An operation fence on an available or failed workspace means a
@@ -116,40 +110,40 @@ func gcCandidate(workspace state.WorkspaceRecord, cutoff, now time.Time, include
 			// update fence, and per-workspace lock still revalidate the retry;
 			// the age cutoff only determines whether abandoned preparation or
 			// acquisition work should be recovered.
-			return makeGCCandidate(workspace, GcInterruptedCollection, false), true, nil
+			return makeGCCandidate(workspace, GCInterruptedCollection, false), true, nil
 		}
 	}
 
 	if workspace.OperationID == nil && workspace.Lifecycle == state.LifecycleAvailable {
 		if workspace.AvailableAt == nil {
-			return GcCandidate{}, false, fmt.Errorf("workspace %s: available workspace has no availableAt timestamp", workspace.Path)
+			return GCCandidate{}, false, fmt.Errorf("workspace %s: available workspace has no availableAt timestamp", workspace.Path)
 		}
 		availableAt, parseErr := parseTimestamp(*workspace.AvailableAt)
 		if parseErr != nil {
-			return GcCandidate{}, false, fmt.Errorf("workspace %s: %w", workspace.Path, parseErr)
+			return GCCandidate{}, false, fmt.Errorf("workspace %s: %w", workspace.Path, parseErr)
 		}
 		if !availableAt.After(cutoff) {
-			return makeGCCandidate(workspace, GcAvailable, false), true, nil
+			return makeGCCandidate(workspace, GCAvailable, false), true, nil
 		}
 	}
 	if workspace.OperationID == nil && workspace.Lifecycle == state.LifecycleFailed && !updatedAt.After(cutoff) {
-		return makeGCCandidate(workspace, GcFailed, false), true, nil
+		return makeGCCandidate(workspace, GCFailed, false), true, nil
 	}
 
 	if workspace.Assignment != nil {
 		expiresAt, parseErr := parseTimestamp(workspace.Assignment.ExpiresAt)
 		if parseErr != nil {
-			return GcCandidate{}, false, fmt.Errorf("workspace %s: %w", workspace.Path, parseErr)
+			return GCCandidate{}, false, fmt.Errorf("workspace %s: %w", workspace.Path, parseErr)
 		}
 		activeKeeper, keeperErr := assignmentHasActiveKeeper(workspace.Assignment, now)
 		if keeperErr != nil {
-			return GcCandidate{}, false, fmt.Errorf("workspace %s: %w", workspace.Path, keeperErr)
+			return GCCandidate{}, false, fmt.Errorf("workspace %s: %w", workspace.Path, keeperErr)
 		}
 		if !expiresAt.After(now) && !activeKeeper {
-			return makeGCCandidate(workspace, GcExpiredAssignment, true), true, nil
+			return makeGCCandidate(workspace, GCExpiredAssignment, true), true, nil
 		}
 	}
-	return GcCandidate{}, false, nil
+	return GCCandidate{}, false, nil
 }
 
 func assignmentHasActiveKeeper(assignment *state.AssignmentRecord, now time.Time) (bool, error) {
@@ -168,8 +162,8 @@ func assignmentHasActiveKeeper(assignment *state.AssignmentRecord, now time.Time
 	return false, nil
 }
 
-func makeGCCandidate(workspace state.WorkspaceRecord, reason GcCandidateReason, requiresForce bool) GcCandidate {
-	candidate := GcCandidate{
+func makeGCCandidate(workspace state.WorkspaceRecord, reason GCCandidateReason, requiresForce bool) GCCandidate {
+	candidate := GCCandidate{
 		Workspace:         workspace,
 		Reason:            reason,
 		RequiresForce:     requiresForce,

@@ -45,8 +45,8 @@ type ReleaseResult struct {
 	Output string
 }
 
-// Release validates the lifecycle result and formats the TypeScript-compatible
-// human or JSON success output. Failed operations never produce success text.
+// Release validates the lifecycle result and formats the public human or JSON
+// success output. Failed operations never produce success text.
 func Release(ctx context.Context, input ReleaseInput, operation RepositoryReleaseOperation) (ReleaseResult, error) {
 	if input.AssignmentID == "" {
 		return ReleaseResult{}, errors.New("assignment ID must not be empty")

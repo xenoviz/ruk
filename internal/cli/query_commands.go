@@ -18,7 +18,7 @@ import (
 )
 
 // ListRecord is the JSON-facing record returned by list. Pointer fields are
-// intentional: the TypeScript CLI emits null for facts that are not present.
+// intentional: the JSON contract emits null for facts that are not present.
 type ListRecord struct {
 	Path              string                    `json:"path"`
 	Branch            string                    `json:"branch"`
@@ -99,7 +99,7 @@ func BuildListResponse(input ListQueryInput) ([]ListRecord, error) {
 
 // AssignmentIsAutoRenewing reports whether a current fenced lease keeper is
 // visible at observedAt. Invalid timestamps fail closed, as state validation
-// and the TypeScript lifecycle predicate do.
+// does.
 func AssignmentIsAutoRenewing(assignment state.AssignmentRecord, observedAt time.Time) bool {
 	if observedAt.IsZero() {
 		observedAt = time.Now()
@@ -201,7 +201,7 @@ func BuildStatusResponse(input StatusQueryInput) (StatusRecord, error) {
 }
 
 // StatsRecord is the JSON-facing response for stats. Disk is absent unless
-// --disk was requested, matching the TypeScript object spread behavior.
+// --disk was requested; the field is omitted, not null.
 type StatsRecord struct {
 	statistics.UsageStatistics
 	Disk *statistics.DiskStatistics `json:"disk,omitempty"`
@@ -390,7 +390,8 @@ func buildWorktreesResponse(root, commonDir string, registry state.WorktreeRegis
 	return WorktreesResponse{Repository: root, CommonDir: commonDir, Worktrees: records}
 }
 
-// FormatListHuman preserves the TypeScript list table layout.
+// FormatListHuman renders the list table layout pinned by the conformance
+// golden.
 func FormatListHuman(records []ListRecord) string {
 	var output strings.Builder
 	for _, record := range records {
@@ -410,7 +411,8 @@ func FormatListHuman(records []ListRecord) string {
 	return output.String()
 }
 
-// FormatStatusHuman preserves the TypeScript status labels and explain flow.
+// FormatStatusHuman renders the status labels and explain flow pinned by the
+// conformance golden.
 func FormatStatusHuman(record StatusRecord, explain bool) string {
 	var output strings.Builder
 	fingerprint := valueOr(record.PreparedFingerprint, "not-prepared")
@@ -454,7 +456,8 @@ func FormatStatusHuman(record StatusRecord, explain bool) string {
 	return output.String()
 }
 
-// FormatStatsHuman preserves the TypeScript stats labels and spacing.
+// FormatStatsHuman renders the stats labels and spacing pinned by the
+// conformance golden.
 func FormatStatsHuman(record StatsRecord) string {
 	var output strings.Builder
 	output.WriteString(fmt.Sprintf("Acquisitions:       %d\n", record.Acquisitions))

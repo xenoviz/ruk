@@ -26,8 +26,8 @@ const (
 var ErrIPv6Unavailable = errors.New("IPv6 is unavailable")
 
 // NormalizeName converts a user-facing name to its RUK environment variable.
-// Invalid runs collapse to one underscore, matching the TypeScript behavior;
-// names without an ASCII letter or digit are rejected.
+// Invalid runs collapse to one underscore; names without an ASCII letter or
+// digit are rejected.
 func NormalizeName(name string) (string, error) {
 	name = strings.ToUpper(strings.TrimSpace(name))
 	var normalized strings.Builder

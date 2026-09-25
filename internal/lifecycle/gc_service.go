@@ -210,7 +210,7 @@ func (service *GCService) Run(ctx context.Context, options GCOptions) (GCResult,
 	return result, nil
 }
 
-func (service *GCService) identify(ctx context.Context, options GCOptions) ([]GcCandidate, error) {
+func (service *GCService) identify(ctx context.Context, options GCOptions) ([]GCCandidate, error) {
 	current, err := service.options.Reader.Read(ctx)
 	if err != nil {
 		return nil, err
@@ -233,7 +233,7 @@ func (service *GCService) expired(ctx context.Context, options GCOptions) ([]GCE
 	return result, nil
 }
 
-func (service *GCService) applyCandidate(ctx context.Context, options GCOptions, candidate GcCandidate) (bool, error) {
+func (service *GCService) applyCandidate(ctx context.Context, options GCOptions, candidate GCCandidate) (bool, error) {
 	lockPath, err := service.workspaceLockPath(candidate.Workspace.Path)
 	if err != nil {
 		return false, err
@@ -268,7 +268,7 @@ func (service *GCService) applyCandidate(ctx context.Context, options GCOptions,
 				return releaseErr
 			}
 			workspace = released.Workspace
-		} else if candidate.Reason == GcAbandonedAcquisition {
+		} else if candidate.Reason == GCAbandonedAcquisition {
 			if workspace.Assignment == nil || workspace.OperationID == nil {
 				return nil
 			}
@@ -296,7 +296,7 @@ func (service *GCService) applyCandidate(ctx context.Context, options GCOptions,
 	return collected, nil
 }
 
-func (service *GCService) currentCandidate(ctx context.Context, options GCOptions, expected GcCandidate) (*GcCandidate, error) {
+func (service *GCService) currentCandidate(ctx context.Context, options GCOptions, expected GCCandidate) (*GCCandidate, error) {
 	candidates, err := service.identify(ctx, options)
 	if err != nil {
 		return nil, err
@@ -320,7 +320,7 @@ func (service *GCService) currentCandidate(ctx context.Context, options GCOption
 	return nil, nil
 }
 
-func (service *GCService) collectWorkspace(ctx context.Context, workspace state.WorkspaceRecord, candidate GcCandidate) error {
+func (service *GCService) collectWorkspace(ctx context.Context, workspace state.WorkspaceRecord, candidate GCCandidate) error {
 	if workspace.Assignment == nil && (workspace.Lifecycle == state.LifecyclePreparing || workspace.Lifecycle == state.LifecycleFailed) {
 		var err error
 		workspace, err = service.drainUnassignedProcesses(ctx, workspace)
@@ -512,13 +512,13 @@ func (service *GCService) workspaceLockPath(path string) (string, error) {
 	return filepath.Join(service.options.LocksRoot, "workspace-"+key+".lock"), nil
 }
 
-func gcReasonText(reason GcCandidateReason) string {
+func gcReasonText(reason GCCandidateReason) string {
 	switch reason {
-	case GcAbandonedPreparation:
+	case GCAbandonedPreparation:
 		return "abandoned preparation"
-	case GcAbandonedAcquisition:
+	case GCAbandonedAcquisition:
 		return "abandoned acquisition"
-	case GcInterruptedCollection:
+	case GCInterruptedCollection:
 		return "interrupted collection"
 	default:
 		return "older than max age"

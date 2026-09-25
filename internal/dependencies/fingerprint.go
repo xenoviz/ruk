@@ -111,9 +111,9 @@ func inPatchDirectory(path string) bool {
 // DependencyFingerprint hashes dependency source files and package-manager
 // identity. Text files normalize CRLF to LF, while bun.lockb remains binary;
 // a missing file is represented explicitly, allowing a later source listing to
-// invalidate a prepared workspace. This preserves the dependency semantics of
-// the TypeScript implementation without promising byte-for-byte hash parity
-// where Go and Node expose different runtime or filesystem metadata.
+// invalidate a prepared workspace. Hashes are stable for one runtime and
+// platform; they are not promised to match across Ruk implementations that
+// observe different runtime or filesystem metadata.
 func DependencyFingerprint(input SourceFingerprintInput) (FingerprintDetails, error) {
 	files := DependencyFiles(input.Files)
 	for index, path := range files {
