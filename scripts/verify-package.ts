@@ -43,7 +43,7 @@ if (!isRecord(developmentDependencies) || Object.keys(developmentDependencies).l
 for (const [name, version] of Object.entries(expectedDevelopmentDependencies)) {
   if (developmentDependencies[name] !== version) throw new Error(`Development dependency ${name} must be pinned to ${version}`);
 }
-if (pkg["packageManager"] !== "bun@1.3.14") throw new Error("packageManager must pin Bun 1.3.14");
+if (pkg["packageManager"] !== "bun@1.4.2") throw new Error("packageManager must pin Bun 1.4.2");
 // A version bump must ship with its dated changelog entry, which also becomes
 // the GitHub release notes; fail the release pull request instead of the tag.
 changelogEntry(await fs.readFile(path.join(root, "CHANGELOG.md"), "utf8"), pkg["version"]);
