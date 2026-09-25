@@ -434,9 +434,11 @@ func (guard *Guard) Release() error {
 		guard.releasedPath = ""
 		return fmt.Errorf("verify released lock %s: %w", guard.path, verifyErr)
 	}
-	if err := os.RemoveAll(releasedPath); err != nil {
-		return fmt.Errorf("cleanup released lock %s: %w", guard.path, err)
-	}
+	// The canonical path is already free, so logical release has succeeded.
+	// Tombstone removal is best effort: on Windows a contender's concurrent
+	// cleanupReleasedTombstones can hold owner.json open (a sharing violation),
+	// and Acquire collects this token-verified tombstone later.
+	_ = os.RemoveAll(releasedPath)
 	guard.releasedPath = ""
 	return nil
 }
