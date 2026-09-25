@@ -11,7 +11,6 @@ versioning.
   `ping`, and exits cleanly after deleting itself. Standalone Windows installs
   of 0.3.0 or 0.4.0 whose `ruk update` does not complete should download the
   new executable once by hand.
-
 - Release automation: merging a version bump tags it and starts the release
   workflow; GitHub release notes now lead with the changelog entry; CI runs
   every tooling test; actions/setup-go v7 clears Node.js 20 deprecation
