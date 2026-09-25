@@ -14,20 +14,6 @@ import (
 	"github.com/xenoviz/ruk/internal/state"
 )
 
-// AcquisitionLocker is the per-workspace lock used for the complete
-// acquisition handoff. The lock must remain held while Git, dependency, and
-// port operations run and until the final lifecycle transition is published.
-type AcquisitionLocker interface {
-	With(context.Context, string, func() error) error
-}
-
-// AcquisitionStateReader supplies a read-only state snapshot for candidate
-// selection. Selection must not acquire the state writer lock or rewrite the
-// state file before the workspace handoff lock is held.
-type AcquisitionStateReader interface {
-	Read(context.Context) (*state.State, error)
-}
-
 // AcquisitionWorktree is the narrow Git seam needed by Acquire. Implementors
 // should delegate to git.WorkspaceService or git.Client; this service never
 // invokes a subprocess directly.
@@ -53,17 +39,17 @@ type PortAllocator interface {
 // an installer process.
 type AcquisitionOptions struct {
 	Lifecycle *Service
-	Reader    AcquisitionStateReader
-	Locker    AcquisitionLocker
+	Reader    StateReader
+	Locker    Locker
 	// PrimaryLocker fences assignment publication against deny-mode work in
 	// the repository's primary checkout. It is acquired before Locker.
-	PrimaryLocker   AcquisitionLocker
+	PrimaryLocker   Locker
 	PrimaryLockPath string
 	// PoolMaintenanceLocker serializes reusable-slot selection with warm
 	// capacity maintenance. Production DirectoryLocker also supports the
 	// manual guard path, allowing this pool lock to be released before the
 	// lengthy dependency handoff begins.
-	PoolMaintenanceLocker   AcquisitionLocker
+	PoolMaintenanceLocker   Locker
 	PoolMaintenanceLockPath string
 	Worktree                AcquisitionWorktree
 	Prepare                 DependencyPreparer
@@ -87,11 +73,11 @@ type AcquisitionOptions struct {
 // AcquisitionService orchestrates one bounded workspace acquisition.
 type AcquisitionService struct {
 	lifecycle     *Service
-	reader        AcquisitionStateReader
-	locker        AcquisitionLocker
-	primaryLocker AcquisitionLocker
+	reader        StateReader
+	locker        Locker
+	primaryLocker Locker
 	primaryPath   string
-	poolLocker    AcquisitionLocker
+	poolLocker    Locker
 	poolPath      string
 	worktree      AcquisitionWorktree
 	prepare       DependencyPreparer

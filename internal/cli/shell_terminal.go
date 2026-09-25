@@ -22,13 +22,6 @@ type ShellProcessRunner interface {
 	Run(context.Context, []string, processpkg.RunOptions) (processpkg.RunResult, error)
 }
 
-// ShellProcessTracker proves that the shell leader and its descendants have
-// drained. Implementations must fail closed when identity or enumeration is
-// unavailable.
-type ShellProcessTracker interface {
-	Exists(context.Context, state.TrackedProcessRecord) (bool, error)
-}
-
 // ShellProcessRegister persists the exact shell process on its assignment
 // before the runner begins waiting for it.
 type ShellProcessRegister func(context.Context, string, state.TrackedProcessRecord) error
@@ -41,13 +34,6 @@ type ShellProcessRemove func(context.Context, string, state.TrackedProcessRecord
 // handoff lock is held, closing the release-before-spawn race.
 type ShellProcessValidate func(context.Context, string, string) error
 
-// ShellHandoffLocker exposes one native directory-lock guard. The guard is
-// released by the process runner immediately after registration (or failed
-// registration cleanup), before a long-lived shell is waited on.
-type ShellHandoffLocker interface {
-	Acquire(context.Context, string) (*lock.Guard, error)
-}
-
 // ShellSignalForwarder forwards terminal interrupts to the exact registered
 // native process group or tree.
 type ShellSignalForwarder interface {
@@ -59,11 +45,11 @@ type ShellSignalForwarder interface {
 // util-linux, PowerShell, tasklist, or taskkill helper is started.
 type ShellTerminalOptions struct {
 	Runner        ShellProcessRunner
-	Tracker       ShellProcessTracker
+	Tracker       TrackedProcessChecker
 	Register      ShellProcessRegister
 	Remove        ShellProcessRemove
 	Validate      ShellProcessValidate
-	HandoffLocker ShellHandoffLocker
+	HandoffLocker HandoffLocker
 	HandoffPath   func(string) (string, error)
 	Forwarder     ShellSignalForwarder
 	Signals       <-chan os.Signal
@@ -74,11 +60,11 @@ type ShellTerminalOptions struct {
 // until the exact process record has been checked after the leader exits.
 type NativeShellTerminal struct {
 	runner        ShellProcessRunner
-	tracker       ShellProcessTracker
+	tracker       TrackedProcessChecker
 	register      ShellProcessRegister
 	remove        ShellProcessRemove
 	validate      ShellProcessValidate
-	handoffLocker ShellHandoffLocker
+	handoffLocker HandoffLocker
 	handoffPath   func(string) (string, error)
 	forwarder     ShellSignalForwarder
 	signals       <-chan os.Signal

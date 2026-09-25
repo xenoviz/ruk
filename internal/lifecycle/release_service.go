@@ -11,13 +11,6 @@ import (
 	"github.com/xenoviz/ruk/internal/state"
 )
 
-// ReleaseStateReader is the read side of the state seam used to locate an
-// assignment before taking its workspace handoff lock. A state.Store
-// satisfies this interface.
-type ReleaseStateReader interface {
-	Read(context.Context) (*state.State, error)
-}
-
 // ReleaseProcesser reports and terminates one Ruk-tracked process. Both
 // methods must be identity-fenced by the implementation; a numeric PID alone
 // is never sufficient to authorize cleanup.
@@ -44,21 +37,15 @@ type ReleasePorter interface {
 	Release(context.Context, string) error
 }
 
-// ReleaseLocker serializes release with acquisition handoff and all other
-// workspace-mutating operations.
-type ReleaseLocker interface {
-	With(context.Context, string, func() error) error
-}
-
 // ReleaseServiceOptions configures the external seams of ReleaseService.
 // LocksRoot is normally state.StorePaths(commonDir).Locks. LockPath can be
 // supplied by integrations that use a different lock layout.
 type ReleaseServiceOptions struct {
-	Reader    ReleaseStateReader
+	Reader    StateReader
 	Processes ReleaseProcesser
 	Git       ReleaseGitter
 	Ports     ReleasePorter
-	Locker    ReleaseLocker
+	Locker    Locker
 
 	LocksRoot string
 	LockPath  func(string) string
@@ -250,7 +237,7 @@ func (service *ReleaseService) releaseLockPath(workspacePath string) (string, er
 	return filepath.Join(service.options.LocksRoot, "workspace-"+key+".lock"), nil
 }
 
-func releaseAssignmentWorkspace(ctx context.Context, reader ReleaseStateReader, assignmentID string) (state.WorkspaceRecord, error) {
+func releaseAssignmentWorkspace(ctx context.Context, reader StateReader, assignmentID string) (state.WorkspaceRecord, error) {
 	current, err := reader.Read(ctx)
 	if err != nil {
 		return state.WorkspaceRecord{}, fmt.Errorf("read assignment %s: %w", assignmentID, err)

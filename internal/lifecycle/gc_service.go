@@ -12,12 +12,6 @@ import (
 	"github.com/xenoviz/ruk/internal/state"
 )
 
-// GCStateReader is the read side of the state seam used for planning and
-// revalidating candidates under the warm lock.
-type GCStateReader interface {
-	Read(context.Context) (*state.State, error)
-}
-
 // GCWorkspaceGit is the bounded Git mutation seam used by collection. It
 // deliberately does not expose a command runner or shell.
 type GCWorkspaceGit interface {
@@ -46,7 +40,7 @@ type GCPathCanonicalizer func(context.Context, string) (string, error)
 // GCServiceOptions configures GC's state, lock, release, Git, and tree-state
 // seams. LocksRoot normally comes from state.StorePaths(commonDir).Locks.
 type GCServiceOptions struct {
-	Reader    GCStateReader
+	Reader    StateReader
 	Lifecycle *Service
 	Release   GCReleaseOperation
 	// Processes is used only to recover tracked processes on unassigned
@@ -55,7 +49,7 @@ type GCServiceOptions struct {
 	Processes    ReleaseProcesser
 	Git          GCWorkspaceGit
 	TreeState    GCTreeStateDeleter
-	Locker       ReleaseLocker
+	Locker       Locker
 	LocksRoot    string
 	Canonicalize GCPathCanonicalizer
 
