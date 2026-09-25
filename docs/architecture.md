@@ -70,8 +70,7 @@ the executable version after deferred replacement. A prerelease uses the prior
 ready Windows executable on that same prerelease channel; the first tag on a
 channel skips because a stable install ignores prereleases and is not an
 upgrade source. Releases before 0.4.1 are not upgrade sources: their helper
-paused with `timeout`, which exits immediately without console input, and
-verified with `findstr /X`, which rejects the bare-LF version output.
+paused with `timeout`, which exits immediately without console input.
 Windows CI also runs the generated helper against a locked executable in a
 path containing a space on every change.
 

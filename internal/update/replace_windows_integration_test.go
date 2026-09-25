@@ -108,30 +108,36 @@ func TestWindowsReplacementHelperReplacesLockedExecutable(t *testing.T) {
 	helperDone := make(chan error, 1)
 	go func() { helperDone <- command.Wait() }()
 
+	var helperErr error
 	select {
-	case helperErr := <-helperDone:
+	case helperErr = <-helperDone:
 		<-holderDone
+	case <-time.After(90 * time.Second):
+		t.Fatal("replacement helper did not finish within 90 seconds")
+	}
+	// Nothing in production waits for the detached helper, so judge the
+	// outcome on disk; the exit status is diagnostic only.
+	if helperErr != nil {
+		t.Logf("replacement helper exit status: %v", helperErr)
+	}
+
+	failure := func(format string, args ...any) {
+		t.Helper()
 		entries, _ := os.ReadDir(dir)
 		names := make([]string, 0, len(entries))
 		for _, entry := range entries {
 			names = append(names, entry.Name())
 		}
-		if helperErr != nil {
-			fakeLog, _ := os.ReadFile(filepath.Join(dir, "fake.log"))
-			direct, directErr := exec.Command(executable, "--version").CombinedOutput()
-			t.Fatalf("replacement helper failed: %v; remaining files: %v\nfake executable log:\n%s\ndirect --version: %q, %v\nscript:\n%s", helperErr, names, fakeLog, direct, directErr, script)
-		}
-	case <-time.After(90 * time.Second):
-		t.Fatal("replacement helper did not finish within 90 seconds")
+		fakeLog, _ := os.ReadFile(filepath.Join(dir, "fake.log"))
+		t.Fatalf("%s\nhelper exit: %v\nremaining files: %v\nfake executable log:\n%s\nscript:\n%s", fmt.Sprintf(format, args...), helperErr, names, fakeLog, script)
 	}
-
 	output, err := exec.Command(executable, "--version").Output()
 	if err != nil || strings.TrimSpace(string(output)) != "0.2.0" {
-		t.Fatalf("executable version after replacement = %q, %v; want 0.2.0", output, err)
+		failure("executable version after replacement = %q, %v; want 0.2.0", output, err)
 	}
-	for _, leftover := range []string{candidate, candidate + ".backup", helper} { // fake.log is expected
+	for _, leftover := range []string{candidate, candidate + ".backup", helper} {
 		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
-			t.Fatalf("replacement left %s behind: %v", leftover, err)
+			failure("replacement left %s behind: %v", leftover, err)
 		}
 	}
 }

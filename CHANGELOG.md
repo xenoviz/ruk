@@ -6,12 +6,13 @@ versioning.
 ## Unreleased
 
 - Fix standalone Windows self-update. The detached replacement helper paused
-  with `timeout`, which exits immediately without console input, and verified
-  the new executable with `findstr /X`, which never matches the bare-LF
-  output of `ruk --version`, so a successful replacement was rolled back. It
-  now pauses with `ping`, compares the version exactly, and exits cleanly
-  after deleting itself. Standalone Windows installs of 0.3.0 or 0.4.0 cannot
-  self-update and should download the new executable once by hand.
+  with `timeout`, which exits immediately without console input, so it gave
+  up before `ruk update` released its executable. It now pauses with `ping`,
+  verifies the new version with an exact comparison instead of `findstr`, and
+  exits cleanly after deleting itself. Windows CI now runs the helper against
+  a locked executable on every change. Standalone Windows installs of 0.3.0 or
+  0.4.0 cannot self-update and should download the new executable once by
+  hand.
 - Release automation: merging a version bump tags it and starts the release
   workflow; GitHub release notes now lead with the changelog entry; CI runs
   every tooling test; actions/setup-go v7 clears Node.js 20 deprecation

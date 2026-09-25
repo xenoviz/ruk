@@ -217,22 +217,23 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 		"if errorlevel 1 (ping -n 2 127.0.0.1 >NUL & goto wait)\r\n" +
 		"move /Y " + quote(candidate) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
 		"if errorlevel 1 (ping -n 2 127.0.0.1 >NUL & goto wait)\r\n" +
-		// Compare the replacement's version exactly. findstr /X only matches
-		// CRLF-terminated lines, and ruk --version prints a bare LF, so a
-		// correct replacement was rolled back; for /f splits on LF.
+		// Compare the replacement's version exactly with for /f, which splits
+		// on LF, rather than relying on findstr /X line anchoring for the
+		// bare-LF output of ruk --version.
 		"set \"reportedVersion=\"\r\n" +
 		"for /f \"usebackq delims=\" %%v in (`" + quote(executable) + " --version`) do set \"reportedVersion=%%v\"\r\n" +
 		"if not \"%reportedVersion%\"==\"" + version + "\" goto rollback\r\n" +
 		"del /Q " + quote(backup) + " >NUL 2>NUL\r\n" +
-		// Delete the running script and exit on one parsed line; a separate
-		// exit line would be read from the deleted file.
-		"del /Q " + quote(helper) + " >NUL 2>NUL & exit /B 0\r\n" +
+		// (goto) leaves the batch context before the running script deletes
+		// itself; otherwise cmd.exe reports "The batch file cannot be found"
+		// and exits 1 even though the replacement succeeded.
+		"(goto) 2>NUL & del /Q " + quote(helper) + " >NUL 2>NUL & exit /B 0\r\n" +
 		":wait_failed\r\nexit /B 1\r\n" +
 		":rollback\r\nset /A rollbackAttempts+=1\r\n" +
 		"move /Y " + quote(backup) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
 		"if not errorlevel 1 goto rollback_succeeded\r\n" +
 		"if %rollbackAttempts% GEQ 120 goto rollback_failed\r\n" +
 		"ping -n 2 127.0.0.1 >NUL\r\ngoto rollback\r\n" +
-		":rollback_succeeded\r\n:rollback_failed\r\ndel /Q " + quote(candidate) + " >NUL 2>NUL\r\ndel /Q " + quote(helper) + " >NUL 2>NUL & exit /B 1\r\n"
+		":rollback_succeeded\r\n:rollback_failed\r\ndel /Q " + quote(candidate) + " >NUL 2>NUL\r\n(goto) 2>NUL & del /Q " + quote(helper) + " >NUL 2>NUL & exit /B 1\r\n"
 	return helper, script, nil
 }
