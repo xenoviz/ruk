@@ -320,6 +320,7 @@ func (service *ExecuteService) runTracked(ctx context.Context, input ExecuteInpu
 		Dir: input.WorkspacePath, Env: input.Env, Mode: input.Mode,
 		Stdin: input.Stdin, Stdout: input.Stdout, Stderr: input.Stderr,
 		CaptureLimit:          input.CaptureLimit,
+		DirectOutput:          true,
 		SuperviseCancellation: true,
 		HandoffComplete:       releaseHandoff,
 		Register: func(registerCtx context.Context, record state.TrackedProcessRecord) error {

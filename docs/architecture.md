@@ -199,8 +199,12 @@ accepted as completion only when an OS liveness check confirms that process no
 longer exists. The workspace tree lock remains held until child registration is
 persisted or failed registration cleanup settles, so release cannot recycle the
 worktree during that handoff.
-Interactive shells inherit the user's terminal and run behind a native POSIX
-process-group or Windows job boundary. Ruk records the shell leader and checks
+Interactive shells and `ruk run` children inherit the user's terminal file
+descriptors directly rather than capture pipes, so terminal detection, colors,
+and job control work. Because no pipe holds the command open, Ruk waits for a
+detached tree whose leader exited before its background descendants to drain,
+observing without signaling, just as the pipe copy used to block. Interactive
+shells run behind a native POSIX process-group or Windows job boundary. Ruk records the shell leader and checks
 the tracked tree after it exits; an unverifiable or leaderless record fails
 closed. The Go runtime does not launch util-linux `script`, PowerShell, or a
 shell helper to provide this boundary, and this adapter does not allocate a PTY

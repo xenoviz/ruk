@@ -67,8 +67,8 @@ func (runner Runner) Run(ctx context.Context, command []string, options RunOptio
 		Dir: options.Dir, Env: append([]string(nil), options.Env...), Mode: options.Mode,
 		ForegroundTerminal: options.ForegroundTerminal,
 		Stdin:              options.Stdin,
-		Stdout:             outputWriter(stdout, options.Stdout),
-		Stderr:             outputWriter(stderr, options.Stderr),
+		Stdout:             outputWriter(stdout, options.Stdout, options.DirectOutput),
+		Stderr:             outputWriter(stderr, options.Stderr, options.DirectOutput),
 	}
 	child, err := runner.Spawner.Spawn(operationCtx, request)
 	if err != nil {
@@ -175,9 +175,7 @@ func (runner Runner) waitSupervised(ctx context.Context, child Child, record sta
 	go func() { waitResult <- child.Wait() }()
 	select {
 	case status := <-waitResult:
-		verifyCtx, cancelVerify := boundedCleanupContext(ctx)
-		verifyErr := runner.verifyDetachedTree(verifyCtx, record, options)
-		cancelVerify()
+		verifyErr := runner.awaitDetachedDrain(ctx, record, options)
 		if verifyErr != nil {
 			verifyErr = errors.Join(verifyErr, waitStatusError(status), status.BoundaryError)
 			safetyErr := cancellationSafetyError(child, record, options.Mode, verifyErr)

@@ -1,6 +1,9 @@
 package process
 
-import "io"
+import (
+	"io"
+	"os"
+)
 
 // TailBuffer retains only the final Limit bytes, making diagnostics bounded
 // even when a failed installer emits an unbounded stream.
@@ -41,9 +44,12 @@ func (buffer *TailBuffer) String() string { return string(buffer.data) }
 
 func (buffer *TailBuffer) Truncated() bool { return buffer.truncated }
 
-func outputWriter(capture *TailBuffer, destination io.Writer) io.Writer {
+func outputWriter(capture *TailBuffer, destination io.Writer, direct bool) io.Writer {
 	if destination == nil {
 		return capture
+	}
+	if file, ok := destination.(*os.File); ok && direct {
+		return file
 	}
 	return io.MultiWriter(capture, destination)
 }

@@ -232,6 +232,7 @@ func (terminal *NativeShellTerminal) Run(ctx context.Context, request ShellTermi
 		Env:                   shellEnvironment(request.Environment),
 		Mode:                  processpkg.Detached,
 		ForegroundTerminal:    true,
+		DirectOutput:          true,
 		SuperviseCancellation: true,
 		Stdin:                 request.Stdin,
 		Stdout:                request.Stdout,

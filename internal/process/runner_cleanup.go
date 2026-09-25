@@ -51,10 +51,45 @@ func (runner Runner) verifyDetachedTree(ctx context.Context, record state.Tracke
 		return fmt.Errorf("process: verify detached process tree: %w", err)
 	}
 	if alive {
-		return errors.New("process: detached process tree still has descendants")
+		return errDetachedDescendantsRemain
 	}
 	return nil
 }
+
+// detachedDrainPollInterval bounds how often a direct-output run rechecks a
+// detached group whose leader exited before its background descendants.
+const detachedDrainPollInterval = 100 * time.Millisecond
+
+// awaitDetachedDrain verifies the detached tree after the leader exits. With
+// captured output, exec's copy pipes already block until every descendant
+// holding them exits. Direct output has no such pipe, so while descendants
+// remain (reported alive, or a leaderless group that cannot be identified) it
+// keeps observing without signaling anything, as the pipe wait did, until the
+// tree drains or ctx is cancelled.
+func (runner Runner) awaitDetachedDrain(ctx context.Context, record state.TrackedProcessRecord, options RunOptions) error {
+	for {
+		verifyCtx, cancelVerify := boundedCleanupContext(ctx)
+		err := runner.verifyDetachedTree(verifyCtx, record, options)
+		cancelVerify()
+		if err == nil || !options.DirectOutput || !detachedDrainPending(err) {
+			return err
+		}
+		timer := time.NewTimer(detachedDrainPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return err
+		case <-timer.C:
+		}
+	}
+}
+
+func detachedDrainPending(err error) bool {
+	var unavailable *IdentityUnavailableError
+	return errors.Is(err, errDetachedDescendantsRemain) || errors.As(err, &unavailable)
+}
+
+var errDetachedDescendantsRemain = errors.New("process: detached process tree still has descendants")
 
 func cancellationSafetyError(child Child, record state.TrackedProcessRecord, mode ProcessMode, cause error) error {
 	return &ProcessCleanupUnsafeError{PID: child.PID(), Mode: mode, Record: record, Cause: cause}
