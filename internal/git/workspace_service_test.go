@@ -7,13 +7,32 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	rukgit "github.com/xenoviz/ruk/internal/git"
 )
 
 type workspaceServiceFS struct {
 	paths map[string]string
+	// dangling lists symlinks whose targets do not exist.
+	dangling map[string]bool
 }
+
+func (filesystem workspaceServiceFS) Lstat(path string) (os.FileInfo, error) {
+	if filesystem.dangling[path] {
+		return symlinkInfo{name: filepath.Base(path)}, nil
+	}
+	return nil, os.ErrNotExist
+}
+
+type symlinkInfo struct{ name string }
+
+func (info symlinkInfo) Name() string  { return info.name }
+func (symlinkInfo) Size() int64        { return 0 }
+func (symlinkInfo) Mode() os.FileMode  { return os.ModeSymlink | 0o777 }
+func (symlinkInfo) ModTime() time.Time { return time.Time{} }
+func (symlinkInfo) IsDir() bool        { return false }
+func (symlinkInfo) Sys() any           { return nil }
 
 func (filesystem workspaceServiceFS) EvalSymlinks(path string) (string, error) {
 	if value, ok := filesystem.paths[path]; ok {
@@ -126,6 +145,36 @@ func TestWorkspaceServiceRejectsSymlinkedAncestorOutsidePool(t *testing.T) {
 	err = service.Create(context.Background(), destination, "", "", true)
 	if err == nil || !strings.Contains(err.Error(), "outside managed repository root") {
 		t.Fatalf("Create error = %v, want symlink escape rejection", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %#v, want no Git command", runner.calls)
+	}
+}
+
+func TestWorkspaceServiceRejectsDanglingSymlinkAncestor(t *testing.T) {
+	container := t.TempDir()
+	repositoryRoot := filepath.Join(container, "checkout")
+	managedRoot := filepath.Join(container, "pool")
+	link := filepath.Join(managedRoot, "linked")
+	destination := filepath.Join(link, "task")
+	filesystem := workspaceServiceFS{
+		paths:    map[string]string{repositoryRoot: repositoryRoot, managedRoot: managedRoot},
+		dangling: map[string]bool{link: true},
+	}
+	runner := &fakeRunner{results: map[string]rukgit.CommandResult{}}
+	service, err := rukgit.NewWorkspaceService(rukgit.WorkspaceServiceOptions{
+		RepositoryRoot: repositoryRoot,
+		ManagedRoot:    managedRoot,
+		Runner:         runner.call,
+		Files:          filesystem,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkspaceService returned an error: %v", err)
+	}
+
+	err = service.Create(context.Background(), destination, "", "", true)
+	if err == nil || !strings.Contains(err.Error(), "dangling symlink") {
+		t.Fatalf("Create error = %v, want dangling symlink rejection", err)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("calls = %#v, want no Git command", runner.calls)
