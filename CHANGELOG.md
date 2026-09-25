@@ -3,7 +3,7 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.4.0 - 2026-09-25
 
 - Remove Ruk 0.2 compatibility: state files from version 1 through 3, the
   0.2 host port registry import, and second-rounded process identities are
