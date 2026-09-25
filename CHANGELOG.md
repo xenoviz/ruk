@@ -3,7 +3,7 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.4.2 - 2026-09-25
 
 - Fix a Windows lock-release race: when a concurrent contender briefly held a
   lock's `owner.json` open, releasing the lock could report a sharing

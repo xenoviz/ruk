@@ -1,6 +1,6 @@
 {
   "name": "@xenoviz/ruk-linux-arm64",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Native Ruk binary for Linux arm64 with glibc",
   "license": "MIT",
   "os": ["linux"],
