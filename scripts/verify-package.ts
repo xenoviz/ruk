@@ -11,7 +11,7 @@ const expectedDevelopmentDependencies = {
   "@types/node": "22.20.1",
   typescript: "7.0.2",
   vitepress: "1.6.4",
-  vue: "3.5.40",
+  vue: "3.5.43",
 };
 const nativePackages = {
   "ruk-linux-x64": { name: "@xenoviz/ruk-linux-x64", target: "linux-x64", binary: "native/ruk" },

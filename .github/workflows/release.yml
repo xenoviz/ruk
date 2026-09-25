@@ -45,7 +45,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.24.6
           cache: true
@@ -83,7 +83,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.24.6
           cache: true
@@ -135,7 +135,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.24.6
           cache: true
@@ -155,7 +155,7 @@ jobs:
         working-directory: artifacts
         run: sha256sum "${{ matrix.output }}" > "${{ matrix.output }}.sha256"
       - name: Attest executable provenance
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: artifacts/${{ matrix.output }}
       - name: Stage release assets
@@ -231,7 +231,7 @@ jobs:
       - name: Pin npm trusted-publishing client
         run: npm install --global npm@11.9.0
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.24.6
           cache: true
@@ -372,7 +372,7 @@ jobs:
         run: bun scripts/create-release-manifest.ts
       - name: Attest readiness manifest
         if: steps.release.outputs.ready != 'true'
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: artifacts/ruk-release.json
       - name: Upload assets and readiness manifest last
