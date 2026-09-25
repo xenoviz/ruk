@@ -171,12 +171,8 @@ func (manager NativeProcessManager) detachedGroupExists(ctx context.Context, rec
 		if !observed.IdentityKnown || observed.Identity == "" {
 			return false, processUnavailable(pid, errors.New("process identity is unavailable"))
 		}
-		match := lock.CompareIdentity(record.StartedAt, observed.Identity)
-		if match == lock.IdentityExact {
+		if lock.SameIdentity(record.StartedAt, observed.Identity) {
 			return true, nil
-		}
-		if match == lock.IdentityLegacyCompatible {
-			return false, processUnavailable(pid, errors.New("legacy process identity cannot prove the live leader"))
 		}
 	}
 	if manager.table == nil {

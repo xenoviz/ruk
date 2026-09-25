@@ -90,12 +90,8 @@ func (tracker Tracker) Exists(ctx context.Context, record state.TrackedProcessRe
 		if !observed.IdentityKnown || observed.Identity == "" {
 			return false, &IdentityUnavailableError{PID: pid, Cause: errors.New("process identity is unavailable")}
 		}
-		match := lock.CompareIdentity(record.StartedAt, observed.Identity)
-		if match == lock.IdentityExact {
+		if lock.SameIdentity(record.StartedAt, observed.Identity) {
 			return true, nil
-		}
-		if match == lock.IdentityLegacyCompatible {
-			return false, &IdentityUnavailableError{PID: pid, Cause: errors.New("legacy process identity cannot prove the live leader")}
 		}
 	}
 

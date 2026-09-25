@@ -45,38 +45,10 @@ type ProcessState struct {
 	Identity      string
 }
 
-// IdentityMatch describes compatibility between a persisted process identity
-// and a fresh native observation. Legacy POSIX identities are second-rounded
-// timestamps; they remain liveness-compatible with a native raw identity,
-// but are never an exact fence for signaling or termination.
-type IdentityMatch uint8
-
-const (
-	IdentityMismatch IdentityMatch = iota
-	IdentityExact
-	IdentityLegacyCompatible
-)
-
-func CompareIdentity(expected, observed string) IdentityMatch {
-	if expected == "" || observed == "" {
-		return IdentityMismatch
-	}
-	if expected == observed {
-		return IdentityExact
-	}
-	if isLegacyPOSIXIdentity(expected) && isNativeIdentity(observed) || isLegacyPOSIXIdentity(observed) && isNativeIdentity(expected) {
-		return IdentityLegacyCompatible
-	}
-	return IdentityMismatch
-}
-
-func isNativeIdentity(value string) bool {
-	return strings.HasPrefix(value, "linux:") || strings.HasPrefix(value, "darwin:")
-}
-
-func isLegacyPOSIXIdentity(value string) bool {
-	_, err := time.ParseInLocation("Mon Jan _2 15:04:05 2006", value, time.Local)
-	return err == nil
+// SameIdentity reports whether a persisted process identity names the same
+// process as a fresh native observation. An empty identity never matches.
+func SameIdentity(expected, observed string) bool {
+	return expected != "" && expected == observed
 }
 
 // ProcessProbe inspects a local lock owner without launching helper processes.
@@ -371,8 +343,7 @@ func (locker *DirectoryLocker) ownerIsAlive(ctx context.Context, owner Owner) (b
 	if owner.ProcessIdentity == "" || !state.IdentityKnown {
 		return true, nil
 	}
-	match := CompareIdentity(owner.ProcessIdentity, state.Identity)
-	return match == IdentityExact || match == IdentityLegacyCompatible, nil
+	return SameIdentity(owner.ProcessIdentity, state.Identity), nil
 }
 
 // Guard represents one acquired directory lock.

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/xenoviz/ruk/internal/lock"
 )
@@ -47,17 +46,12 @@ func dotNetTicks(filetime uint64) uint64 {
 	return filetime + dotNetEpochOffset
 }
 
-func formatPOSIXIdentity(started time.Time) string {
-	return started.In(time.Local).Format("Mon Jan _2 15:04:05 2006")
-}
-
 func unavailableIdentity(pid int, err error) (lock.ProcessState, error) {
 	return lock.ProcessState{Alive: true, IdentityKnown: false}, fmt.Errorf("inspect process %d identity: %w", pid, err)
 }
 
-// exactIdentityMatch deliberately excludes legacy timestamp aliases. Those
-// aliases are safe for lock liveness (which must never reclaim a live process)
-// but insufficient evidence for signaling or terminating a tracked process.
+// exactIdentityMatch requires the recorded identity to equal the fresh native
+// observation before a tracked process may be signaled or terminated.
 func exactIdentityMatch(expected, observed string) bool {
-	return lock.CompareIdentity(expected, observed) == lock.IdentityExact
+	return lock.SameIdentity(expected, observed)
 }

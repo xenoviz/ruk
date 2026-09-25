@@ -5,7 +5,6 @@ import (
 	"os"
 	"strconv"
 	"testing"
-	"time"
 )
 
 func TestInspectorRejectsInvalidProcessIdentifiers(t *testing.T) {
@@ -61,14 +60,5 @@ func TestWindowsFiletimeMatchesDotNetTicks(t *testing.T) {
 	}
 	if got := strconv.FormatUint(dotNetTicks(unixEpochFiletime), 10); got != "621355968000000000" {
 		t.Fatalf("formatted ticks = %q", got)
-	}
-}
-
-func TestPOSIXIdentityMatchesPSStartTimeShape(t *testing.T) {
-	t.Parallel()
-
-	started := time.Date(2026, time.August, 15, 6, 7, 8, 0, time.Local)
-	if got := formatPOSIXIdentity(started); got != "Sat Aug 15 06:07:08 2026" {
-		t.Fatalf("identity = %q", got)
 	}
 }

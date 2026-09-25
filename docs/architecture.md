@@ -185,12 +185,9 @@ leader PID is reused.
 Windows release and GC also perform a bounded final descendant drain after the
 exact leader exits. Newly observed or leaderless processes are never signaled
 from a PID-only snapshot; they retain the workspace when they do not exit.
-Linux identities include the boot time and raw kernel start ticks. Older
-timestamp identities remain compatible for conservative lock-liveness checks,
-but never authorize signaling when an exact native identity cannot be proven.
+Linux identities include the boot time and raw kernel start ticks.
 macOS identities use the kernel process start time at microsecond precision.
-Legacy `ps` timestamps remain useful only for conservative liveness checks and
-never authorize signaling when the native identity is unavailable.
+Only an exact native identity match authorizes signaling a recorded process.
 Abort cleanup follows the same fail-closed rule for attached children and
 detached groups. If the original leader identity or surviving descendants
 cannot be verified, or any termination safety check refuses the signal, the
