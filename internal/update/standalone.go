@@ -217,7 +217,12 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 		"if errorlevel 1 (ping -n 2 127.0.0.1 >NUL & goto wait)\r\n" +
 		"move /Y " + quote(candidate) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
 		"if errorlevel 1 (ping -n 2 127.0.0.1 >NUL & goto wait)\r\n" +
-		quote(executable) + " --version | findstr /X \"" + version + "\" >NUL || goto rollback\r\n" +
+		// Compare the replacement's version exactly. findstr /X only matches
+		// CRLF-terminated lines, and ruk --version prints a bare LF, so a
+		// correct replacement was rolled back; for /f splits on LF.
+		"set \"reportedVersion=\"\r\n" +
+		"for /f \"usebackq delims=\" %%v in (`" + quote(executable) + " --version`) do set \"reportedVersion=%%v\"\r\n" +
+		"if not \"%reportedVersion%\"==\"" + version + "\" goto rollback\r\n" +
 		"del /Q " + quote(backup) + " >NUL 2>NUL\r\n" +
 		// Delete the running script and exit on one parsed line; a separate
 		// exit line would be read from the deleted file.

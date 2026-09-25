@@ -41,9 +41,10 @@ function parseReadyWindowsRelease(release: unknown, currentTag: string): Previou
 }
 
 // Standalone Windows updaters before this version paused with `timeout`,
-// which exits immediately without console input, so their replacement
-// helper gave up before the updater released its executable. They cannot be
-// fixed after publication, so they are not used as upgrade sources.
+// which exits immediately without console input, and verified the
+// replacement with `findstr /X`, which rejects bare-LF `ruk --version`
+// output and rolled a good replacement back. They cannot be fixed after
+// publication, so they are not used as upgrade sources.
 export const FIRST_WORKING_WINDOWS_UPDATER = "0.4.1";
 
 function isEligibleUpgradeSource(
