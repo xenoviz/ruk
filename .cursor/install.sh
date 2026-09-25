@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # Keep this in sync with package.json "packageManager" / "engines".
-BUN_VERSION="1.3.14"
+BUN_VERSION="1.4.2"
 # Keep this in sync with go.mod and .github/workflows/ci.yml (Go migration).
 GO_VERSION="1.24.6"
 

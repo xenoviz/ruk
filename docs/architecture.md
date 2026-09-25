@@ -34,8 +34,13 @@ limit, verify the SHA-256 digest committed by the readiness manifest, and
 replace the executable through a same-directory staged file.
 
 GitHub release visibility is not update readiness. Protected version tags are
-immutable after creation, and the release workflow rejects a triggering commit
-that is not reachable from protected `main`. Every job checks out the immutable
+immutable after creation, and the release workflow rejects a triggering ref
+that is not a `v*` tag or a commit that is not reachable from protected `main`.
+Merging a version bump to `main` tags it automatically: `tag-release.yml`
+requires the dated changelog entry, creates the tag, and dispatches the release
+workflow on it, because a tag pushed with `GITHUB_TOKEN` does not trigger push
+workflows. Pushing the tag by hand still works and is ignored by the tagger
+once the tag exists. Every job checks out the immutable
 triggering SHA. The workflow publishes npm and builds and attests all executable
 assets. A final job creates a mutable draft release, verifies the staged
 checksums, uploads the assets, uploads `ruk-release.json` last, and only then
@@ -64,7 +69,10 @@ executable, runs its updater against the newly finalized release, and verifies
 the executable version after deferred replacement. A prerelease uses the prior
 ready Windows executable on that same prerelease channel; the first tag on a
 channel skips because a stable install ignores prereleases and is not an
-upgrade source.
+upgrade source. Releases before 0.4.1 are not upgrade sources: their helper
+paused with `timeout`, which exits immediately without console input.
+Windows CI also runs the generated helper against a locked executable in a
+path containing a space on every change.
 
 ## Boundaries
 

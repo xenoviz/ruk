@@ -36,7 +36,7 @@ safety boundaries.
   architecture change.
 - Add tests for success, failure, concurrency, and machine-readable output when
   changing public behavior.
-- Use Bun 1.3.14 and the committed `bun.lock`; do not add another package
+- Use Bun 1.4.2 and the committed `bun.lock`; do not add another package
   manager lockfile.
 - Keep the Go runtime dependency-free and supporting TypeScript tooling strict.
 - Run `bun run check`, `go test ./...`, `go test -race ./...`,

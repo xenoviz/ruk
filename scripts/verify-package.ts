@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { changelogEntry } from "./lib/changelog.js";
 import { readPackageJson, VERSION_PATTERN } from "./lib/package.js";
 import { isRecord } from "./lib/types.js";
 
@@ -10,7 +11,7 @@ const expectedDevelopmentDependencies = {
   "@types/node": "22.20.1",
   typescript: "7.0.2",
   vitepress: "1.6.4",
-  vue: "3.5.40",
+  vue: "3.5.43",
 };
 const nativePackages = {
   "ruk-linux-x64": { name: "@xenoviz/ruk-linux-x64", target: "linux-x64", binary: "native/ruk" },
@@ -42,7 +43,10 @@ if (!isRecord(developmentDependencies) || Object.keys(developmentDependencies).l
 for (const [name, version] of Object.entries(expectedDevelopmentDependencies)) {
   if (developmentDependencies[name] !== version) throw new Error(`Development dependency ${name} must be pinned to ${version}`);
 }
-if (pkg["packageManager"] !== "bun@1.3.14") throw new Error("packageManager must pin Bun 1.3.14");
+if (pkg["packageManager"] !== "bun@1.4.2") throw new Error("packageManager must pin Bun 1.4.2");
+// A version bump must ship with its dated changelog entry, which also becomes
+// the GitHub release notes; fail the release pull request instead of the tag.
+changelogEntry(await fs.readFile(path.join(root, "CHANGELOG.md"), "utf8"), pkg["version"]);
 
 for (const file of [
   "README.md",

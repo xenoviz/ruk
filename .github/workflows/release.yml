@@ -5,6 +5,9 @@ on:
     # This includes stable and prerelease tags such as v0.3.0-beta.1.
     tags:
       - "v*"
+  # tag-release.yml dispatches this workflow on the tag it creates, because a
+  # tag pushed with GITHUB_TOKEN does not trigger the push event above.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,6 +29,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+      - name: Require a version tag ref
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "Releases run only from a v* tag, not ${GITHUB_REF}." >&2
+            exit 1
+          fi
       - name: Require ancestry from protected main
         run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -45,7 +54,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.24.6
           cache: true
@@ -56,7 +65,7 @@ jobs:
       - name: Setup Bun for release verification tooling
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - name: Install release verification tooling
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Verify release tag and package metadata
@@ -64,7 +73,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/verify-release.ts
       - name: Test conformance and release tooling
-        run: bun test test/conformance/*.test.ts test/release-update-verification.test.ts
+        run: bun test test/
       - name: Compare Go CLI with frozen golden
         run: bun run test:conformance
 
@@ -83,7 +92,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.24.6
           cache: true
@@ -135,7 +144,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.24.6
           cache: true
@@ -155,7 +164,7 @@ jobs:
         working-directory: artifacts
         run: sha256sum "${{ matrix.output }}" > "${{ matrix.output }}.sha256"
       - name: Attest executable provenance
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: artifacts/${{ matrix.output }}
       - name: Stage release assets
@@ -231,7 +240,7 @@ jobs:
       - name: Pin npm trusted-publishing client
         run: npm install --global npm@11.9.0
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.24.6
           cache: true
@@ -308,6 +317,14 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Setup Bun for release tooling
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
       - name: Prepare mutable draft release
         id: release
         shell: bash
@@ -334,9 +351,13 @@ jobs:
               exit 1
             fi
           else
+            # The dated CHANGELOG.md entry leads the notes, followed by the
+            # generated pull-request list, so upgrade guidance is not lost.
+            bun scripts/release-notes.ts > "$RUNNER_TEMP/release-notes.md"
             RELEASE_CREATE_ARGS=(
               --draft
               --verify-tag
+              --notes-file "$RUNNER_TEMP/release-notes.md"
               --generate-notes
               --title "Ruk ${RELEASE_TAG#v}"
             )
@@ -346,16 +367,6 @@ jobs:
             gh release create "$RELEASE_TAG" "${RELEASE_CREATE_ARGS[@]}"
           fi
           echo "ready=false" >> "$GITHUB_OUTPUT"
-      - name: Checkout release commit
-        if: steps.release.outputs.ready != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-      - name: Setup Bun for release manifest tooling
-        if: steps.release.outputs.ready != 'true'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.3.14
       - name: Download staged assets
         if: steps.release.outputs.ready != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -370,7 +381,7 @@ jobs:
         run: bun scripts/create-release-manifest.ts
       - name: Attest readiness manifest
         if: steps.release.outputs.ready != 'true'
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: artifacts/ruk-release.json
       - name: Upload assets and readiness manifest last
@@ -417,7 +428,7 @@ jobs:
       - name: Setup Bun for release smoke tooling
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - name: Exercise previous Windows executable updater
         env:
           GH_TOKEN: ${{ github.token }}

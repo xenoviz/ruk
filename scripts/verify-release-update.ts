@@ -61,7 +61,13 @@ try {
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  if (!verified) throw new Error(`Windows executable did not update to ${VERSION} within 60 seconds`);
+  if (!verified) {
+    // Leftover candidate, backup, or helper files show how far the detached
+    // replacement helper got before it stopped.
+    const remaining = await fs.readdir(temporary, { withFileTypes: true }).catch(() => []);
+    process.stderr.write(`Files left in ${temporary}: ${remaining.map((entry) => entry.name).join(", ") || "(none)"}\n`);
+    throw new Error(`Windows executable did not update to ${VERSION} within 60 seconds`);
+  }
   process.stdout.write(`Verified Windows self-update from ${before.stdout.trim()} to ${VERSION}.\n`);
 } finally {
   await fs.rm(temporary, { recursive: true, force: true });

@@ -3,6 +3,21 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Fix standalone Windows self-update. The detached replacement helper paused
+  with `timeout`, which exits immediately without console input, so it gave
+  up before `ruk update` released its executable. It now pauses with `ping`,
+  verifies the new version with an exact comparison instead of `findstr`, and
+  exits cleanly after deleting itself. Windows CI now runs the helper against
+  a locked executable on every change. Standalone Windows installs of 0.3.0 or
+  0.4.0 cannot self-update and should download the new executable once by
+  hand.
+- Release automation: merging a version bump tags it and starts the release
+  workflow; GitHub release notes now lead with the changelog entry; CI runs
+  every tooling test; actions/setup-go v7 clears Node.js 20 deprecation
+  warnings; repository tooling uses Bun 1.4.2.
+
 ## 0.4.0 - 2026-09-25
 
 - Remove Ruk 0.2 compatibility: state files from version 1 through 3, the
