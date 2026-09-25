@@ -139,9 +139,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test host-specific Go packages
+      - name: Test host-specific Go packages with the race detector
         if: runner.os != 'Linux'
-        run: go test ./...
+        # Lock and process races have surfaced only on Windows, so every host
+        # runs its tests under the race detector, not just Linux.
+        run: go test -race ./...
       - name: Exercise native command
         run: |
           go run ./cmd/ruk --version
