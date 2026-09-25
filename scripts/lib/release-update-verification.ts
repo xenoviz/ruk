@@ -40,6 +40,12 @@ function parseReadyWindowsRelease(release: unknown, currentTag: string): Previou
   return { tagName: release["tag_name"], version };
 }
 
+// Standalone Windows updaters before this version paused with `timeout`,
+// which exits immediately without console input, so their replacement
+// helper gave up before the updater released its executable. They cannot be
+// fixed after publication, so they are not used as upgrade sources.
+export const FIRST_WORKING_WINDOWS_UPDATER = "0.4.1";
+
 function isEligibleUpgradeSource(
   release: unknown,
   candidate: PreviousWindowsRelease,
@@ -47,6 +53,7 @@ function isEligibleUpgradeSource(
 ): boolean {
   try {
     if (compareVersions(candidate.version, currentVersion) >= 0) return false;
+    if (compareVersions(candidate.version, FIRST_WORKING_WINDOWS_UPDATER) < 0) return false;
     if (versionIsPrerelease(currentVersion)) {
       return versionPrereleaseChannel(candidate.version) === versionPrereleaseChannel(currentVersion);
     }
@@ -86,6 +93,6 @@ export function planWindowsUpdateVerification(
   }
   return {
     kind: "skip",
-    message: "No prior ready Windows release exists; the first release has no upgrade source.\n",
+    message: `No prior ready Windows release at or after ${FIRST_WORKING_WINDOWS_UPDATER} exists to exercise as an upgrade source.\n`,
   };
 }

@@ -202,6 +202,10 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 	}
 	helper := candidate + ".cmd"
 	backup := candidate + ".backup"
+	// Pause with ping rather than timeout: the helper runs without a console
+	// and with stdin redirected to NUL, where timeout exits immediately
+	// ("Input redirection is not supported"), which let the bounded wait loop
+	// exhaust in about a second while the updater still held its executable.
 	quote := func(value string) string { return `"` + value + `"` }
 	script := "@echo off\r\n" +
 		"set /A waitAttempts=0\r\n" +
@@ -210,18 +214,20 @@ func WindowsReplacementPlan(executable, candidate, version string, pid int) (str
 		"set /A waitAttempts+=1\r\n" +
 		"if %waitAttempts% GEQ 120 goto wait_failed\r\n" +
 		"copy /Y " + quote(executable) + " " + quote(backup) + " >NUL 2>NUL\r\n" +
-		"if errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)\r\n" +
+		"if errorlevel 1 (ping -n 2 127.0.0.1 >NUL & goto wait)\r\n" +
 		"move /Y " + quote(candidate) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
-		"if errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)\r\n" +
+		"if errorlevel 1 (ping -n 2 127.0.0.1 >NUL & goto wait)\r\n" +
 		quote(executable) + " --version | findstr /X \"" + version + "\" >NUL || goto rollback\r\n" +
 		"del /Q " + quote(backup) + " >NUL 2>NUL\r\n" +
-		"del /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 0\r\n" +
+		// Delete the running script and exit on one parsed line; a separate
+		// exit line would be read from the deleted file.
+		"del /Q " + quote(helper) + " >NUL 2>NUL & exit /B 0\r\n" +
 		":wait_failed\r\nexit /B 1\r\n" +
 		":rollback\r\nset /A rollbackAttempts+=1\r\n" +
 		"move /Y " + quote(backup) + " " + quote(executable) + " >NUL 2>NUL\r\n" +
 		"if not errorlevel 1 goto rollback_succeeded\r\n" +
 		"if %rollbackAttempts% GEQ 120 goto rollback_failed\r\n" +
-		"timeout /t 1 /nobreak >NUL\r\ngoto rollback\r\n" +
-		":rollback_succeeded\r\n:rollback_failed\r\ndel /Q " + quote(candidate) + " >NUL 2>NUL\r\ndel /Q " + quote(helper) + " >NUL 2>NUL\r\nexit /B 1\r\n"
+		"ping -n 2 127.0.0.1 >NUL\r\ngoto rollback\r\n" +
+		":rollback_succeeded\r\n:rollback_failed\r\ndel /Q " + quote(candidate) + " >NUL 2>NUL\r\ndel /Q " + quote(helper) + " >NUL 2>NUL & exit /B 1\r\n"
 	return helper, script, nil
 }

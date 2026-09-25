@@ -734,12 +734,12 @@ func TestWindowsReplacementPlanUsesFileLockWithoutPIDPolling(t *testing.T) {
 	if helper != `C:\bin\.ruk.exe.new.cmd` {
 		t.Fatalf("helper = %q", helper)
 	}
-	for _, forbidden := range []string{"tasklist", "taskkill", "powershell", "4242"} {
+	for _, forbidden := range []string{"tasklist", "taskkill", "powershell", "timeout", "4242"} {
 		if strings.Contains(strings.ToLower(script), strings.ToLower(forbidden)) {
 			t.Fatalf("replacement script contains unsafe %q: %s", forbidden, script)
 		}
 	}
-	for _, required := range []string{"copy /Y", "move /Y", "timeout /t 1 /nobreak", "findstr /X", "waitAttempts=0", "waitAttempts+=1", "GEQ 120 goto wait_failed", "rollbackAttempts=0", "rollbackAttempts+=1", "if not errorlevel 1 goto rollback_succeeded", "GEQ 120 goto rollback_failed"} {
+	for _, required := range []string{"copy /Y", "move /Y", "ping -n 2 127.0.0.1 >NUL", "findstr /X", "waitAttempts=0", "waitAttempts+=1", "GEQ 120 goto wait_failed", "rollbackAttempts=0", "rollbackAttempts+=1", "if not errorlevel 1 goto rollback_succeeded", "GEQ 120 goto rollback_failed"} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("replacement script lacks %q: %s", required, script)
 		}

@@ -64,7 +64,10 @@ executable, runs its updater against the newly finalized release, and verifies
 the executable version after deferred replacement. A prerelease uses the prior
 ready Windows executable on that same prerelease channel; the first tag on a
 channel skips because a stable install ignores prereleases and is not an
-upgrade source.
+upgrade source. Releases before 0.4.1 are not upgrade sources: their helper
+paused with `timeout`, which exits immediately without console input.
+Windows CI also runs the generated helper against a locked executable in a
+path containing a space on every change.
 
 ## Boundaries
 

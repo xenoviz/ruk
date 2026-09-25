@@ -3,6 +3,15 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Fix standalone Windows self-update: the detached replacement helper paused
+  with `timeout`, which exits immediately without console input, so it could
+  give up before the updater released its executable. It now pauses with
+  `ping`, and exits cleanly after deleting itself. Standalone Windows installs
+  of 0.3.0 or 0.4.0 whose `ruk update` does not complete should download the
+  new executable once by hand.
+
 ## 0.4.0 - 2026-09-25
 
 - Remove Ruk 0.2 compatibility: state files from version 1 through 3, the
