@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -431,8 +432,12 @@ func TestDirectoryLockConcurrentReleaseSurvivesTombstoneCleanup(t *testing.T) {
 	// may still be verifying its own tombstone. A committed callback must not
 	// be reported as failed because a contender cleaned the tombstone first.
 	lockPath := filepath.Join(t.TempDir(), "state.lock")
-	const workers = 32
-	const rounds = 300
+	workers, rounds := 32, 300
+	if runtime.GOOS == "windows" {
+		// Windows directory renames are much slower; keep contention high
+		// while bounding the retry-delay cost.
+		workers, rounds = 16, 100
+	}
 	errs := make(chan error, workers*rounds)
 	done := make(chan struct{})
 	for worker := 0; worker < workers; worker++ {
