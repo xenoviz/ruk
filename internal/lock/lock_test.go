@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -424,4 +425,53 @@ func setModified(t *testing.T, path string, modified time.Time) {
 	if err := os.Chtimes(path, modified, modified); err != nil {
 		t.Fatalf("set modified time: %v", err)
 	}
+}
+
+func TestDirectoryLockConcurrentReleaseSurvivesTombstoneCleanup(t *testing.T) {
+	t.Parallel()
+
+	// Acquire removes token-verified release tombstones while another guard
+	// may still be verifying its own tombstone. A committed callback must not
+	// be reported as failed because a contender cleaned the tombstone first.
+	lockPath := filepath.Join(t.TempDir(), "state.lock")
+	const workers = 32
+	const rounds = 300
+	errs := make(chan error, workers*rounds)
+	done := make(chan struct{})
+	for worker := 0; worker < workers; worker++ {
+		go func(worker int) {
+			defer func() { done <- struct{}{} }()
+			var sequence int
+			locker := lockpkg.NewDirectoryLocker(lockpkg.Config{
+				Options:  lockpkg.Options{Timeout: time.Minute, Stale: time.Hour},
+				PID:      os.Getpid(),
+				Hostname: "host-a",
+				Probe:    liveProbe{},
+				Token: func() string {
+					sequence++
+					return fmt.Sprintf("worker-%d-%d", worker, sequence)
+				},
+			})
+			for round := 0; round < rounds; round++ {
+				if err := locker.With(context.Background(), lockPath, func() error { return nil }); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(worker)
+	}
+	for worker := 0; worker < workers; worker++ {
+		<-done
+	}
+	close(errs)
+	for err := range errs {
+		t.Fatalf("committed lock callback reported failure: %v", err)
+	}
+}
+
+// liveProbe is stateless so concurrent lockers can share it under -race.
+type liveProbe struct{}
+
+func (liveProbe) Inspect(context.Context, int) (lockpkg.ProcessState, error) {
+	return lockpkg.ProcessState{Alive: true, IdentityKnown: false}, nil
 }

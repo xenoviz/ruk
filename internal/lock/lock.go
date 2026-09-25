@@ -443,6 +443,10 @@ func (guard *Guard) Release() error {
 	}
 	guard.releasedPath = releasedPath
 	movedOwner, movedValid, movedErr := readOwner(releasedPath)
+	if errors.Is(movedErr, os.ErrNotExist) && tombstoneRemovedConcurrently(releasedPath) {
+		guard.releasedPath = ""
+		return nil
+	}
 	if movedErr != nil || !movedValid || movedOwner.Token != guard.token {
 		verifyErr := movedErr
 		if verifyErr == nil {
@@ -488,6 +492,23 @@ func cleanupReleasedTombstones(path string) {
 		}
 		_ = os.RemoveAll(tombstone)
 	}
+}
+
+// tombstoneRemovedConcurrently reports whether a concurrent Acquire removed
+// this guard's release tombstone. cleanupReleasedTombstones removes a
+// tombstone only after proving its owner token hashes to the suffix, and only
+// this guard renames into that suffix, so a vanished tombstone held this
+// guard's token. A missing owner file with the directory still present is a
+// removal in progress; wait briefly for it to finish rather than restoring a
+// partially removed directory to the canonical path.
+func tombstoneRemovedConcurrently(releasedPath string) bool {
+	for attempt := 0; attempt < 50; attempt++ {
+		if _, err := os.Lstat(releasedPath); errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return false
 }
 
 func releaseToken(token string) string {
