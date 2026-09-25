@@ -45,8 +45,28 @@ jobs:
         run: bun run pack:check
       - name: Validate Go packages
         run: go vet ./...
-      - name: Test Go packages
-        run: go test ./...
+      - name: Static analysis for every release platform
+        shell: bash
+        run: |
+          # Tool versions are pinned; they are CI tools, not runtime dependencies.
+          for goos in linux darwin windows; do
+            GOOS="$goos" go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+          done
+      - name: Check for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: Test Go packages with a coverage floor
+        shell: bash
+        env:
+          # Raise this with coverage; never lower it to make a change pass.
+          COVERAGE_FLOOR: "70.0"
+        run: |
+          go test -coverprofile=coverage.out ./...
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub("%", "", $NF); print $NF }')
+          echo "Total statement coverage: ${total}% (floor ${COVERAGE_FLOOR}%)"
+          awk -v total="$total" -v floor="$COVERAGE_FLOOR" 'BEGIN { exit !(total + 0 >= floor + 0) }' || {
+            echo "Coverage ${total}% is below the ${COVERAGE_FLOOR}% floor." >&2
+            exit 1
+          }
       - name: Test Go packages with the race detector
         run: go test -race ./...
       - name: Build and exercise the Go package

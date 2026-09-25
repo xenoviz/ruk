@@ -1,5 +1,6 @@
 node_modules/
 coverage/
+coverage.out
 dist/
 .test-dist/
 website/.vitepress/cache/

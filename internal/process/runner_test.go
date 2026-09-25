@@ -55,12 +55,10 @@ func (spawner *runnerSpawner) Spawn(_ context.Context, request processpkg.SpawnR
 
 type runnerDescriber struct {
 	record state.TrackedProcessRecord
-	mode   processpkg.ProcessMode
 	err    error
 }
 
-func (describer runnerDescriber) Describe(_ context.Context, _ int, mode processpkg.ProcessMode, command []string) (state.TrackedProcessRecord, error) {
-	describer.mode = mode
+func (describer runnerDescriber) Describe(_ context.Context, _ int, _ processpkg.ProcessMode, command []string) (state.TrackedProcessRecord, error) {
 	record := describer.record
 	record.Command = append([]string(nil), command...)
 	return record, describer.err
