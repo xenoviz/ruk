@@ -17,7 +17,7 @@ export interface ConformanceStep {
 
 export interface ConformanceScenario {
   name: string;
-  /** The single-step form remains supported for small legacy fixtures. */
+  /** Single-command scenarios may use args instead of steps. */
   args?: readonly string[];
   steps?: readonly ConformanceStep[];
   domains?: readonly ConformanceDomain[];

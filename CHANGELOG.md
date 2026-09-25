@@ -3,6 +3,24 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Remove Ruk 0.2 compatibility: state files from version 1 through 3, the
+  0.2 host port registry import, and second-rounded process identities are
+  no longer read. Upgrade from 0.2 through 0.3 first, or release assignments
+  and remove `<git-common-dir>/ruk/state.json` before upgrading. This also
+  stops creating `/tmp/ruk-host-<uid>`, which another local user could
+  pre-create to block named-port allocation.
+- Fix a lock release race that reported already committed state changes as
+  failures under concurrent agents.
+- Launch the Windows standalone update helper correctly from paths that
+  contain spaces.
+- Record the owning package manager (Bun, pnpm, or Yarn) when the npm launcher
+  installs the native binary on first use, so `ruk update` delegates to it.
+- Keep `gc --apply --force-expired` running when it meets an in-progress
+  acquisition, keep successful preparation when a metric write fails, and
+  reject dangling symlink ancestors of worktree destinations.
+
 ## 0.3.0 - 2026-08-20
 
 - Promote the Go-native 0.3 line to stable after the beta packaging, update, and

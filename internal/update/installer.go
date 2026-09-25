@@ -23,7 +23,7 @@ func InstallerFromPath(entrypoint string) Installer {
 }
 
 // DetectInstaller reads the durable marker written by the npm distribution.
-// Older package installations fall back to path detection for compatibility.
+// Installations without a marker fall back to path detection.
 func DetectInstaller(entrypoint string) (Installer, error) {
 	if strings.TrimSpace(entrypoint) == "" {
 		return InstallerNPM, nil
