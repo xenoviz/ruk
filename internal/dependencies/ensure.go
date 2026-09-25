@@ -156,21 +156,18 @@ func EnsureDependencies(ctx context.Context, input EnsureInput) (EnsureResult, e
 		result, err = ensureLocked(ctx, input, root, key, store, installer, branch, now)
 		return err
 	})
+	// Preparation metrics are observational. The tree record is already
+	// committed, so a metric write failure must neither turn a successful
+	// preparation into an error nor obscure a dependency failure that callers
+	// need to classify and report.
 	if err == nil {
-		metricErr := error(nil)
+		kind := "prepared"
 		if result.AlreadyAttached {
-			metricErr = recordMetric(ctx, store, "skipped", elapsedMilliseconds(now().Sub(started)))
-		} else if metricErr == nil {
-			metricErr = recordMetric(ctx, store, "prepared", elapsedMilliseconds(now().Sub(started)))
+			kind = "skipped"
 		}
-		if metricErr != nil {
-			return EnsureResult{}, metricErr
-		}
+		_ = recordMetric(ctx, store, kind, elapsedMilliseconds(now().Sub(started)))
 		return result, nil
 	}
-	// Preparation metrics are observational. A state-write failure here must
-	// never replace or obscure the dependency failure that callers need to
-	// classify and report.
 	_ = recordMetric(ctx, store, "failed", elapsedMilliseconds(now().Sub(started)))
 	return EnsureResult{}, err
 }
