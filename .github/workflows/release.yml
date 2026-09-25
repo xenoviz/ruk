@@ -56,7 +56,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
           cache: true
       - name: Test Go packages
         run: go test ./...
@@ -94,7 +94,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
           cache: true
       - name: Test host-specific Go packages
         if: runner.os != 'Linux'
@@ -146,7 +146,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
           cache: true
       - name: Build Go executable
         shell: bash
@@ -242,7 +242,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
           cache: true
       - name: Build package-mode executable
         shell: bash
