@@ -29,7 +29,7 @@ type ReleaseProcesser interface {
 // ReleaseGitter resets and cleans one managed worktree. Implementations must
 // keep all Git execution behind their own injected command boundary.
 type ReleaseGitter interface {
-	ResetCleanReturn(context.Context, string, bool, []string) error
+	Return(context.Context, string, bool, []string) error
 }
 
 // ReleaseGitRelocker is an optional extension used to restore a pooled
@@ -206,7 +206,7 @@ func (service *ReleaseService) ReleaseAssignment(ctx context.Context, assignment
 		if cleanupErr != nil {
 			return service.cancelRelease(ctx, assignmentID, cleanupErr)
 		}
-		if gitErr := service.options.Git.ResetCleanReturn(ctx, returning.Path, options.Force, append([]string(nil), preservedProjections...)); gitErr != nil {
+		if gitErr := service.options.Git.Return(ctx, returning.Path, options.Force, append([]string(nil), preservedProjections...)); gitErr != nil {
 			gitErr = service.relockAfterGitFailure(ctx, returning.Path, gitErr)
 			return service.cancelRelease(ctx, assignmentID, gitErr)
 		}

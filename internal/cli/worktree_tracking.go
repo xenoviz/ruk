@@ -130,8 +130,8 @@ type recordingAcquisitionWorktree struct {
 	recorder WorktreeRecorder
 }
 
-func (worktree recordingAcquisitionWorktree) Create(ctx context.Context, destination, branch, startPoint string) error {
-	if err := worktree.inner.Create(ctx, destination, branch, startPoint); err != nil {
+func (worktree recordingAcquisitionWorktree) Create(ctx context.Context, destination, branch, startPoint string, detach bool) error {
+	if err := worktree.inner.Create(ctx, destination, branch, startPoint, detach); err != nil {
 		return err
 	}
 	return worktree.recorder.RecordWorktree(ctx, destination, branch, state.WorktreeSourceAcquire)

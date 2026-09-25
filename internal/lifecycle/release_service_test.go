@@ -111,7 +111,7 @@ type releaseGit struct {
 	projections []string
 }
 
-func (git *releaseGit) ResetCleanReturn(_ context.Context, path string, _ bool, projections []string) error {
+func (git *releaseGit) Return(_ context.Context, path string, _ bool, projections []string) error {
 	git.paths = append(git.paths, path)
 	git.projections = append([]string(nil), projections...)
 	return git.err

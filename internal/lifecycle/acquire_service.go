@@ -32,7 +32,7 @@ type AcquisitionStateReader interface {
 // should delegate to git.WorkspaceService or git.Client; this service never
 // invokes a subprocess directly.
 type AcquisitionWorktree interface {
-	Create(context.Context, string, string, string) error
+	Create(ctx context.Context, destination, branch, startPoint string, detach bool) error
 	Lock(context.Context, string) error
 	Assign(context.Context, string, string, string) error
 }
@@ -480,7 +480,7 @@ func (service *AcquisitionService) acquireFresh(ctx context.Context, input Acqui
 		if err := service.verifyPreparation(ctx, path, preparationID); err != nil {
 			return err
 		}
-		if err := service.worktree.Create(ctx, path, input.Assignment.Branch, input.StartPoint); err != nil {
+		if err := service.worktree.Create(ctx, path, input.Assignment.Branch, input.StartPoint, true); err != nil {
 			return service.failPreparation(ctx, path, preparationID, true, err)
 		}
 		if err := service.worktree.Lock(ctx, path); err != nil {

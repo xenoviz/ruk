@@ -33,7 +33,7 @@ func TestDefaultReleaseProcessesUsesNativeIdentityFencedManager(t *testing.T) {
 	}
 }
 
-func (stub *runtimeWorkspaceStub) Create(_ context.Context, path, branch, start string) error {
+func (stub *runtimeWorkspaceStub) Create(_ context.Context, path, branch, start string, _ bool) error {
 	stub.created = append(stub.created, strings.Join([]string{path, branch, start}, "|"))
 	return nil
 }
