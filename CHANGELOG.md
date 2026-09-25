@@ -3,7 +3,7 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.4.1 - 2026-09-25
 
 - Fix standalone Windows self-update. The detached replacement helper paused
   with `timeout`, which exits immediately without console input, so it gave
