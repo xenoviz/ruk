@@ -39,6 +39,11 @@ func runFakeExecutable() {
 		os.Exit(2)
 	}
 	version := strings.TrimSpace(string(body[index+len(fakeVersionMarker):]))
+	// Record each invocation so a failing helper run shows what it executed.
+	if log, err := os.OpenFile(filepath.Join(filepath.Dir(self), "fake.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		fmt.Fprintf(log, "%s args=%q version=%s\n", time.Now().Format("15:04:05.000"), os.Args[1:], version)
+		_ = log.Close()
+	}
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "--version":
 		fmt.Println(version)
@@ -112,7 +117,9 @@ func TestWindowsReplacementHelperReplacesLockedExecutable(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 		if helperErr != nil {
-			t.Fatalf("replacement helper failed: %v; remaining files: %v", helperErr, names)
+			fakeLog, _ := os.ReadFile(filepath.Join(dir, "fake.log"))
+			direct, directErr := exec.Command(executable, "--version").CombinedOutput()
+			t.Fatalf("replacement helper failed: %v; remaining files: %v\nfake executable log:\n%s\ndirect --version: %q, %v\nscript:\n%s", helperErr, names, fakeLog, direct, directErr, script)
 		}
 	case <-time.After(90 * time.Second):
 		t.Fatal("replacement helper did not finish within 90 seconds")
@@ -122,7 +129,7 @@ func TestWindowsReplacementHelperReplacesLockedExecutable(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(output)) != "0.2.0" {
 		t.Fatalf("executable version after replacement = %q, %v; want 0.2.0", output, err)
 	}
-	for _, leftover := range []string{candidate, candidate + ".backup", helper} {
+	for _, leftover := range []string{candidate, candidate + ".backup", helper} { // fake.log is expected
 		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 			t.Fatalf("replacement left %s behind: %v", leftover, err)
 		}
