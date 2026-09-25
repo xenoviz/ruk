@@ -49,8 +49,11 @@ jobs:
         shell: bash
         run: |
           # Tool versions are pinned; they are CI tools, not runtime dependencies.
+          # Build the tool for the host once; GOOS then selects only the target
+          # that staticcheck analyzes.
+          GOBIN="$RUNNER_TEMP/bin" go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
           for goos in linux darwin windows; do
-            GOOS="$goos" go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+            GOOS="$goos" "$RUNNER_TEMP/bin/staticcheck" ./...
           done
       - name: Check for known vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
