@@ -301,6 +301,13 @@ func (locker *DirectoryLocker) publishLock(path string, owner Owner) (*Guard, er
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return nil, fmt.Errorf("inspect lock %s: %w", path, statErr)
 		}
+		// Windows reports renaming onto an existing directory as access
+		// denied. The staging directory was just created beside the target,
+		// so this is contention with an owner that released before the
+		// Lstat above, not a permission problem: retry instead of failing.
+		if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrExist) {
+			return nil, errLockBusy
+		}
 		return nil, fmt.Errorf("publish lock %s: %w", path, err)
 	}
 	return &Guard{path: path, token: owner.Token}, nil
