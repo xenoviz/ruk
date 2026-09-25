@@ -72,11 +72,6 @@ func NewNativeSignalForwarder(values ...SignalForwarderOptions) NativeSignalForw
 	return NativeSignalForwarder{probe: probe, table: table, group: group, tree: tree}
 }
 
-// NewSignalForwarder is a concise constructor alias for runtime defaults.
-func NewSignalForwarder(values ...SignalForwarderOptions) NativeSignalForwarder {
-	return NewNativeSignalForwarder(values...)
-}
-
 // Forward validates the signal, then delegates to the platform implementation
 // which performs an immediate identity and group/tree fence before signaling.
 func (forwarder NativeSignalForwarder) Forward(ctx context.Context, record state.TrackedProcessRecord, signal os.Signal) error {

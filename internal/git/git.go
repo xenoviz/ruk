@@ -79,11 +79,6 @@ func Discover(ctx context.Context, cwd string, runner CommandRunner) (Repository
 	return client.Discover(ctx, cwd)
 }
 
-// DiscoverRepository is an explicit alias for Discover.
-func DiscoverRepository(ctx context.Context, cwd string, runner CommandRunner) (Repository, error) {
-	return Discover(ctx, cwd, runner)
-}
-
 // Discover finds the current repository using the client's runner.
 func (client Client) Discover(ctx context.Context, cwd string) (Repository, error) {
 	if client.Runner == nil {
@@ -140,11 +135,6 @@ func (client Client) Discover(ctx context.Context, cwd string) (Repository, erro
 }
 
 // LocalBranchExists reports whether branch resolves to a local branch ref.
-func LocalBranchExists(ctx context.Context, cwd, branch string, runner CommandRunner) (bool, error) {
-	return NewClient(runner).LocalBranchExists(ctx, cwd, branch)
-}
-
-// LocalBranchExists reports whether branch resolves to a local branch ref.
 func (client Client) LocalBranchExists(ctx context.Context, cwd, branch string) (bool, error) {
 	if branch == "" {
 		return false, errors.New("branch must not be empty")
@@ -157,11 +147,6 @@ func (client Client) LocalBranchExists(ctx context.Context, cwd, branch string) 
 }
 
 // RefExists reports whether ref is an exact Git ref.
-func RefExists(ctx context.Context, cwd, ref string, runner CommandRunner) (bool, error) {
-	return NewClient(runner).RefExists(ctx, cwd, ref)
-}
-
-// RefExists reports whether ref is an exact Git ref.
 func (client Client) RefExists(ctx context.Context, cwd, ref string) (bool, error) {
 	if ref == "" {
 		return false, errors.New("ref must not be empty")
@@ -171,11 +156,6 @@ func (client Client) RefExists(ctx context.Context, cwd, ref string) (bool, erro
 		return false, err
 	}
 	return result.ExitCode == 0, nil
-}
-
-// ListRemotes returns configured remote names in Git's order.
-func ListRemotes(ctx context.Context, cwd string, runner CommandRunner) ([]string, error) {
-	return NewClient(runner).ListRemotes(ctx, cwd)
 }
 
 // ListRemotes returns configured remote names in Git's order.
@@ -209,16 +189,6 @@ func (client Client) CurrentBranch(ctx context.Context, cwd string) (string, err
 		return "(detached)", nil
 	}
 	return branch, nil
-}
-
-// SelectRemote chooses the remote relevant to startPoint. A qualified
-// refs/remotes/<remote>/<branch> or shorthand <remote>/<branch> start point is
-// validated against configured remotes. A shorthand that is also a local
-// branch is treated as a local start point, never as a remote. Without an
-// explicit remote start point, origin wins, then a sole remote, and finally
-// ambiguity is an error.
-func SelectRemote(ctx context.Context, cwd, startPoint string, runner CommandRunner) (string, error) {
-	return NewClient(runner).SelectRemote(ctx, cwd, startPoint)
 }
 
 // SelectRemote chooses a configured remote using the client's runner.
@@ -258,11 +228,6 @@ func FetchCommand(remote string, _ ...string) ([]string, error) {
 		return nil, errors.New("remote must not be empty")
 	}
 	return []string{"fetch", "--prune", remote}, nil
-}
-
-// Fetch executes the command built by FetchCommand.
-func Fetch(ctx context.Context, cwd, remote, ref string, runner CommandRunner) error {
-	return NewClient(runner).Fetch(ctx, cwd, remote, ref)
 }
 
 // Fetch executes the command built by FetchCommand.

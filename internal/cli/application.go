@@ -58,7 +58,7 @@ func New(options Options) *Application {
 	updateOperation := options.Update
 	if updateOperation == nil {
 		updateOperation = func(ctx context.Context, options updatepkg.Options) (updatepkg.Result, error) {
-			return updatepkg.Update(ctx, options, updatepkg.Hooks{})
+			return updatepkg.Run(ctx, options, updatepkg.Hooks{})
 		}
 	}
 	renewOperation := options.Renew

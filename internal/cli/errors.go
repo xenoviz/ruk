@@ -29,10 +29,6 @@ const (
 	OperationFailedCode       ErrorCode = "OPERATION_FAILED"
 )
 
-// ErrorCategory is retained as an alias for callers that describe these
-// values as categories rather than codes.
-type ErrorCategory = ErrorCode
-
 // ErrorRecord is the JSON failure contract documented by agent-interface.md.
 // Optional recovery fields are omitted unless the error supplies them.
 type ErrorRecord struct {
@@ -265,10 +261,6 @@ func classifyError(err error, inspectLifecycle bool) ErrorRecord {
 	return record
 }
 
-// errorRecord is kept private for parity with the TypeScript helper and for
-// package-local callers; external callers should use ClassifyError.
-func errorRecord(err error) ErrorRecord { return ClassifyError(err) }
-
 // MarshalError serializes one structured failure without a trailing newline.
 func MarshalError(err error) ([]byte, error) { return json.Marshal(ClassifyError(err)) }
 
@@ -284,14 +276,8 @@ func FormatJSONError(err error) string {
 	return string(data) + "\n"
 }
 
-// JSONError is a concise alias for FormatJSONError.
-func JSONError(err error) string { return FormatJSONError(err) }
-
 // FormatHumanError preserves the entrypoint's human-mode stderr shape.
 func FormatHumanError(err error) string { return "ruk: " + errorDetail(err) + "\n" }
-
-// HumanError is a concise alias for FormatHumanError.
-func HumanError(err error) string { return FormatHumanError(err) }
 
 // WriteError writes exactly one human or JSON failure record to destination.
 func WriteError(destination io.Writer, err error, jsonMode bool) error {
@@ -323,9 +309,6 @@ func JSONRequested(argv []string) bool {
 	}
 	return false
 }
-
-// jsonRequested is the package-local form used by CLI entrypoint code.
-func jsonRequested(argv []string) bool { return JSONRequested(argv) }
 
 var (
 	assignmentConflictPattern = regexp.MustCompile(`(?i)assignment .* (does not exist|no longer owns)|expected (assigned|returning)|(preparation|acquisition|collection) operation does not match|workspace .* is not managed`)

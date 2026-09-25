@@ -79,10 +79,3 @@ func Usage(snapshot state.State) UsageStatistics {
 	}
 	return result
 }
-
-// UsageStatisticsFor is a descriptive alias for callers migrating from the
-// TypeScript usageStatistics function.
-func UsageStatisticsFor(snapshot state.State) UsageStatistics { return Usage(snapshot) }
-
-// ComputeUsageStatistics is an explicit alias for Usage.
-func ComputeUsageStatistics(snapshot state.State) UsageStatistics { return Usage(snapshot) }

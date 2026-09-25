@@ -210,11 +210,6 @@ func (service *GCService) Run(ctx context.Context, options GCOptions) (GCResult,
 	return result, nil
 }
 
-// Execute is an explicit synonym for Run.
-func (service *GCService) Execute(ctx context.Context, options GCOptions) (GCResult, error) {
-	return service.Run(ctx, options)
-}
-
 func (service *GCService) identify(ctx context.Context, options GCOptions) ([]GcCandidate, error) {
 	current, err := service.options.Reader.Read(ctx)
 	if err != nil {

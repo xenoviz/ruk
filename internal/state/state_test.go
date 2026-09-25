@@ -113,7 +113,7 @@ func TestDecodeRequiresTreeFieldsWithoutTighteningValues(t *testing.T) {
 	accepted := `{
 		"version": 4,
 		"workspaces": {},
-		"metrics": `+emptyMetricsJSON+`,
+		"metrics": ` + emptyMetricsJSON + `,
 		"trees": {
 			"tree": {
 				"path": "",
@@ -132,7 +132,7 @@ func TestDecodeRequiresTreeFieldsWithoutTighteningValues(t *testing.T) {
 	missingPath := `{
 		"version": 4,
 		"workspaces": {},
-		"metrics": `+emptyMetricsJSON+`,
+		"metrics": ` + emptyMetricsJSON + `,
 		"trees": {
 			"tree": {
 				"fingerprint": "",

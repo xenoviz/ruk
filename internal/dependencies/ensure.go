@@ -69,10 +69,6 @@ type EnsureInput struct {
 	MachineReadable bool
 }
 
-// EnsureDependenciesInput is retained as a descriptive alias for callers
-// migrating from the TypeScript object-shaped API.
-type EnsureDependenciesInput = EnsureInput
-
 // EnsureResult is the stable machine-readable result of one preparation.
 // Reused and AlreadyAttached are both true only when no installer ran and the
 // recorded projection passed its integrity check.
@@ -82,10 +78,6 @@ type EnsureResult struct {
 	Reused          bool   `json:"reused"`
 	AlreadyAttached bool   `json:"alreadyAttached"`
 }
-
-// EnsureDependenciesResult is a descriptive alias matching the TypeScript
-// result name.
-type EnsureDependenciesResult = EnsureResult
 
 // EnsureDependencies fingerprints the current inputs, reuses an intact
 // projection when possible, otherwise removes the old projection, runs the
@@ -170,11 +162,6 @@ func EnsureDependencies(ctx context.Context, input EnsureInput) (EnsureResult, e
 	}
 	_ = recordMetric(ctx, store, "failed", elapsedMilliseconds(now().Sub(started)))
 	return EnsureResult{}, err
-}
-
-// Ensure is a concise alias for EnsureDependencies.
-func Ensure(ctx context.Context, input EnsureInput) (EnsureResult, error) {
-	return EnsureDependencies(ctx, input)
 }
 
 func ensureLocked(ctx context.Context, input EnsureInput, root, key string, store StateStore, installer InstallerBackend, branch CurrentBranchReader, now func() time.Time) (EnsureResult, error) {

@@ -9,12 +9,6 @@ import (
 	"strings"
 )
 
-// SelectLatest exposes the same release selection used by Update to release
-// tooling and compatibility harnesses.
-func SelectLatest(candidates []Release, allowPrerelease bool) (Release, error) {
-	return latestReady(candidates, allowPrerelease, "")
-}
-
 func latestReady(candidates []Release, allowPrerelease bool, prereleaseChannel string) (Release, error) {
 	var selected Release
 	var selectedVersion Version

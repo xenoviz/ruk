@@ -52,11 +52,6 @@ type ShellTerminal interface {
 // confirmed drained.
 type ShellRelease func(context.Context, string) error
 
-// ShellActivityRunner is the shared activity-keeper seam used by managed
-// execution and shell operations. The callback owns terminal startup and
-// release so heartbeat loss cancels the shell before ownership can change.
-type ShellActivityRunner = ExecuteActivityRunner
-
 // ShellInput describes one high-level shell request.
 type ShellInput struct {
 	Branch           string
@@ -122,7 +117,7 @@ type ShellOptions struct {
 	Acquire  ShellAcquirer
 	Terminal ShellTerminal
 	Release  ShellRelease
-	Activity ShellActivityRunner
+	Activity ExecuteActivityRunner
 	Expiry   ShellAssignmentExpiry
 }
 
@@ -132,7 +127,7 @@ type ShellService struct {
 	acquire  ShellAcquirer
 	terminal ShellTerminal
 	release  ShellRelease
-	activity ShellActivityRunner
+	activity ExecuteActivityRunner
 	expiry   ShellAssignmentExpiry
 }
 

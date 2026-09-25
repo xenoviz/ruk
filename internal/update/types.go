@@ -21,10 +21,6 @@ type Distribution string
 const (
 	DistributionPackage    Distribution = "package"
 	DistributionStandalone Distribution = "standalone"
-	// Short names make composition code concise while retaining explicit type
-	// checking at the call site.
-	Package    = DistributionPackage
-	Standalone = DistributionStandalone
 )
 
 type Installer string

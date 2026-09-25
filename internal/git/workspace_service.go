@@ -75,12 +75,6 @@ func NewWorkspaceService(options WorkspaceServiceOptions) (*WorkspaceService, er
 	return &WorkspaceService{repositoryRoot: repositoryRoot, managedRoot: managedRoot, git: NewClient(options.Runner), files: files}, nil
 }
 
-// NewWorkspaceServiceAt is a convenience constructor for callers that keep
-// the repository root and injected seams as separate values.
-func NewWorkspaceServiceAt(repositoryRoot, managedRoot string, runner CommandRunner, files WorkspaceFileSystem) (*WorkspaceService, error) {
-	return NewWorkspaceService(WorkspaceServiceOptions{RepositoryRoot: repositoryRoot, ManagedRoot: managedRoot, Runner: runner, Files: files})
-}
-
 // ManagedRoot returns the normalized root used for path authorization.
 func (service *WorkspaceService) ManagedRoot() string {
 	if service == nil {
@@ -139,11 +133,6 @@ func (service *WorkspaceService) Return(ctx context.Context, destination string,
 		return err
 	}
 	return service.git.ReturnWorktree(ctx, destination, force, preservedProjections)
-}
-
-// ResetCleanReturn is an explicit alias for Return for lifecycle callers.
-func (service *WorkspaceService) ResetCleanReturn(ctx context.Context, destination string, force bool, preservedProjections []string) error {
-	return service.Return(ctx, destination, force, preservedProjections)
 }
 
 // Lock protects a pooled worktree from ordinary Git maintenance.

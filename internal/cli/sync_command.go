@@ -231,9 +231,3 @@ func (command SyncCommand) run(ctx context.Context, input SyncCommandInput) (Syn
 	}
 	return output, nil
 }
-
-// Execute is an explicit synonym for Run for routers that name command
-// execution methods uniformly.
-func (command SyncCommand) Execute(ctx context.Context, input SyncCommandInput) (SyncCommandResult, error) {
-	return command.Run(ctx, input)
-}

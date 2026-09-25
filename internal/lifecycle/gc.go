@@ -37,11 +37,6 @@ type GcCandidate struct {
 	ExpectedExpiresAt    *string
 }
 
-// GCCandidate and GCReason are aliases for callers that use Go's initialism
-// spelling in exported names.
-type GCCandidate = GcCandidate
-type GCReason = GcCandidateReason
-
 const (
 	GCReasonAvailable             = GcAvailable
 	GCReasonFailed                = GcFailed

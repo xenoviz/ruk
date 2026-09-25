@@ -72,7 +72,7 @@ func TestReleaseServicePollsUntilTrackedTreeDrains(t *testing.T) {
 		ProcessDrainTimeout: time.Second, ProcessPollInterval: time.Millisecond,
 	})
 
-	if _, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err != nil {
+	if _, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err != nil {
 		t.Fatalf("Release returned an error: %v", err)
 	}
 	if processes.existsCalls != 3 || processes.calls != 1 {
@@ -89,7 +89,7 @@ func TestReleaseServiceRetainsOwnershipWhenGracefulTreeSurvives(t *testing.T) {
 		ProcessDrainTimeout: 2 * time.Millisecond, ProcessPollInterval: time.Millisecond,
 	})
 
-	_, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
+	_, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
 	if err == nil || !strings.Contains(err.Error(), "retry with --force") {
 		t.Fatalf("Release error = %v, want bounded graceful-survival error", err)
 	}
@@ -158,7 +158,7 @@ func TestReleaseServiceCleanRelease(t *testing.T) {
 		Reader: store, Processes: processes, Git: git, Ports: ports, Locker: locker, LocksRoot: filepath.Join(t.TempDir(), "locks"),
 	})
 
-	result, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
+	result, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
 	if err != nil {
 		t.Fatalf("Release returned an error: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestReleaseServiceReadsPreservedProjectionsInsideWorkspaceFence(t *testing.
 		LocksRoot: t.TempDir(),
 	})
 
-	if _, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{PreservedProjectionReader: reader}); err != nil {
+	if _, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{PreservedProjectionReader: reader}); err != nil {
 		t.Fatalf("Release returned an error: %v", err)
 	}
 	if !readerCalled || len(git.projections) != 1 || git.projections[0] != "packages/api/node_modules" {
@@ -234,7 +234,7 @@ func TestReleaseServiceProcessIdentityUncertaintyRetainsOwnership(t *testing.T) 
 	git := &releaseGit{}
 	release := newReleaseService(service, store, &releaseProcesses{err: errors.New("identity unavailable")}, git, &releasePorts{})
 
-	_, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
+	_, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
 	if err == nil || !strings.Contains(err.Error(), "identity unavailable") {
 		t.Fatalf("error = %v, want identity uncertainty", err)
 	}
@@ -248,7 +248,7 @@ func TestReleaseServiceGitFailureRollsBackAndRelocks(t *testing.T) {
 	git := &releaseGit{err: errors.New("git clean failed")}
 	release := newReleaseService(service, store, &releaseProcesses{}, git, &releasePorts{})
 
-	_, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
+	_, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
 	if err == nil || !strings.Contains(err.Error(), "git clean failed") {
 		t.Fatalf("error = %v, want Git error", err)
 	}
@@ -283,7 +283,7 @@ func TestReleaseServicePortFailureDoesNotRollbackAvailableState(t *testing.T) {
 	git := &releaseGit{}
 	release := newReleaseService(service, store, &releaseProcesses{}, git, ports)
 
-	if _, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err != nil {
+	if _, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err != nil {
 		t.Fatalf("port cleanup error made release fail: %v", err)
 	}
 	workspace := workspaceAtPath(t, store, path)
@@ -294,7 +294,7 @@ func TestReleaseServicePortFailureDoesNotRollbackAvailableState(t *testing.T) {
 		t.Fatal("port failure restored a stale assignment")
 	}
 	ports.err = nil
-	if _, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err == nil {
+	if _, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err == nil {
 		t.Fatal("released workspace with stale assignment unexpectedly remained releasable")
 	}
 	if ports.calls != 1 {
@@ -308,7 +308,7 @@ func TestReleaseServiceFinishFailureSkipsPortCleanup(t *testing.T) {
 	ports := &releasePorts{}
 	release := newReleaseService(service, store, &releaseProcesses{}, &releaseGit{}, ports)
 
-	if _, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err == nil || !strings.Contains(err.Error(), "finish publication failed") {
+	if _, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{}); err == nil || !strings.Contains(err.Error(), "finish publication failed") {
 		t.Fatalf("finish failure = %v", err)
 	}
 	if ports.calls != 0 {
@@ -327,7 +327,7 @@ func TestReleaseServiceAcquisitionInProgressIsRetryableConflict(t *testing.T) {
 		Reader: store, Processes: &releaseProcesses{}, Git: &releaseGit{}, Ports: &releasePorts{}, Locker: locker, LocksRoot: t.TempDir(),
 	})
 
-	_, err := release.Release(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
+	_, err := release.ReleaseAssignment(context.Background(), assignmentID, lifecycle.ReleaseOptions{})
 	var conflict *lifecycle.AcquisitionInProgressError
 	if !errors.As(err, &conflict) || !conflict.Retryable() {
 		t.Fatalf("error = %v, want retryable acquisition conflict", err)

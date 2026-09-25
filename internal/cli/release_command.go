@@ -23,9 +23,6 @@ type RepositoryReleaseResult struct {
 // subprocesses.
 type RepositoryReleaseOperation func(context.Context, git.Repository, string, bool) (RepositoryReleaseResult, error)
 
-// ReleaseOperation is the concise compatibility name for the release seam.
-type ReleaseOperation = RepositoryReleaseOperation
-
 // ReleaseInput contains the validated public release options.
 type ReleaseInput struct {
 	Repository   git.Repository

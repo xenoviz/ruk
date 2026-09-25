@@ -49,13 +49,13 @@ func (adapter acquisitionWorktreeAdapter) Assign(ctx context.Context, destinatio
 // lifecycle.AcquisitionWorktree because acquisition only requires locking,
 // creation, and branch assignment.
 func (adapter acquisitionWorktreeAdapter) Return(ctx context.Context, destination string, force bool, projections []string) error {
-	return adapter.service.ResetCleanReturn(ctx, destination, force, projections)
+	return adapter.service.Return(ctx, destination, force, projections)
 }
 
 type releaseGitAdapter struct{ service *git.WorkspaceService }
 
 func (adapter releaseGitAdapter) ResetCleanReturn(ctx context.Context, destination string, force bool, projections []string) error {
-	return adapter.service.ResetCleanReturn(ctx, destination, force, projections)
+	return adapter.service.Return(ctx, destination, force, projections)
 }
 
 func (adapter releaseGitAdapter) Lock(ctx context.Context, destination string) error {
