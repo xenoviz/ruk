@@ -3,6 +3,16 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Build with Go 1.27.1 (Go 1.24 no longer receives security fixes); CI and
+  release read the toolchain from `go.mod`.
+- CI adds staticcheck for Linux, macOS, and Windows, govulncheck, a 70%
+  statement-coverage floor, and race-detector runs on Windows and macOS.
+- Internal cleanup: comments describe the current output contract instead of
+  the retired TypeScript runtime, GC types use the `GC` initialism, and
+  duplicate same-package interfaces are consolidated. No behavior changes.
+
 ## 0.4.1 - 2026-09-25
 
 - Fix standalone Windows self-update. The detached replacement helper paused
