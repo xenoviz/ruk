@@ -20,6 +20,12 @@ versioning.
 - Keep `gc --apply --force-expired` running when it meets an in-progress
   acquisition, keep successful preparation when a metric write fails, and
   reject dangling symlink ancestors of worktree destinations.
+- Give `ruk run` and `ruk shell` children the real terminal instead of capture
+  pipes, so terminal detection, colors, prompts, and job control work.
+- Never terminate a Windows process that is older than the parent PID it
+  names, which a reused leader PID could otherwise match.
+- Flush state, worktree registry, and host index files to disk before
+  replacing them, and synchronize the runner's captured output tail.
 
 ## 0.3.0 - 2026-08-20
 
