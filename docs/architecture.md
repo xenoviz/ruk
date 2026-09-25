@@ -97,7 +97,8 @@ system action instead of accumulating in the CLI.
 - Recorded dependency projections are integrity-validated before reuse; modified
   projections are discarded instead of entering the pool.
 - Preparation of the same workspace is serialized.
-- State replacement is atomic and state files are owner-readable only.
+- State replacement is atomic and flushed to stable storage before the rename,
+  and state files are owner-readable only.
 - A stale lock owned by a live local process is never removed by age alone.
 - The current workspace cannot remove itself.
 - Machine-readable output contains one JSON value on stdout; diagnostics go to

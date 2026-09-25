@@ -1,6 +1,6 @@
 //go:build windows
 
-package state
+package atomicfile
 
 import (
 	"errors"
@@ -9,10 +9,10 @@ import (
 	"time"
 )
 
-func TestRetryStateReplaceRetriesTransientSharingFailures(t *testing.T) {
+func TestRetryReplaceRetriesTransientSharingFailures(t *testing.T) {
 	attempts := 0
 	waits := make([]time.Duration, 0, 2)
-	err := retryStateReplace(func() error {
+	err := retryReplace(func() error {
 		attempts++
 		if attempts < 3 {
 			return syscall.ERROR_ACCESS_DENIED
@@ -22,7 +22,7 @@ func TestRetryStateReplaceRetriesTransientSharingFailures(t *testing.T) {
 		waits = append(waits, delay)
 	})
 	if err != nil {
-		t.Fatalf("retryStateReplace returned an error: %v", err)
+		t.Fatalf("retryReplace returned an error: %v", err)
 	}
 	if attempts != 3 {
 		t.Fatalf("attempts = %d, want 3", attempts)
@@ -32,10 +32,10 @@ func TestRetryStateReplaceRetriesTransientSharingFailures(t *testing.T) {
 	}
 }
 
-func TestRetryStateReplaceStopsOnPermanentFailure(t *testing.T) {
+func TestRetryReplaceStopsOnPermanentFailure(t *testing.T) {
 	want := errors.New("permanent")
 	attempts := 0
-	err := retryStateReplace(func() error {
+	err := retryReplace(func() error {
 		attempts++
 		return want
 	}, func(time.Duration) {

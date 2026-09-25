@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/xenoviz/ruk/internal/atomicfile"
 )
 
 // WorktreeRegistryVersion is the canonical worktree registry schema version.
@@ -217,28 +219,8 @@ func encodeWorktreeRegistry(registry *WorktreeRegistry, source string) ([]byte, 
 	return append(indented, '\n'), nil
 }
 
-func (store *WorktreeStore) replace(encoded []byte) (result error) {
-	temporary := fmt.Sprintf("%s.%d.tmp", store.paths.Worktrees, os.Getpid())
-	committed := false
-	defer func() {
-		if !committed {
-			if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) && result == nil {
-				result = fmt.Errorf("remove temporary worktree registry %s: %w", temporary, err)
-			}
-		}
-	}()
-
-	if err := os.WriteFile(temporary, encoded, 0o600); err != nil {
-		return fmt.Errorf("write temporary worktree registry %s: %w", temporary, err)
-	}
-	if err := os.Chmod(temporary, 0o600); err != nil {
-		return fmt.Errorf("secure temporary worktree registry %s: %w", temporary, err)
-	}
-	if err := replaceStateFile(temporary, store.paths.Worktrees); err != nil {
-		return fmt.Errorf("replace worktree registry %s: %w", store.paths.Worktrees, err)
-	}
-	committed = true
-	return nil
+func (store *WorktreeStore) replace(encoded []byte) error {
+	return atomicfile.Replace(store.paths.Worktrees, encoded, "worktree registry")
 }
 
 func canonicalWorktreeTimestamp(now time.Time) string {
