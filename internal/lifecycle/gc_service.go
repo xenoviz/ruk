@@ -263,7 +263,11 @@ func (service *GCService) applyCandidate(ctx context.Context, options GCOptions,
 			collectionTime := options.Now.UTC().Truncate(time.Millisecond).Format(time.RFC3339Nano)
 			released, releaseErr := service.options.Release.ReleaseAssignment(ctx, workspace.Assignment.ID, ReleaseOptions{Force: true, RequireExpiredBy: collectionTime, ExpectedUpdatedAt: workspace.UpdatedAt, handoffLockHeld: true})
 			if releaseErr != nil {
-				if isStaleGCError(releaseErr) {
+				// An expired lease whose acquisition marker is newer than the
+				// cutoff may still be preparing. Leave it for the abandoned-
+				// acquisition rule instead of aborting the remaining candidates.
+				var inProgress *AcquisitionInProgressError
+				if isStaleGCError(releaseErr) || errors.As(releaseErr, &inProgress) {
 					return nil
 				}
 				return releaseErr
