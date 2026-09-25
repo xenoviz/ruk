@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,11 +56,24 @@ export function platformTarget(platform = process.platform, arch = process.arch,
   throw new Error(`Ruk npm package is not available for ${platform}/${arch}${libcSuffix}; reinstall with a supported platform package`);
 }
 
-export function installerFromEnvironment(environment = process.env) {
+// A first-use install runs from a user's shell rather than a package-manager
+// lifecycle, so no npm_* variables identify the owner. Fall back to the same
+// package-root layout detection as the native updater instead of recording
+// npm, which would send Bun or pnpm global installs to the wrong manager.
+export function installerFromEnvironment(environment = process.env, packageRoot = "") {
   const executable = String(environment.npm_execpath ?? environment.npm_command ?? "").toLowerCase().replaceAll("\\", "/");
   if (executable.includes("bun")) return "bun";
   if (executable.includes("pnpm")) return "pnpm";
   if (executable.includes("yarn")) return "yarn";
+  if (executable === "") return installerFromPath(packageRoot);
+  return "npm";
+}
+
+export function installerFromPath(entrypoint) {
+  const normalized = `${String(entrypoint).toLowerCase().replaceAll("\\", "/")}/`;
+  if (normalized.includes("/.bun/install/global/")) return "bun";
+  if (normalized.includes("/pnpm/global/") || normalized.includes("/.pnpm/")) return "pnpm";
+  if (normalized.includes("/yarn/global/")) return "yarn";
   return "npm";
 }
 
@@ -422,7 +436,7 @@ async function resolveNativePackage(options = {}) {
   }
   const configuredDestination = relativePath(root, rootManifest.ruk.binaryPath ?? "bin/ruk", "Ruk native destination");
   const destination = platform === "win32" ? `${configuredDestination}.exe` : configuredDestination;
-  const installer = installerFromEnvironment(options.environment);
+  const installer = installerFromEnvironment(options.environment, root);
   const markerContents = `${JSON.stringify({ schemaVersion: 1, distribution: "package", installer })}\n`;
   const marker = `${destination}.ruk-distribution`;
   let nativeManifestPath;
@@ -580,6 +594,7 @@ export async function runPackageCommand(options = {}) {
     process.stderr.write(message);
   });
   const run = options.spawnSync ?? spawnSync;
+  const kill = options.kill ?? ((pid, signal) => process.kill(pid, signal));
   try {
     const installed = await ensureNativeLauncher(options);
     if (installed.deferred) {
@@ -598,11 +613,18 @@ export async function runPackageCommand(options = {}) {
     if (result.error) throw result.error;
     if (typeof result.signal === "string" && result.signal !== "") {
       try {
-        process.kill(process.pid, result.signal);
+        kill(process.pid, result.signal);
       } catch {
         exit(1);
+        return { ...installed, status: 1, signal: result.signal };
       }
-      return { ...installed, status: 1, signal: result.signal };
+      // Node ignores SIGPIPE and may handle other signals, so re-raising can
+      // return normally. Fall back to the shell's 128+signal convention rather
+      // than letting the launcher finish with status 0.
+      const number = os.constants.signals[result.signal];
+      const status = Number.isInteger(number) ? 128 + number : 1;
+      exit(status);
+      return { ...installed, status, signal: result.signal };
     }
     const status = Number.isInteger(result.status) ? result.status : 1;
     exit(status);

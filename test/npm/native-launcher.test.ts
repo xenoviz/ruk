@@ -161,6 +161,15 @@ test("installer ownership is derived from the package manager lifecycle", () => 
   assert.equal(installerFromEnvironment({}), "npm");
 });
 
+test("first-use installs outside a lifecycle derive installer ownership from the package root", () => {
+  assert.equal(installerFromEnvironment({}, "/home/me/.bun/install/global/node_modules/@xenoviz/ruk"), "bun");
+  assert.equal(installerFromEnvironment({}, "C:\\Users\\me\\.bun\\install\\global\\node_modules\\@xenoviz\\ruk"), "bun");
+  assert.equal(installerFromEnvironment({}, "/home/me/.local/share/pnpm/global/5/node_modules/@xenoviz/ruk"), "pnpm");
+  assert.equal(installerFromEnvironment({}, "/home/me/.config/yarn/global/node_modules/@xenoviz/ruk"), "yarn");
+  assert.equal(installerFromEnvironment({}, "/usr/local/lib/node_modules/@xenoviz/ruk"), "npm");
+  assert.equal(installerFromEnvironment({ npm_execpath: "/npm/bin/npm-cli.js" }, "/home/me/.bun/install/global/node_modules/@xenoviz/ruk"), "npm");
+});
+
 test("Windows installation places an executable ahead of npm's Node shim", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ruk-npm-launcher-windows-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -580,6 +589,33 @@ test("runPackageCommand installs when needed then executes the native binary", a
   assert.equal(reused.reused, true);
   assert.equal(secondSpawn.command, destination);
   assert.deepEqual(secondSpawn.args, ["--help"]);
+});
+
+test("runPackageCommand reports a signal-terminated child when re-raising is ignored", async (t) => {
+  const value = await fixture();
+  t.after(() => fs.rm(value.root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(value.root, "bin", "ruk"), "#!/usr/bin/env node\nexport {};\n");
+
+  let exitCode: number | undefined;
+  const raised: string[] = [];
+  const result = await runPackageCommand({
+    root: value.root,
+    platform: "linux",
+    arch: "x64",
+    libc: "glibc",
+    args: ["list", "--json"],
+    exit: (code) => {
+      exitCode = code;
+    },
+    // Node ignores SIGPIPE, so re-raising it returns normally.
+    kill: (_pid, signal) => {
+      raised.push(signal);
+    },
+    spawnSync: () => ({ status: null, signal: "SIGPIPE" }),
+  });
+  assert.deepEqual(raised, ["SIGPIPE"]);
+  assert.equal(exitCode, 128 + os.constants.signals.SIGPIPE);
+  assert.equal(result.status, 128 + os.constants.signals.SIGPIPE);
 });
 
 test("published bin/ruk delegates to runPackageCommand", async () => {

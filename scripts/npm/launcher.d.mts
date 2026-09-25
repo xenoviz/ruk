@@ -33,7 +33,9 @@ export declare function platformTarget(
 
 export declare function installerFromEnvironment(
   environment?: Record<string, string | undefined>,
+  packageRoot?: string,
 ): "bun" | "npm" | "pnpm" | "yarn";
+export declare function installerFromPath(entrypoint: string): "bun" | "npm" | "pnpm" | "yarn";
 
 export declare function windowsCommandDestination(
   root: string,
@@ -112,6 +114,7 @@ export declare function runPackageCommand(options?: {
     args: readonly string[],
     options: { stdio: "inherit"; env: NodeJS.ProcessEnv; windowsHide: boolean },
   ) => { status: number | null; signal: NodeJS.Signals | null; error?: Error };
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
   fileSystem?: LauncherFileSystem;
   spawnReplacement?: (
     command: string,
