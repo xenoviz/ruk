@@ -101,19 +101,6 @@ type Installer struct {
 	InheritStdio    bool
 }
 
-// NewInstaller constructs an installer around an injected command runner.
-func NewInstaller(runner CommandRunner) Installer {
-	return Installer{Runner: runner}
-}
-
-// Prepare installs dependencies in root using manager's exact command. The
-// manager's Version is required for shared Bun and pnpm mode, matching the
-// TypeScript preflight contract. Managed mode deliberately accepts any
-// package-manager name and version.
-func Prepare(ctx context.Context, root string, manager PackageManager, runner CommandRunner) (InstallResult, error) {
-	return (Installer{Runner: runner}).Prepare(ctx, root, manager)
-}
-
 // Prepare installs dependencies in root using the configured command runner.
 func (installer Installer) Prepare(ctx context.Context, root string, manager PackageManager) (InstallResult, error) {
 	command := append([]string(nil), manager.Command...)
@@ -203,12 +190,6 @@ func AssertSharedBackendSupported(name, version string) error {
 		return fmt.Errorf("%s %d.%d.%d or newer is required for Ruk's shared dependency backend (found %s)", name, minimum[0], minimum[1], minimum[2], version)
 	}
 	return nil
-}
-
-// AssertSharedBackendSupported is also available under the shorter name
-// used by the TypeScript implementation's callers.
-func assertSharedBackendSupported(name, version string) error {
-	return AssertSharedBackendSupported(name, version)
 }
 
 var versionPattern = regexp.MustCompile(`(^|[[:space:]]|v)([0-9]+)\.([0-9]+)\.([0-9]+)`)

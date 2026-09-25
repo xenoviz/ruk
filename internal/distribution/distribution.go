@@ -19,10 +19,6 @@ type Distribution string
 const (
 	DistributionPackage    Distribution = "package"
 	DistributionStandalone Distribution = "standalone"
-
-	// Package and Standalone are concise aliases for composition code.
-	Package    = DistributionPackage
-	Standalone = DistributionStandalone
 )
 
 // Valid reports whether d is one of Ruk's explicit distribution markers.

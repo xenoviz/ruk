@@ -90,6 +90,9 @@ func (terminator windowsTreeTerminator) TerminateTree(ctx context.Context, recor
 		}
 		identities[pid] = observed.Identity
 	}
+	// A recorded parent PID is only a hint: never terminate a process that is
+	// older than the parent it names, because that parent PID was reused.
+	pids = descendantsCreatedAfterParents(entries, int(record.PID), pids, identities)
 	// Descendants are terminated first; the recorded leader is the final
 	// signal, preventing a surviving child from being detached by its parent.
 	depths := processDepths(entries, int(record.PID))

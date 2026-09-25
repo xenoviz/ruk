@@ -142,12 +142,6 @@ func Run(ctx context.Context, options Options, hooks Hooks) (Result, error) {
 	return New(hooks).Update(ctx, options)
 }
 
-// Update is an alias for Run for integrations that prefer a package-level
-// operation.
-func Update(ctx context.Context, options Options, hooks Hooks) (Result, error) {
-	return Run(ctx, options, hooks)
-}
-
 func (updater *Updater) runner() CommandRunner {
 	if updater.run != nil {
 		return updater.run

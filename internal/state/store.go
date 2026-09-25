@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/xenoviz/ruk/internal/atomicfile"
 )
 
 // Locker serializes one state mutation against other local Ruk operations.
@@ -125,26 +127,6 @@ func encodeValidated(current *State, source string) ([]byte, error) {
 	return append(indented, '\n'), nil
 }
 
-func (store *Store) replace(encoded []byte) (result error) {
-	temporary := fmt.Sprintf("%s.%d.tmp", store.paths.State, os.Getpid())
-	committed := false
-	defer func() {
-		if !committed {
-			if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) && result == nil {
-				result = fmt.Errorf("remove temporary state %s: %w", temporary, err)
-			}
-		}
-	}()
-
-	if err := os.WriteFile(temporary, encoded, 0o600); err != nil {
-		return fmt.Errorf("write temporary state %s: %w", temporary, err)
-	}
-	if err := os.Chmod(temporary, 0o600); err != nil {
-		return fmt.Errorf("secure temporary state %s: %w", temporary, err)
-	}
-	if err := replaceStateFile(temporary, store.paths.State); err != nil {
-		return fmt.Errorf("replace state %s: %w", store.paths.State, err)
-	}
-	committed = true
-	return nil
+func (store *Store) replace(encoded []byte) error {
+	return atomicfile.Replace(store.paths.State, encoded, "state")
 }

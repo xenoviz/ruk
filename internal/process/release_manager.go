@@ -32,9 +32,6 @@ type ReleaseManagerOptions struct {
 	TreeTerminator TreeTerminator
 }
 
-// ProcessManagerOptions is a compatibility name for ReleaseManagerOptions.
-type ProcessManagerOptions = ReleaseManagerOptions
-
 // NativeProcessManager implements the process seam consumed by lifecycle
 // release. Every operation proves the recorded identity before reporting or
 // signaling a process; an unknown identity is retained as an error.
@@ -46,13 +43,6 @@ type NativeProcessManager struct {
 	treeTerminator TreeTerminator
 	tracker        Tracker
 }
-
-// ReleaseProcessManager is the release-oriented compatibility name.
-type ReleaseProcessManager = NativeProcessManager
-
-// NativeReleaseProcessManager is an explicit native-backend compatibility
-// name for integrations that distinguish it from lifecycle's seam.
-type NativeReleaseProcessManager = NativeProcessManager
 
 var _ interface {
 	Exists(context.Context, state.TrackedProcessRecord) (bool, error)
@@ -94,17 +84,6 @@ func NewNativeProcessManager(values ...ReleaseManagerOptions) NativeProcessManag
 			DescendantsExist: (DescendantInspector{Table: table}).Exists,
 		},
 	}
-}
-
-// NewReleaseManager is the release-oriented constructor name used by
-// integrations that do not otherwise need to mention the native backend.
-func NewReleaseManager(values ...ReleaseManagerOptions) NativeProcessManager {
-	return NewNativeProcessManager(values...)
-}
-
-// NewReleaseProcessManager constructs the native release process manager.
-func NewReleaseProcessManager(values ...ReleaseManagerOptions) NativeProcessManager {
-	return NewNativeProcessManager(values...)
 }
 
 // Exists delegates to Tracker, which fails closed for unknown identity,
@@ -171,12 +150,8 @@ func (manager NativeProcessManager) detachedGroupExists(ctx context.Context, rec
 		if !observed.IdentityKnown || observed.Identity == "" {
 			return false, processUnavailable(pid, errors.New("process identity is unavailable"))
 		}
-		match := lock.CompareIdentity(record.StartedAt, observed.Identity)
-		if match == lock.IdentityExact {
+		if lock.SameIdentity(record.StartedAt, observed.Identity) {
 			return true, nil
-		}
-		if match == lock.IdentityLegacyCompatible {
-			return false, processUnavailable(pid, errors.New("legacy process identity cannot prove the live leader"))
 		}
 	}
 	if manager.table == nil {

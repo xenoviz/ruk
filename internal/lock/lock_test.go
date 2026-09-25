@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,19 +21,16 @@ type processProbe struct {
 	calls  int
 }
 
-func TestCompareIdentityKeepsLegacyNativeOwnersLiveButNotExact(t *testing.T) {
+func TestSameIdentityRequiresExactNonEmptyMatch(t *testing.T) {
 	t.Parallel()
 
-	legacy := "Sat Aug 15 06:07:08 2026"
-	for _, native := range []string{"linux:1786740000:1800", "darwin:1786740000:1800"} {
-		if got := lockpkg.CompareIdentity(legacy, native); got != lockpkg.IdentityLegacyCompatible {
-			t.Fatalf("legacy/%s match = %v", native, got)
-		}
-		if got := lockpkg.CompareIdentity(legacy, native); got == lockpkg.IdentityExact {
-			t.Fatal("legacy identity must not be accepted as an exact signaling fence")
-		}
-		if got := lockpkg.CompareIdentity(native, native); got != lockpkg.IdentityExact {
-			t.Fatalf("%s exact match = %v", native, got)
+	native := "linux:1786740000:1800"
+	if !lockpkg.SameIdentity(native, native) {
+		t.Fatal("identical native identities must match")
+	}
+	for _, pair := range [][2]string{{native, "linux:1786740000:1801"}, {"Sat Aug 15 06:07:08 2026", native}, {"", ""}} {
+		if lockpkg.SameIdentity(pair[0], pair[1]) {
+			t.Fatalf("SameIdentity(%q, %q) = true", pair[0], pair[1])
 		}
 	}
 }
@@ -424,4 +423,57 @@ func setModified(t *testing.T, path string, modified time.Time) {
 	if err := os.Chtimes(path, modified, modified); err != nil {
 		t.Fatalf("set modified time: %v", err)
 	}
+}
+
+func TestDirectoryLockConcurrentReleaseSurvivesTombstoneCleanup(t *testing.T) {
+	t.Parallel()
+
+	// Acquire removes token-verified release tombstones while another guard
+	// may still be verifying its own tombstone. A committed callback must not
+	// be reported as failed because a contender cleaned the tombstone first.
+	lockPath := filepath.Join(t.TempDir(), "state.lock")
+	workers, rounds := 32, 300
+	if runtime.GOOS == "windows" {
+		// Windows directory renames are much slower; keep contention high
+		// while bounding the retry-delay cost.
+		workers, rounds = 16, 100
+	}
+	errs := make(chan error, workers*rounds)
+	done := make(chan struct{})
+	for worker := 0; worker < workers; worker++ {
+		go func(worker int) {
+			defer func() { done <- struct{}{} }()
+			var sequence int
+			locker := lockpkg.NewDirectoryLocker(lockpkg.Config{
+				Options:  lockpkg.Options{Timeout: time.Minute, Stale: time.Hour},
+				PID:      os.Getpid(),
+				Hostname: "host-a",
+				Probe:    liveProbe{},
+				Token: func() string {
+					sequence++
+					return fmt.Sprintf("worker-%d-%d", worker, sequence)
+				},
+			})
+			for round := 0; round < rounds; round++ {
+				if err := locker.With(context.Background(), lockPath, func() error { return nil }); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(worker)
+	}
+	for worker := 0; worker < workers; worker++ {
+		<-done
+	}
+	close(errs)
+	for err := range errs {
+		t.Fatalf("committed lock callback reported failure: %v", err)
+	}
+}
+
+// liveProbe is stateless so concurrent lockers can share it under -race.
+type liveProbe struct{}
+
+func (liveProbe) Inspect(context.Context, int) (lockpkg.ProcessState, error) {
+	return lockpkg.ProcessState{Alive: true, IdentityKnown: false}, nil
 }

@@ -4,7 +4,7 @@ import path from "node:path";
 
 export const GOLDEN_SCHEMA_VERSION = 1 as const;
 export const GOLDEN_NORMALIZER_VERSION = 3 as const;
-export const DEFAULT_SCENARIO_COUNT = 19;
+export const DEFAULT_SCENARIO_COUNT = 16;
 
 export type GoldenStreamKind = "json" | "text";
 

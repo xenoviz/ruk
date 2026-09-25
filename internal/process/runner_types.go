@@ -107,7 +107,12 @@ type RunOptions struct {
 	Stdout                io.Writer
 	Stderr                io.Writer
 	CaptureLimit          int
-	Register              RegisterFunc
+	// DirectOutput hands *os.File Stdout and Stderr destinations to the child
+	// unwrapped, so an interactive terminal stays a terminal (isatty, colors,
+	// job control) and a lingering descendant cannot hold a copy pipe open.
+	// Output sent directly is not captured in RunResult.
+	DirectOutput bool
+	Register     RegisterFunc
 	// HandoffComplete is called after registration succeeds, or after failed
 	// registration cleanup has settled. Managed callers use it to release the
 	// workspace handoff lock before Runner waits for a long-lived child.

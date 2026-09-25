@@ -69,10 +69,6 @@ type EnsureInput struct {
 	MachineReadable bool
 }
 
-// EnsureDependenciesInput is retained as a descriptive alias for callers
-// migrating from the TypeScript object-shaped API.
-type EnsureDependenciesInput = EnsureInput
-
 // EnsureResult is the stable machine-readable result of one preparation.
 // Reused and AlreadyAttached are both true only when no installer ran and the
 // recorded projection passed its integrity check.
@@ -82,10 +78,6 @@ type EnsureResult struct {
 	Reused          bool   `json:"reused"`
 	AlreadyAttached bool   `json:"alreadyAttached"`
 }
-
-// EnsureDependenciesResult is a descriptive alias matching the TypeScript
-// result name.
-type EnsureDependenciesResult = EnsureResult
 
 // EnsureDependencies fingerprints the current inputs, reuses an intact
 // projection when possible, otherwise removes the old projection, runs the
@@ -156,28 +148,20 @@ func EnsureDependencies(ctx context.Context, input EnsureInput) (EnsureResult, e
 		result, err = ensureLocked(ctx, input, root, key, store, installer, branch, now)
 		return err
 	})
+	// Preparation metrics are observational. The tree record is already
+	// committed, so a metric write failure must neither turn a successful
+	// preparation into an error nor obscure a dependency failure that callers
+	// need to classify and report.
 	if err == nil {
-		metricErr := error(nil)
+		kind := "prepared"
 		if result.AlreadyAttached {
-			metricErr = recordMetric(ctx, store, "skipped", elapsedMilliseconds(now().Sub(started)))
-		} else if metricErr == nil {
-			metricErr = recordMetric(ctx, store, "prepared", elapsedMilliseconds(now().Sub(started)))
+			kind = "skipped"
 		}
-		if metricErr != nil {
-			return EnsureResult{}, metricErr
-		}
+		_ = recordMetric(ctx, store, kind, elapsedMilliseconds(now().Sub(started)))
 		return result, nil
 	}
-	// Preparation metrics are observational. A state-write failure here must
-	// never replace or obscure the dependency failure that callers need to
-	// classify and report.
 	_ = recordMetric(ctx, store, "failed", elapsedMilliseconds(now().Sub(started)))
 	return EnsureResult{}, err
-}
-
-// Ensure is a concise alias for EnsureDependencies.
-func Ensure(ctx context.Context, input EnsureInput) (EnsureResult, error) {
-	return EnsureDependencies(ctx, input)
 }
 
 func ensureLocked(ctx context.Context, input EnsureInput, root, key string, store StateStore, installer InstallerBackend, branch CurrentBranchReader, now func() time.Time) (EnsureResult, error) {

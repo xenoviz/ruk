@@ -3,47 +3,39 @@ package state_test
 import (
 	"fmt"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/xenoviz/ruk/internal/state"
 )
 
-func TestDecodeMigratesVersionOneState(t *testing.T) {
+const emptyMetricsJSON = `{
+	"acquisitions": 0,
+	"workspaceReuses": 0,
+	"preparations": 0,
+	"preparationSkips": 0,
+	"preparationFailures": 0,
+	"totalPreparationMs": 0,
+	"lastPreparationMs": null
+}`
+
+func TestDecodeRejectsPreGoStateVersionsWithRecoveryGuidance(t *testing.T) {
 	t.Parallel()
 
-	decoded, err := state.Decode([]byte(`{
-		"version": 1,
-		"trees": {
-			"legacy": {
-				"path": "/tmp/ruk-workspace",
-				"fingerprint": "fingerprint",
-				"mode": "managed-install",
-				"projections": ["node_modules"],
-				"branch": "agent/test",
-				"updatedAt": "1970-01-01T00:00:00.000Z"
-			}
+	for version := 1; version < state.CurrentVersion; version++ {
+		input := fmt.Sprintf(`{"version":%d,"trees":{},"workspaces":{},"metrics":%s}`, version, emptyMetricsJSON)
+		_, err := state.Decode([]byte(input), "state.json")
+		if err == nil {
+			t.Fatalf("Decode accepted version %d state", version)
 		}
-	}`), "state.json")
-	if err != nil {
-		t.Fatalf("Decode returned an error: %v", err)
-	}
-	if decoded.Version != state.CurrentVersion {
-		t.Fatalf("Version = %d, want %d", decoded.Version, state.CurrentVersion)
-	}
-	if len(decoded.Trees) != 1 {
-		t.Fatalf("Trees has %d records, want 1", len(decoded.Trees))
-	}
-	if decoded.Workspaces == nil || len(decoded.Workspaces) != 0 {
-		t.Fatalf("Workspaces = %#v, want an empty non-nil map", decoded.Workspaces)
-	}
-	if got, want := decoded.Metrics, state.EmptyMetrics(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("Metrics = %#v, want %#v", got, want)
+		want := fmt.Sprintf("uses version %d from Ruk 0.2 or earlier", version)
+		if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "remove the file") {
+			t.Fatalf("version %d error = %q, want recovery guidance", version, err)
+		}
 	}
 }
 
-func TestDecodeMigratesVersionThreeActivity(t *testing.T) {
+func TestDecodeRequiresAssignmentActivityFields(t *testing.T) {
 	t.Parallel()
 
 	workspacePath := filepath.Join(t.TempDir(), "workspace")
@@ -52,7 +44,7 @@ func TestDecodeMigratesVersionThreeActivity(t *testing.T) {
 		t.Fatalf("TreeKey returned an error: %v", err)
 	}
 	input := fmt.Sprintf(`{
-		"version": 3,
+		"version": 4,
 		"trees": {},
 		"workspaces": {
 			%q: {
@@ -77,33 +69,11 @@ func TestDecodeMigratesVersionThreeActivity(t *testing.T) {
 				"failure": null
 			}
 		},
-		"metrics": {
-			"acquisitions": 0,
-			"workspaceReuses": 0,
-			"preparations": 0,
-			"preparationSkips": 0,
-			"preparationFailures": 0,
-			"totalPreparationMs": 0,
-			"lastPreparationMs": null
-		}
-	}`, key, workspacePath)
-
-	decoded, err := state.Decode([]byte(input), "state.json")
-	if err != nil {
-		t.Fatalf("Decode returned an error: %v", err)
-	}
-	assignment := decoded.Workspaces[key].Assignment
-	if assignment == nil {
-		t.Fatal("Assignment is nil")
-	}
-	if assignment.LeaseDurationMinutes != 120 {
-		t.Fatalf("LeaseDurationMinutes = %v, want 120", assignment.LeaseDurationMinutes)
-	}
-	if assignment.LastActivityAt != "2026-01-01T01:00:00.000Z" {
-		t.Fatalf("LastActivityAt = %q, want renewal timestamp", assignment.LastActivityAt)
-	}
-	if assignment.LeaseKeepers == nil || len(assignment.LeaseKeepers) != 0 {
-		t.Fatalf("LeaseKeepers = %#v, want an empty non-nil slice", assignment.LeaseKeepers)
+		"metrics": %s
+	}`, key, workspacePath, emptyMetricsJSON)
+	_, err = state.Decode([]byte(input), "state.json")
+	if err == nil || !strings.Contains(err.Error(), "Unsupported or invalid Ruk state in state.json") {
+		t.Fatalf("Decode error = %v, want invalid state for missing activity fields", err)
 	}
 }
 
@@ -137,13 +107,15 @@ func TestDecodeRejectsMalformedAndUnsupportedState(t *testing.T) {
 	}
 }
 
-func TestDecodeRequiresLegacyTreeFieldsWithoutTighteningValues(t *testing.T) {
+func TestDecodeRequiresTreeFieldsWithoutTighteningValues(t *testing.T) {
 	t.Parallel()
 
 	accepted := `{
-		"version": 1,
+		"version": 4,
+		"workspaces": {},
+		"metrics": ` + emptyMetricsJSON + `,
 		"trees": {
-			"legacy": {
+			"tree": {
 				"path": "",
 				"fingerprint": "",
 				"mode": "",
@@ -158,9 +130,11 @@ func TestDecodeRequiresLegacyTreeFieldsWithoutTighteningValues(t *testing.T) {
 	}
 
 	missingPath := `{
-		"version": 1,
+		"version": 4,
+		"workspaces": {},
+		"metrics": ` + emptyMetricsJSON + `,
 		"trees": {
-			"legacy": {
+			"tree": {
 				"fingerprint": "",
 				"mode": "",
 				"projections": [],

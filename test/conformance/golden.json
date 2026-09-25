@@ -6,7 +6,7 @@
     "commit": "969d5c3ff8dc3f43e9e878677ea8c75189a8c09c",
     "version": "0.1.2"
   },
-  "scenarioCount": 19,
+  "scenarioCount": 16,
   "scenarioFiles": [
     {
       "path": "test/conformance/fixtures/core.json",
@@ -91,30 +91,9 @@
       ]
     },
     {
-      "path": "test/conformance/fixtures/state-migrations.json",
-      "sha256": "1d390022e8401883f0f49c98caae213cdc3d1252cbdb3b131f6e6f31930f687e",
+      "path": "test/conformance/fixtures/state-load.json",
+      "sha256": "9ab01c4f2c6bad090370d9a9514eb84bd966c82388f5c9816ec6759fa9b8fe7d",
       "scenarios": [
-        {
-          "name": "state-v1-load",
-          "stepNames": [
-            "status",
-            "stats"
-          ]
-        },
-        {
-          "name": "state-v2-load",
-          "stepNames": [
-            "status",
-            "stats"
-          ]
-        },
-        {
-          "name": "state-v3-load",
-          "stepNames": [
-            "status",
-            "stats"
-          ]
-        },
         {
           "name": "state-v4-load",
           "stepNames": [
@@ -479,102 +458,6 @@
         }
       ],
       "finalState": "{\"metrics\":{\"acquisitions\":1,\"lastPreparationMs\":\"<duration>\",\"preparationFailures\":0,\"preparations\":3,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[{\"branch\":\"master\",\"fingerprint\":\"<fingerprint>\",\"mode\":\"managed-install\",\"path\":\"<repo>\",\"projectionFingerprint\":\"<fingerprint>\",\"projections\":[\"node_modules\"],\"updatedAt\":\"<timestamp>\"}],\"version\":4,\"workspaces\":[]}"
-    },
-    {
-      "name": "state-v1-load",
-      "steps": [
-        {
-          "name": "status",
-          "exitCode": 0,
-          "stdout": {
-            "kind": "json",
-            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"nodeModulesPresent\":false,\"path\":\"<repo>\",\"preparedFingerprint\":null,\"primaryCheckout\":true,\"reason\":\"not-prepared\",\"recovery\":\"ruk sync\",\"status\":\"sync-required\"}"
-          },
-          "stderr": {
-            "kind": "text",
-            "value": ""
-          },
-          "state": "{\"trees\":[],\"version\":1}"
-        },
-        {
-          "name": "stats",
-          "exitCode": 0,
-          "stdout": {
-            "kind": "json",
-            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":0,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
-          },
-          "stderr": {
-            "kind": "text",
-            "value": ""
-          },
-          "state": "{\"trees\":[],\"version\":1}"
-        }
-      ],
-      "finalState": "{\"trees\":[],\"version\":1}"
-    },
-    {
-      "name": "state-v2-load",
-      "steps": [
-        {
-          "name": "status",
-          "exitCode": 0,
-          "stdout": {
-            "kind": "json",
-            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"nodeModulesPresent\":false,\"path\":\"<repo>\",\"preparedFingerprint\":null,\"primaryCheckout\":true,\"reason\":\"not-prepared\",\"recovery\":\"ruk sync\",\"status\":\"sync-required\"}"
-          },
-          "stderr": {
-            "kind": "text",
-            "value": ""
-          },
-          "state": "{\"trees\":[],\"version\":2,\"workspaces\":[]}"
-        },
-        {
-          "name": "stats",
-          "exitCode": 0,
-          "stdout": {
-            "kind": "json",
-            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":0,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
-          },
-          "stderr": {
-            "kind": "text",
-            "value": ""
-          },
-          "state": "{\"trees\":[],\"version\":2,\"workspaces\":[]}"
-        }
-      ],
-      "finalState": "{\"trees\":[],\"version\":2,\"workspaces\":[]}"
-    },
-    {
-      "name": "state-v3-load",
-      "steps": [
-        {
-          "name": "status",
-          "exitCode": 0,
-          "stdout": {
-            "kind": "json",
-            "value": "{\"activeAssignments\":0,\"assignmentId\":null,\"autoRenewing\":false,\"expiresAt\":null,\"fingerprint\":\"<fingerprint>\",\"lastActivityAt\":null,\"lifecycle\":null,\"managed\":false,\"mode\":null,\"nodeModulesPresent\":false,\"path\":\"<repo>\",\"preparedFingerprint\":null,\"primaryCheckout\":true,\"reason\":\"not-prepared\",\"recovery\":\"ruk sync\",\"status\":\"sync-required\"}"
-          },
-          "stderr": {
-            "kind": "text",
-            "value": ""
-          },
-          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":3,\"workspaces\":[]}"
-        },
-        {
-          "name": "stats",
-          "exitCode": 0,
-          "stdout": {
-            "kind": "json",
-            "value": "{\"acquisitions\":0,\"activeAssignments\":0,\"availableWorkspaces\":0,\"averagePreparationMs\":\"<duration>\",\"failedWorkspaces\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparationHitRate\":0,\"preparations\":0,\"preparationSkips\":0,\"reservedPorts\":0,\"reuseRate\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0}"
-          },
-          "stderr": {
-            "kind": "text",
-            "value": ""
-          },
-          "state": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":3,\"workspaces\":[]}"
-        }
-      ],
-      "finalState": "{\"metrics\":{\"acquisitions\":0,\"lastPreparationMs\":null,\"preparationFailures\":0,\"preparations\":0,\"preparationSkips\":0,\"totalPreparationMs\":\"<duration>\",\"workspaceReuses\":0},\"trees\":[],\"version\":3,\"workspaces\":[]}"
     },
     {
       "name": "state-v4-load",

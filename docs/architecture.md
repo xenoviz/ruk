@@ -64,8 +64,7 @@ executable, runs its updater against the newly finalized release, and verifies
 the executable version after deferred replacement. A prerelease uses the prior
 ready Windows executable on that same prerelease channel; the first tag on a
 channel skips because a stable install ignores prereleases and is not an
-upgrade source. The first Go-native stable (`0.3.0`) also skips TypeScript-era
-`0.1.x` Windows executables in that smoke job.
+upgrade source.
 
 ## Boundaries
 
@@ -98,15 +97,15 @@ system action instead of accumulating in the CLI.
 - Recorded dependency projections are integrity-validated before reuse; modified
   projections are discarded instead of entering the pool.
 - Preparation of the same workspace is serialized.
-- State replacement is atomic and state files are owner-readable only.
+- State replacement is atomic and flushed to stable storage before the rename,
+  and state files are owner-readable only.
 - A stale lock owned by a live local process is never removed by age alone.
 - The current workspace cannot remove itself.
 - Machine-readable output contains one JSON value on stdout; diagnostics go to
   stderr, while suppressed installer streams are discarded rather than buffered.
 - Named ports are serialized through a stable per-user host registry and unique
-  among active recorded assignments. Active Ruk 0.2 reservations are imported
-  under their legacy host lock during migration. They are cooperative
-  reservations, not held sockets.
+  among active recorded assignments. They are cooperative reservations, not
+  held sockets.
 - Metrics are bounded counters; ordinary commands never append an event log or
   scan workspace disk usage.
 - Only observed Ruk operations renew leases. Ruk does not infer activity from
@@ -122,10 +121,10 @@ Version 4 state is stored in `<git-common-dir>/ruk/state.json`, so linked worktr
 metadata without committing it. Per-workspace preparation locks and the state
 lock live beside it.
 
-Loading migrates version 1 through version 3 records in memory. Existing
-assignment IDs, ownership, expiry, and process records stay intact. Version 4
-adds the lease duration, last observed activity, and fenced lease keepers needed
-for automatic renewal.
+Only version 4 is accepted. Version 1 through 3 files written by the
+TypeScript 0.1 and 0.2 releases fail with guidance to release their
+assignments with Ruk 0.3 or remove the file; because state is an
+optimization, removing it only discards recorded preparation and assignments.
 
 State is an optimization, not source of truth. Git and the dependency
 fingerprint remain authoritative. Invalid state fails visibly rather than being
@@ -186,12 +185,9 @@ leader PID is reused.
 Windows release and GC also perform a bounded final descendant drain after the
 exact leader exits. Newly observed or leaderless processes are never signaled
 from a PID-only snapshot; they retain the workspace when they do not exit.
-Linux identities include the boot time and raw kernel start ticks. Older
-timestamp identities remain compatible for conservative lock-liveness checks,
-but never authorize signaling when an exact native identity cannot be proven.
+Linux identities include the boot time and raw kernel start ticks.
 macOS identities use the kernel process start time at microsecond precision.
-Legacy `ps` timestamps remain useful only for conservative liveness checks and
-never authorize signaling when the native identity is unavailable.
+Only an exact native identity match authorizes signaling a recorded process.
 Abort cleanup follows the same fail-closed rule for attached children and
 detached groups. If the original leader identity or surviving descendants
 cannot be verified, or any termination safety check refuses the signal, the
@@ -204,8 +200,12 @@ accepted as completion only when an OS liveness check confirms that process no
 longer exists. The workspace tree lock remains held until child registration is
 persisted or failed registration cleanup settles, so release cannot recycle the
 worktree during that handoff.
-Interactive shells inherit the user's terminal and run behind a native POSIX
-process-group or Windows job boundary. Ruk records the shell leader and checks
+Interactive shells and `ruk run` children inherit the user's terminal file
+descriptors directly rather than capture pipes, so terminal detection, colors,
+and job control work. Because no pipe holds the command open, Ruk waits for a
+detached tree whose leader exited before its background descendants to drain,
+observing without signaling, just as the pipe copy used to block. Interactive
+shells run behind a native POSIX process-group or Windows job boundary. Ruk records the shell leader and checks
 the tracked tree after it exits; an unverifiable or leaderless record fails
 closed. The Go runtime does not launch util-linux `script`, PowerShell, or a
 shell helper to provide this boundary, and this adapter does not allocate a PTY

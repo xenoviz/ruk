@@ -132,7 +132,7 @@ func runtimeExecuteWithExpiry(ctx context.Context, repository git.Repository, cw
 			}
 			result, runErr := runner.Run(ctx, command, processpkg.RunOptions{
 				Dir: workspacePath, Env: os.Environ(), Mode: processpkg.Attached,
-				Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
+				Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, DirectOutput: true,
 			})
 			return result.ExitCode, runErr, "", runtimeExecutionOwnershipUnknown
 		}

@@ -31,3 +31,14 @@ func TestConfigureUpdateCommandLeavesNativeExecutableDirect(t *testing.T) {
 		t.Fatalf("native command changed: path=%q args=%#v attr=%#v", command.Path, command.Args, command.SysProcAttr)
 	}
 }
+
+func TestWindowsHelperCommandQuotesPathsWithSpaces(t *testing.T) {
+	helper := `C:\Program Files\ruk\ruk.exe.new-0123.cmd`
+	command, err := windowsHelperCommand(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.SysProcAttr == nil || !strings.Contains(command.SysProcAttr.CmdLine, ` /d /s /c "call "`+helper+`""`) {
+		t.Fatalf("helper command line = %#v", command.SysProcAttr)
+	}
+}

@@ -23,7 +23,7 @@ func InstallerFromPath(entrypoint string) Installer {
 }
 
 // DetectInstaller reads the durable marker written by the npm distribution.
-// Older package installations fall back to path detection for compatibility.
+// Installations without a marker fall back to path detection.
 func DetectInstaller(entrypoint string) (Installer, error) {
 	if strings.TrimSpace(entrypoint) == "" {
 		return InstallerNPM, nil
@@ -105,10 +105,4 @@ func ExecutableAsset(platform Platform) (string, error) {
 		}
 		return "", fmt.Errorf("Standalone updates are not available for %s/%s%s", platform.OS, architecture, libc)
 	}
-}
-
-// AssetName is a convenience wrapper for callers that use GOOS-style
-// platform strings rather than a Platform value.
-func AssetName(platform, architecture string, musl bool) (string, error) {
-	return ExecutableAsset(Platform{OS: platform, Architecture: architecture, Musl: musl})
 }

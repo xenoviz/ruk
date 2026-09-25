@@ -65,7 +65,7 @@ type acquisitionWorktreeCore struct {
 	locked   []string
 }
 
-func (core *acquisitionWorktreeCore) Create(_ context.Context, path, branch, start string) error {
+func (core *acquisitionWorktreeCore) Create(_ context.Context, path, branch, start string, _ bool) error {
 	core.created = append(core.created, strings.Join([]string{path, branch, start}, "|"))
 	return nil
 }
@@ -149,7 +149,7 @@ func TestRecordingAcquisitionWorktreeRecordsCreateAndAssignAndForwardsLock(t *te
 	inner := &runtimeWorkspaceStub{}
 	recorder := &capturingWorktreeRecorder{}
 	worktree := recordingAcquisitionWorktree{inner: inner, recorder: recorder}
-	if err := worktree.Create(context.Background(), "/workspace/slot", "agent/acquire", "HEAD"); err != nil {
+	if err := worktree.Create(context.Background(), "/workspace/slot", "agent/acquire", "HEAD", true); err != nil {
 		t.Fatalf("Create returned an error: %v", err)
 	}
 	if err := worktree.Assign(context.Background(), "/workspace/slot", "agent/reused", "main"); err != nil {

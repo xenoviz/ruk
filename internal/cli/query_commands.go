@@ -36,9 +36,6 @@ type ListRecord struct {
 	ActiveAssignments int64                     `json:"activeAssignments"`
 }
 
-// ListResponse is the complete JSON result for list.
-type ListResponse = []ListRecord
-
 // ListQueryInput contains only facts needed to build list output. Worktree
 // discovery and state loading happen outside the pure response builder.
 type ListQueryInput struct {
@@ -136,9 +133,6 @@ type StatusRecord struct {
 	ActiveAssignments   int64                     `json:"activeAssignments"`
 }
 
-// StatusResponse is the complete JSON result for status.
-type StatusResponse = StatusRecord
-
 // StatusQueryInput contains all filesystem-derived facts needed for status.
 // CurrentFingerprint, NodeModulesPresent, and ProjectionsValid are injected
 // by the repository/dependencies layers so this builder remains pure.
@@ -212,9 +206,6 @@ type StatsRecord struct {
 	statistics.UsageStatistics
 	Disk *statistics.DiskStatistics `json:"disk,omitempty"`
 }
-
-// StatsResponse is the complete JSON result for stats.
-type StatsResponse = StatsRecord
 
 // BuildStatsResponse derives aggregate counters through the statistics
 // package and optionally attaches a caller-provided on-demand disk result.

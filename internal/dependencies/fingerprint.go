@@ -238,12 +238,6 @@ func ProjectionIntegrityValid(root string, projections []string, expected string
 	return err == nil && actual == expected
 }
 
-// DependencyProjectionsAreValid is a descriptive alias for callers migrating
-// the TypeScript dependencyProjectionsAreValid predicate.
-func DependencyProjectionsAreValid(root string, projections []string, expected string) bool {
-	return ProjectionIntegrityValid(root, projections, expected)
-}
-
 func projectionPath(root, relative string) (string, string, error) {
 	if relative == "" {
 		return "", "", errors.New("dependency projection path cannot be empty")

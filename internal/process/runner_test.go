@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/xenoviz/ruk/internal/lock"
 	processpkg "github.com/xenoviz/ruk/internal/process"
@@ -186,6 +187,109 @@ func TestRunnerBoundsDiagnosticTailAndPreservesWriter(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "123456") {
 		t.Fatalf("forwarded output = %q", output.String())
+	}
+}
+
+func TestRunnerDirectOutputHandsFilesToChildUnwrapped(t *testing.T) {
+	t.Parallel()
+	stdout, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	var stderr strings.Builder
+	child := &runnerChild{pid: 12, status: processpkg.ExitStatus{Code: 0}}
+	spawner := &runnerSpawner{child: child}
+	describer := runnerDescriber{record: state.TrackedProcessRecord{PID: 12, StartedAt: "started"}}
+	runner := processpkg.Runner{Spawner: spawner, Describer: describer}
+	if _, err := runner.Run(context.Background(), []string{"tool"}, processpkg.RunOptions{Stdout: stdout, Stderr: &stderr, DirectOutput: true}); err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+	if spawner.request.Stdout != stdout {
+		t.Fatalf("child stdout = %T, want the terminal file itself", spawner.request.Stdout)
+	}
+	if _, isFile := spawner.request.Stderr.(*os.File); isFile {
+		t.Fatal("non-file stderr destination must still be captured")
+	}
+
+	if _, err := runner.Run(context.Background(), []string{"tool"}, processpkg.RunOptions{Stdout: stdout}); err != nil {
+		t.Fatalf("Run returned an error: %v", err)
+	}
+	if spawner.request.Stdout == stdout {
+		t.Fatal("captured runs must keep wrapping file destinations")
+	}
+}
+
+// drainingCleaner reports a leaderless detached group for the first pending
+// checks, then an empty tree.
+type drainingCleaner struct {
+	runnerCleaner
+	mu      sync.Mutex
+	pending int
+	checks  int
+}
+
+func (cleaner *drainingCleaner) Exists(context.Context, state.TrackedProcessRecord) (bool, error) {
+	cleaner.mu.Lock()
+	defer cleaner.mu.Unlock()
+	cleaner.checks++
+	if cleaner.checks <= cleaner.pending {
+		return false, &processpkg.IdentityUnavailableError{PID: 42, Cause: errors.New("leaderless group")}
+	}
+	return false, nil
+}
+
+func TestRunnerDirectOutputWaitsForDetachedDescendantsToDrain(t *testing.T) {
+	t.Parallel()
+	record := state.TrackedProcessRecord{PID: 42, StartedAt: "started", GroupID: int64Pointer(42)}
+	for _, test := range []struct {
+		name    string
+		direct  bool
+		wantErr bool
+		checks  int
+	}{
+		{name: "direct output waits", direct: true, checks: 3},
+		{name: "captured output fails closed", direct: false, wantErr: true, checks: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cleaner := &drainingCleaner{pending: 2}
+			runner := processpkg.Runner{
+				Spawner:   &runnerSpawner{child: &runnerChild{pid: 42}},
+				Describer: runnerDescriber{record: record},
+				Cleaner:   cleaner,
+			}
+			_, err := runner.Run(context.Background(), []string{"tool"}, processpkg.RunOptions{
+				Mode: processpkg.Detached, SuperviseCancellation: true, DirectOutput: test.direct,
+				Register: func(context.Context, state.TrackedProcessRecord) error { return nil },
+			})
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Run error = %v, wantErr %v", err, test.wantErr)
+			}
+			if cleaner.checks != test.checks {
+				t.Fatalf("drain checks = %d, want %d", cleaner.checks, test.checks)
+			}
+		})
+	}
+}
+
+func TestRunnerDirectOutputDrainWaitStopsOnCancellation(t *testing.T) {
+	t.Parallel()
+	record := state.TrackedProcessRecord{PID: 42, StartedAt: "started", GroupID: int64Pointer(42)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cleaner := &drainingCleaner{pending: 1 << 30}
+	runner := processpkg.Runner{
+		Spawner:   &runnerSpawner{child: &runnerChild{pid: 42}},
+		Describer: runnerDescriber{record: record},
+		Cleaner:   cleaner,
+	}
+	time.AfterFunc(250*time.Millisecond, cancel)
+	_, err := runner.Run(ctx, []string{"tool"}, processpkg.RunOptions{
+		Mode: processpkg.Detached, SuperviseCancellation: true, DirectOutput: true,
+		Register: func(context.Context, state.TrackedProcessRecord) error { return nil },
+	})
+	var unsafe *processpkg.ProcessCleanupUnsafeError
+	if !errors.Is(err, context.Canceled) || !errors.As(err, &unsafe) {
+		t.Fatalf("Run error = %v, want cancellation with retained unsafe cleanup", err)
 	}
 }
 

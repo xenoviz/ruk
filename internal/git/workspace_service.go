@@ -17,6 +17,7 @@ const worktreeRelockTimeout = 30 * time.Second
 // managed root can still point outside it through a symlink.
 type WorkspaceFileSystem interface {
 	EvalSymlinks(string) (string, error)
+	Lstat(string) (os.FileInfo, error)
 }
 
 // OSWorkspaceFileSystem is the production filesystem implementation.
@@ -24,6 +25,10 @@ type OSWorkspaceFileSystem struct{}
 
 func (OSWorkspaceFileSystem) EvalSymlinks(path string) (string, error) {
 	return filepath.EvalSymlinks(path)
+}
+
+func (OSWorkspaceFileSystem) Lstat(path string) (os.FileInfo, error) {
+	return os.Lstat(path)
 }
 
 // WorkspaceServiceOptions configures a bounded Git worktree service.
@@ -68,12 +73,6 @@ func NewWorkspaceService(options WorkspaceServiceOptions) (*WorkspaceService, er
 		files = OSWorkspaceFileSystem{}
 	}
 	return &WorkspaceService{repositoryRoot: repositoryRoot, managedRoot: managedRoot, git: NewClient(options.Runner), files: files}, nil
-}
-
-// NewWorkspaceServiceAt is a convenience constructor for callers that keep
-// the repository root and injected seams as separate values.
-func NewWorkspaceServiceAt(repositoryRoot, managedRoot string, runner CommandRunner, files WorkspaceFileSystem) (*WorkspaceService, error) {
-	return NewWorkspaceService(WorkspaceServiceOptions{RepositoryRoot: repositoryRoot, ManagedRoot: managedRoot, Runner: runner, Files: files})
 }
 
 // ManagedRoot returns the normalized root used for path authorization.
@@ -134,11 +133,6 @@ func (service *WorkspaceService) Return(ctx context.Context, destination string,
 		return err
 	}
 	return service.git.ReturnWorktree(ctx, destination, force, preservedProjections)
-}
-
-// ResetCleanReturn is an explicit alias for Return for lifecycle callers.
-func (service *WorkspaceService) ResetCleanReturn(ctx context.Context, destination string, force bool, preservedProjections []string) error {
-	return service.Return(ctx, destination, force, preservedProjections)
 }
 
 // Lock protects a pooled worktree from ordinary Git maintenance.
@@ -270,7 +264,8 @@ func (service *WorkspaceService) canonicalPath(path string) (string, error) {
 
 // canonicalExistingPath evaluates the destination or its nearest existing
 // ancestor. Git add accepts a not-yet-created destination, so absence itself is
-// not unsafe; an unreadable ancestor is unsafe and fails closed.
+// not unsafe; an unreadable or dangling symlink ancestor is unsafe and fails
+// closed, because Git would follow the link once its target appears.
 func (service *WorkspaceService) canonicalExistingPath(path string) (string, error) {
 	original := path
 	candidate := path
@@ -289,6 +284,13 @@ func (service *WorkspaceService) canonicalExistingPath(path string) (string, err
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", err
+		}
+		if info, lstatErr := service.files.Lstat(candidate); lstatErr == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", fmt.Errorf("worktree destination ancestor %s is a dangling symlink", candidate)
+			}
+		} else if !errors.Is(lstatErr, os.ErrNotExist) {
+			return "", lstatErr
 		}
 		parent := filepath.Dir(candidate)
 		if samePath(parent, candidate) {

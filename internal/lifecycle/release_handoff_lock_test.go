@@ -47,7 +47,7 @@ func (handoffLockTestProcesses) Terminate(context.Context, state.TrackedProcessR
 
 type handoffLockTestGit struct{}
 
-func (handoffLockTestGit) ResetCleanReturn(context.Context, string, bool, []string) error {
+func (handoffLockTestGit) Return(context.Context, string, bool, []string) error {
 	return nil
 }
 

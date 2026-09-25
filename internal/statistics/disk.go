@@ -147,11 +147,6 @@ dispatch:
 	}, nil
 }
 
-// DiskUsage is a concise alias for MeasureDiskStatistics.
-func DiskUsage(ctx context.Context, snapshot state.State, options ...DiskOptions) (DiskStatistics, error) {
-	return MeasureDiskStatistics(ctx, snapshot, options...)
-}
-
 func diskConcurrency(options []DiskOptions) int {
 	workers := runtime.GOMAXPROCS(0)
 	if workers <= 0 {

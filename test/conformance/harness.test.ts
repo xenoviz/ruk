@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { canonicalJSON, normalizeText, parseJSON } from "../../scripts/conformance/normalize.js";
 import { validateScenarios } from "../../scripts/conformance/scenarios.js";
-import { compareGoldenScenario, compareGoldenStep, resolveStepArguments } from "../../scripts/conformance/harness.js";
+import { compareGoldenScenario, compareGoldenStep, fixtureGitEnvironment, resolveStepArguments } from "../../scripts/conformance/harness.js";
 
 test("conformance normalization removes repository-specific process values", () => {
   const context = { roots: ["C:\\temp\\typescript", "/tmp/typescript", "/tmp/go"] };
@@ -170,4 +170,22 @@ test("scenario validation rejects malformed command and fixture definitions", ()
   assert.throws(() => validateScenarios([{ name: "empty steps", steps: [] }]), /steps must contain at least one step/);
   assert.throws(() => validateScenarios([{ name: "bad step", steps: [{ name: "init", args: ["init", 1] }] }]), /step 0 must contain a name and string args/);
   assert.throws(() => validateScenarios([{ name: "bad final-state option", args: ["status"], compareFinalState: "no" }]), /invalid compareFinalState/);
+});
+
+test("conformance fixture commits ignore host Git configuration and identity", () => {
+  const environment = fixtureGitEnvironment({
+    PATH: "/usr/bin",
+    GIT_AUTHOR_NAME: "Host",
+    git_committer_email: "host@example.invalid",
+    GIT_CONFIG_PARAMETERS: "'commit.gpgsign=true'",
+    GIT_CONFIG_COUNT: "1",
+  });
+  assert.equal(environment["PATH"], "/usr/bin");
+  assert.equal(environment["GIT_AUTHOR_NAME"], undefined);
+  assert.equal(environment["git_committer_email"], undefined);
+  assert.equal(environment["GIT_CONFIG_PARAMETERS"], undefined);
+  assert.equal(environment["GIT_CONFIG_COUNT"], undefined);
+  assert.equal(environment["GIT_CONFIG_NOSYSTEM"], "1");
+  assert.equal(environment["GIT_CONFIG_GLOBAL"], "/dev/null");
+  assert.equal(environment["GIT_AUTHOR_DATE"], environment["GIT_COMMITTER_DATE"]);
 });

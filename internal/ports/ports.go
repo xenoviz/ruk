@@ -50,12 +50,6 @@ func NormalizeName(name string) (string, error) {
 	return EnvironmentPrefix + value, nil
 }
 
-// PortEnvironmentName is an explicit alias for NormalizeName at call sites
-// that deal with environment variables.
-func PortEnvironmentName(name string) (string, error) {
-	return NormalizeName(name)
-}
-
 // ValidatePort checks the TCP/UDP port range accepted by the state contract.
 func ValidatePort(port int64) error {
 	if port < minPort || port > maxPort {
@@ -92,11 +86,6 @@ func BuildEnvironment(ports map[string]int64) (map[string]string, error) {
 		environment[environmentName] = fmt.Sprintf("%d", port)
 	}
 	return environment, nil
-}
-
-// PortEnvironment is an explicit alias for BuildEnvironment.
-func PortEnvironment(ports map[string]int64) (map[string]string, error) {
-	return BuildEnvironment(ports)
 }
 
 // BindRequest describes one host-local ephemeral bind attempt. The first

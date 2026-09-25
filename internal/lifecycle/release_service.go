@@ -26,18 +26,11 @@ type ReleaseProcesser interface {
 	Terminate(context.Context, state.TrackedProcessRecord, bool) (bool, error)
 }
 
-// ReleaseProcessManager is the correctly expanded compatibility name for
-// ReleaseProcesser.
-type ReleaseProcessManager = ReleaseProcesser
-
 // ReleaseGitter resets and cleans one managed worktree. Implementations must
 // keep all Git execution behind their own injected command boundary.
 type ReleaseGitter interface {
-	ResetCleanReturn(context.Context, string, bool, []string) error
+	Return(context.Context, string, bool, []string) error
 }
-
-// ReleaseGit is the compatibility name for the Git return seam.
-type ReleaseGit = ReleaseGitter
 
 // ReleaseGitRelocker is an optional extension used to restore a pooled
 // worktree lock when a Git return operation fails after changing it.
@@ -50,9 +43,6 @@ type ReleaseGitRelocker interface {
 type ReleasePorter interface {
 	Release(context.Context, string) error
 }
-
-// ReleasePortRegistry is the compatibility name for the port release seam.
-type ReleasePortRegistry = ReleasePorter
 
 // ReleaseLocker serializes release with acquisition handoff and all other
 // workspace-mutating operations.
@@ -216,7 +206,7 @@ func (service *ReleaseService) ReleaseAssignment(ctx context.Context, assignment
 		if cleanupErr != nil {
 			return service.cancelRelease(ctx, assignmentID, cleanupErr)
 		}
-		if gitErr := service.options.Git.ResetCleanReturn(ctx, returning.Path, options.Force, append([]string(nil), preservedProjections...)); gitErr != nil {
+		if gitErr := service.options.Git.Return(ctx, returning.Path, options.Force, append([]string(nil), preservedProjections...)); gitErr != nil {
 			gitErr = service.relockAfterGitFailure(ctx, returning.Path, gitErr)
 			return service.cancelRelease(ctx, assignmentID, gitErr)
 		}
@@ -240,18 +230,6 @@ func (service *ReleaseService) ReleaseAssignment(ctx context.Context, assignment
 		return ReleaseResult{}, err
 	}
 	return result, nil
-}
-
-// Release is a short alias for callers that already use the service name as
-// the operation name.
-func (service *ReleaseService) Release(ctx context.Context, assignmentID string, options ReleaseOptions) (ReleaseResult, error) {
-	return service.ReleaseAssignment(ctx, assignmentID, options)
-}
-
-// NewReleaseOrchestrator is an explicit orchestration-oriented constructor
-// alias retained for integrations that use that terminology.
-func NewReleaseOrchestrator(lifecycleService *Service, options ReleaseServiceOptions) *ReleaseService {
-	return NewReleaseService(lifecycleService, options)
 }
 
 func (service *ReleaseService) releaseLockPath(workspacePath string) (string, error) {

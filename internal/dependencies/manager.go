@@ -24,11 +24,6 @@ type ManagerResolver struct {
 	DiagnosticLimit int
 }
 
-// NewManagerResolver constructs a resolver with an injected process seam.
-func NewManagerResolver(runner CommandRunner) ManagerResolver {
-	return ManagerResolver{Runner: runner}
-}
-
 // ResolvePackageManager selects and converts the repository's package
 // manager. The optional runner is a test seam; omitting it uses the operating
 // system runner. Shared Bun and pnpm selections are version-probed and
@@ -40,12 +35,6 @@ func ResolvePackageManager(ctx context.Context, root string, cfg config.Config, 
 		runner = runners[0]
 	}
 	return (ManagerResolver{Runner: runner}).Resolve(ctx, root, cfg)
-}
-
-// DetectPackageManager is a compatibility-shaped alias for callers that want
-// the config detection and dependency conversion in one operation.
-func DetectPackageManager(ctx context.Context, root string, cfg config.Config, runners ...CommandRunner) (PackageManager, error) {
-	return ResolvePackageManager(ctx, root, cfg, runners...)
 }
 
 // Resolve performs package-manager selection and conversion.

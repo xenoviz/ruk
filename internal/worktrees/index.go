@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xenoviz/ruk/internal/atomicfile"
 	"github.com/xenoviz/ruk/internal/state"
 )
 
@@ -245,28 +246,8 @@ func encodeIndex(index *Index, source string) ([]byte, error) {
 	return append(indented, '\n'), nil
 }
 
-func (store *IndexStore) replace(encoded []byte) (result error) {
-	temporary := fmt.Sprintf("%s.%d.tmp", store.file, os.Getpid())
-	committed := false
-	defer func() {
-		if !committed {
-			if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) && result == nil {
-				result = fmt.Errorf("remove temporary host repository index %s: %w", temporary, err)
-			}
-		}
-	}()
-
-	if err := os.WriteFile(temporary, encoded, 0o600); err != nil {
-		return fmt.Errorf("write temporary host repository index %s: %w", temporary, err)
-	}
-	if err := os.Chmod(temporary, 0o600); err != nil {
-		return fmt.Errorf("secure temporary host repository index %s: %w", temporary, err)
-	}
-	if err := replaceIndexFile(temporary, store.file); err != nil {
-		return fmt.Errorf("replace host repository index %s: %w", store.file, err)
-	}
-	committed = true
-	return nil
+func (store *IndexStore) replace(encoded []byte) error {
+	return atomicfile.Replace(store.file, encoded, "host repository index")
 }
 
 func ensureIndexRoot(root string) error {

@@ -45,38 +45,10 @@ type ProcessState struct {
 	Identity      string
 }
 
-// IdentityMatch describes compatibility between a persisted process identity
-// and a fresh native observation. Legacy POSIX identities are second-rounded
-// timestamps; they remain liveness-compatible with a native raw identity,
-// but are never an exact fence for signaling or termination.
-type IdentityMatch uint8
-
-const (
-	IdentityMismatch IdentityMatch = iota
-	IdentityExact
-	IdentityLegacyCompatible
-)
-
-func CompareIdentity(expected, observed string) IdentityMatch {
-	if expected == "" || observed == "" {
-		return IdentityMismatch
-	}
-	if expected == observed {
-		return IdentityExact
-	}
-	if isLegacyPOSIXIdentity(expected) && isNativeIdentity(observed) || isLegacyPOSIXIdentity(observed) && isNativeIdentity(expected) {
-		return IdentityLegacyCompatible
-	}
-	return IdentityMismatch
-}
-
-func isNativeIdentity(value string) bool {
-	return strings.HasPrefix(value, "linux:") || strings.HasPrefix(value, "darwin:")
-}
-
-func isLegacyPOSIXIdentity(value string) bool {
-	_, err := time.ParseInLocation("Mon Jan _2 15:04:05 2006", value, time.Local)
-	return err == nil
+// SameIdentity reports whether a persisted process identity names the same
+// process as a fresh native observation. An empty identity never matches.
+func SameIdentity(expected, observed string) bool {
+	return expected != "" && expected == observed
 }
 
 // ProcessProbe inspects a local lock owner without launching helper processes.
@@ -329,6 +301,13 @@ func (locker *DirectoryLocker) publishLock(path string, owner Owner) (*Guard, er
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return nil, fmt.Errorf("inspect lock %s: %w", path, statErr)
 		}
+		// Windows reports renaming onto an existing directory as access
+		// denied. The staging directory was just created beside the target,
+		// so this is contention with an owner that released before the
+		// Lstat above, not a permission problem: retry instead of failing.
+		if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrExist) {
+			return nil, errLockBusy
+		}
 		return nil, fmt.Errorf("publish lock %s: %w", path, err)
 	}
 	return &Guard{path: path, token: owner.Token}, nil
@@ -371,8 +350,7 @@ func (locker *DirectoryLocker) ownerIsAlive(ctx context.Context, owner Owner) (b
 	if owner.ProcessIdentity == "" || !state.IdentityKnown {
 		return true, nil
 	}
-	match := CompareIdentity(owner.ProcessIdentity, state.Identity)
-	return match == IdentityExact || match == IdentityLegacyCompatible, nil
+	return SameIdentity(owner.ProcessIdentity, state.Identity), nil
 }
 
 // Guard represents one acquired directory lock.
@@ -443,6 +421,15 @@ func (guard *Guard) Release() error {
 	}
 	guard.releasedPath = releasedPath
 	movedOwner, movedValid, movedErr := readOwner(releasedPath)
+	if errors.Is(movedErr, os.ErrNotExist) || errors.Is(movedErr, os.ErrPermission) {
+		// A contender's Acquire removes released tombstones only after proving
+		// their owner token hashes to the suffix, and only this guard renames
+		// into this suffix, so an owner file that vanished (or, on Windows, is
+		// delete-pending and reports access denied) held this guard's token.
+		// A raced replacement would instead read back as a different owner.
+		guard.releasedPath = ""
+		return nil
+	}
 	if movedErr != nil || !movedValid || movedOwner.Token != guard.token {
 		verifyErr := movedErr
 		if verifyErr == nil {
@@ -459,9 +446,11 @@ func (guard *Guard) Release() error {
 		guard.releasedPath = ""
 		return fmt.Errorf("verify released lock %s: %w", guard.path, verifyErr)
 	}
-	if err := os.RemoveAll(releasedPath); err != nil {
-		return fmt.Errorf("cleanup released lock %s: %w", guard.path, err)
-	}
+	// The canonical path is already free, so logical release has succeeded.
+	// Tombstone removal is best effort: on Windows a contender's concurrent
+	// cleanupReleasedTombstones can hold owner.json open (a sharing violation),
+	// and Acquire collects this token-verified tombstone later.
+	_ = os.RemoveAll(releasedPath)
 	guard.releasedPath = ""
 	return nil
 }

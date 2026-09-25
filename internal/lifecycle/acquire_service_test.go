@@ -40,7 +40,7 @@ type acquisitionWorktreeFake struct {
 	assigned     int
 }
 
-func (worktree *acquisitionWorktreeFake) Create(_ context.Context, path, _, _ string) error {
+func (worktree *acquisitionWorktreeFake) Create(_ context.Context, path, _, _ string, _ bool) error {
 	worktree.created++
 	worktree.createdPaths = append(worktree.createdPaths, path)
 	return nil

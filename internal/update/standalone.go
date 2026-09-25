@@ -155,13 +155,29 @@ func (updater *Updater) defaultWindowsScheduler(fsys FileSystem) WindowsSchedule
 		if err := fsys.WriteFile(helper, []byte(script), 0o700); err != nil {
 			return err
 		}
-		command := exec.Command("cmd.exe", "/d", "/s", "/c", helper)
+		command, err := windowsHelperCommand(helper)
+		if err != nil {
+			_ = fsys.Remove(helper)
+			return err
+		}
 		if err := command.Start(); err != nil {
 			_ = fsys.Remove(helper)
 			return err
 		}
 		return nil
 	}
+}
+
+// windowsHelperCommand launches the replacement helper through the same raw
+// cmd.exe command line used for package-manager shims. os/exec's ordinary
+// argv quoting is stripped again by cmd.exe /s, which split helper paths
+// containing spaces such as C:\Program Files.
+func windowsHelperCommand(helper string) (*exec.Cmd, error) {
+	command := exec.Command(helper)
+	if err := configureUpdateCommand(command); err != nil {
+		return nil, err
+	}
+	return command, nil
 }
 
 func randomSuffix() (string, error) {

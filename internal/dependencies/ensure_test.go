@@ -103,6 +103,43 @@ func TestEnsureDependenciesPreparesAndPublishesProjectionMetadata(t *testing.T) 
 	}
 }
 
+// metricFailingStore rejects the observational metric update while letting
+// preparation records commit.
+type metricFailingStore struct{ *ensureMemoryStore }
+
+func (store metricFailingStore) Update(ctx context.Context, mutate func(*state.State) error) error {
+	before := store.state.Metrics
+	if err := store.ensureMemoryStore.Update(ctx, mutate); err != nil {
+		return err
+	}
+	if store.state.Metrics.Preparations != before.Preparations {
+		store.state.Metrics = before
+		return errors.New("metric write failed")
+	}
+	return nil
+}
+
+func TestEnsureDependenciesIgnoresMetricFailureAfterSuccessfulPreparation(t *testing.T) {
+	input, store, root := newEnsureFixture(t)
+	input.Store = metricFailingStore{store}
+	input.Installer = ensureInstaller(func(_ context.Context, root string, _ PackageManager) (InstallResult, error) {
+		writeFile(t, filepath.Join(root, "node_modules", "fixture", "index.js"), "prepared")
+		return InstallResult{Command: []string{"custom", "install"}}, nil
+	})
+
+	result, err := EnsureDependencies(context.Background(), input)
+	if err != nil {
+		t.Fatalf("EnsureDependencies returned a metric error after preparing: %v", err)
+	}
+	key, err := state.TreeKey(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Fingerprint == "" || store.state.Trees[key].Mode != "managed-install" || store.state.Metrics.Preparations != 0 {
+		t.Fatalf("result/state = %#v/%#v", result, store.state)
+	}
+}
+
 func TestEnsureDependenciesRetainsUnsafePreparingInstallerProcess(t *testing.T) {
 	input, store, root := newEnsureFixture(t)
 	key, err := state.TreeKey(root)

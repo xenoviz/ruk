@@ -92,10 +92,6 @@ type CreateCommandInput struct {
 	Output     io.Writer
 }
 
-// CreateInput is a short compatibility alias for callers that use command
-// names as input types.
-type CreateInput = CreateCommandInput
-
 // CreateCommandResult preserves the dependency result while adding the
 // destination and rendered output. Output is excluded from JSON because the
 // sync result is the machine-readable record emitted to the supplied writer.
@@ -108,9 +104,6 @@ type CreateCommandResult struct {
 	AlreadyAttached bool   `json:"alreadyAttached"`
 	Output          string `json:"-"`
 }
-
-// Result is an alias retained for concise command-router integrations.
-type CreateResult = CreateCommandResult
 
 // Run creates and prepares one ordinary Git worktree. It does not record a
 // managed assignment. If preparation fails after Git creation, the worktree is
@@ -243,12 +236,6 @@ func (command *CreateCommand) Run(ctx context.Context, input CreateCommandInput)
 		return CreateCommandResult{}, err
 	}
 	return result, nil
-}
-
-// Execute is an explicit synonym for Run for routers with uniform command
-// method names.
-func (command *CreateCommand) Execute(ctx context.Context, input CreateCommandInput) (CreateCommandResult, error) {
-	return command.Run(ctx, input)
 }
 
 func createDestination(cwd, repositoryRoot, branch, requested string) (string, error) {

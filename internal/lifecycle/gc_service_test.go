@@ -129,6 +129,9 @@ func (release *gcTestRelease) ReleaseAssignment(_ context.Context, assignmentID 
 		if workspace.Assignment == nil || workspace.Assignment.ID != assignmentID {
 			continue
 		}
+		if workspace.OperationID != nil && options.AcquisitionOperationID != *workspace.OperationID {
+			return lifecycle.ReleaseResult{}, &lifecycle.AcquisitionInProgressError{AssignmentID: assignmentID}
+		}
 		updated := release.now.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
 		workspace.Lifecycle = state.LifecycleAvailable
 		workspace.OperationID = nil
@@ -225,6 +228,39 @@ func TestGCServiceForcedExpiryRecomputesExpiredOutput(t *testing.T) {
 	if len(release.options) != 1 || !release.options[0].Force || release.options[0].RequireExpiredBy == "" || len(result.Expired) != 0 {
 		t.Fatalf("forced expiry release/result = %#v/%#v", release.options, result)
 	}
+}
+
+func TestGCServiceForcedExpirySkipsRecentAcquisitionAndContinues(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 2, 0, 0, 0, time.UTC)
+	operation := "acquisition-operation"
+	acquiring := gcWorkspaceForService("/pool/acquiring", state.LifecycleAssigned, &operation, gcAssignment("acquiring", "2026-01-01T01:00:00.000Z", nil), "2026-01-01T01:30:00.000Z")
+	expired := gcWorkspaceForService("/pool/expired", state.LifecycleAssigned, nil, gcAssignment("expired", "2026-01-01T01:00:00.000Z", nil), "2026-01-01T00:00:00.000Z")
+	store, service := gcFixture(t, now, acquiring, expired)
+	release := &gcTestRelease{store: store, now: now}
+	gc := lifecycle.NewGCService(lifecycle.GCServiceOptions{Reader: store, Lifecycle: service, Release: release, Git: &gcTestGit{}, TreeState: &gcTestTreeState{}, Locker: &gcTestLocker{}, LocksRoot: t.TempDir()})
+
+	result, err := gc.Run(context.Background(), lifecycle.GCOptions{OlderThan: now.Add(-time.Hour), Now: now, Apply: true, ForceExpired: true})
+	if err != nil {
+		t.Fatalf("forced expiry with a recent acquisition returned an error: %v", err)
+	}
+	if len(release.options) != 2 {
+		t.Fatalf("release options = %#v", release.options)
+	}
+	if len(result.Removed) != 1 || result.Removed[0].Path != "/pool/expired" {
+		t.Fatalf("forced expiry result = %#v", result)
+	}
+	if _, ok := store.current.Workspaces[mustTreeKey(t, "/pool/acquiring")]; !ok {
+		t.Fatalf("in-progress acquisition was collected: %#v", store.current.Workspaces)
+	}
+}
+
+func mustTreeKey(t *testing.T, path string) string {
+	t.Helper()
+	key, err := state.TreeKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
 }
 
 func TestGCServiceRemoveFailureRelocksAndRestoresCollection(t *testing.T) {
