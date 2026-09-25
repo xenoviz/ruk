@@ -34,17 +34,31 @@ async function writeFixture(repository: string, fixture: RepositoryFixture): Pro
   }
 }
 
+// Fixture commit hashes are frozen in the golden file, so host Git settings
+// such as commit signing, a default branch, or identity overrides must not
+// leak into fixture creation. Git for Windows maps /dev/null to NUL.
+export function fixtureGitEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const isolated: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(environment)) {
+    if (/^GIT_(AUTHOR|COMMITTER)_/i.test(key) || /^GIT_CONFIG/i.test(key)) continue;
+    isolated[key] = value;
+  }
+  return {
+    ...isolated,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_AUTHOR_DATE: FIXTURE_COMMIT_DATE,
+    GIT_COMMITTER_DATE: FIXTURE_COMMIT_DATE,
+  };
+}
+
 async function freshRepository(root: string, fixture: RepositoryFixture = {}): Promise<string> {
   const repository = path.resolve(root);
   await fs.mkdir(repository, { recursive: false });
   await writeFixture(repository, fixture);
   if (fixture.git !== false) {
-    const gitEnvironment = {
-      ...process.env,
-      GIT_AUTHOR_DATE: FIXTURE_COMMIT_DATE,
-      GIT_COMMITTER_DATE: FIXTURE_COMMIT_DATE,
-    };
-    await run("git", ["init", "-q"], { cwd: repository });
+    const gitEnvironment = fixtureGitEnvironment();
+    await run("git", ["init", "-q"], { cwd: repository, env: gitEnvironment });
     await run("git", ["config", "user.email", "conformance@example.invalid"], { cwd: repository, env: gitEnvironment });
     await run("git", ["config", "user.name", "Conformance Harness"], { cwd: repository, env: gitEnvironment });
     if (Object.keys(fixture.files ?? {}).length === 0) await fs.writeFile(path.join(repository, ".keep"), "fixture\n");
