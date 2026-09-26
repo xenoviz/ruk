@@ -307,6 +307,23 @@ Stable categories include `INVALID_ARGUMENT`, `ASSIGNMENT_CONFLICT`,
 Malformed `.rukrc.json` input and TTL values outside the supported date range
 are non-retryable `INVALID_ARGUMENT` errors raised before acquisition.
 
+## Dashboard
+
+```text
+ruk ui [--port <number>] [--open] [--json]
+```
+
+`ruk ui` is for people, not agents: its page and HTTP API are internal and may
+change. With `--json` it writes one value and then serves until interrupted:
+
+```json
+{
+  "status": "listening",
+  "address": "127.0.0.1:47213",
+  "url": "http://127.0.0.1:47213/?token=…"
+}
+```
+
 ## Update ownership
 
 `ruk update` is explicit and never runs in the background. An npm installation

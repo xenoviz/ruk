@@ -34,6 +34,7 @@ surface:
 - reserve named host-local ports and inject them into assigned processes;
 - report recorded reuse, preparation, failure, timing, and optional disk metrics;
 - track commands launched by `ruk run` and safely collect recorded workspaces;
+- see and manage every workspace on the machine from a local web dashboard;
 - renew assignments automatically while Ruk-managed work remains active;
 - keep the primary checkout as a guarded control location during parallel work;
 - fingerprint root and workspace manifests, lockfiles, package-manager config,
@@ -154,6 +155,18 @@ ruk remove ../project-agent-auth-flow
 Ruk refuses to remove the workspace in which it is currently running. Removing
 a dirty workspace requires Git's normal protection to pass or an explicit
 `--force`.
+
+See every workspace on the machine, and renew, release, or clean them up from
+a local web dashboard:
+
+```bash
+ruk ui --open
+```
+
+The dashboard listens on `127.0.0.1` only and runs the same commands you would
+type, so it follows the same rules. See the
+[dashboard guide](https://xenoviz.github.io/ruk/guides/dashboard) and
+[design](./docs/plans/2026-09-26-workspace-dashboard-design.md).
 
 Update Ruk without guessing how it was installed:
 

@@ -30,6 +30,7 @@ Usage:
   ruk stats [--disk] [--json]
   ruk gc [--max-age <minutes>] [--apply] [--force-expired] [--json]
   ruk update [--check] [--json]
+  ruk ui [--port <number>] [--open] [--json]
 
 Ruk shares immutable package content by default when it automatically detects
 supported Bun and pnpm versions. A custom installCommand defaults to managed

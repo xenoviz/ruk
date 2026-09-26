@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ruk</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <span class="brand">ruk</span>
+    <span class="crumb" id="crumb">All repositories</span>
+    <span class="grow"></span>
+    <span class="meta host" id="host"></span>
+    <span class="meta" id="updated">Loading</span>
+    <button class="ghost" id="themeBtn" type="button" aria-label="Change theme">System</button>
+  </header>
+
+  <div class="body">
+    <nav class="nav" aria-label="Repositories">
+      <h2>Repositories</h2>
+      <ul id="repoList"></ul>
+    </nav>
+
+    <div class="main">
+      <div class="bar" role="tablist">
+        <button class="tab" role="tab" id="tab-workspaces" aria-selected="true" type="button">Workspaces</button>
+        <button class="tab" role="tab" id="tab-cleanup" aria-selected="false" type="button">Cleanup</button>
+        <span class="grow"></span>
+        <input class="search" id="search" type="search" placeholder="Search" aria-label="Search workspaces" autocomplete="off">
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="content" id="content">
+        <div class="scroll" id="view-workspaces">
+          <table>
+            <thead><tr id="wsHead"></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div class="cleanup" id="view-cleanup" hidden></div>
+        <aside class="panel" id="panel" hidden aria-label="Workspace details"></aside>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="banner" id="banner" hidden role="alert"></div>
+<div class="toast" id="toast" hidden role="status"></div>
+</body>
+</html>

@@ -54,6 +54,9 @@ ruk status --json
 A ready assigned workspace reports its lifecycle, assignment ID, expiry,
 latest activity, automatic-renewal status, and current dependency fingerprint.
 
+To watch every workspace at once, run `ruk ui --open` for the local
+[dashboard](../guides/dashboard).
+
 ## 4. Release the exact assignment
 
 ```sh

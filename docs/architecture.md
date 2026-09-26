@@ -90,7 +90,10 @@ Ruk has deliberately separate Go packages:
    usage reporting.
 7. `internal/update` owns release discovery, installer delegation, integrity
    checks, prerelease selection, and executable replacement.
-8. `internal/cli` composes these modules and owns the human and JSON boundary.
+8. `internal/dashboard` serves the local `ruk ui` page and its session checks.
+   It reads and acts only through a source interface.
+9. `internal/cli` composes these modules and owns the human and JSON boundary,
+   including the dashboard source, which runs the ordinary commands in-process.
 
 Business rules remain in the module that owns the relevant state or operating-
 system action instead of accumulating in the CLI.
@@ -117,7 +120,11 @@ system action instead of accumulating in the CLI.
 - Metrics are bounded counters; ordinary commands never append an event log or
   scan workspace disk usage.
 - Only observed Ruk operations renew leases. Ruk does not infer activity from
-  filesystem timestamps or keep an always-running daemon.
+  filesystem timestamps or keep an always-running daemon. The foreground
+  `ruk ui` dashboard renews only when asked, through `ruk renew`.
+- The dashboard listens on loopback only, requires its session token and exact
+  host, and accepts actions only from its own origin. Each action runs the
+  matching command, so it cannot bypass a lifecycle rule.
 - Task commands refuse a shared primary checkout while assignments are active
   unless repository policy or an explicit command override permits it. A
   repository-wide primary-checkout fence serializes deny-mode task execution
