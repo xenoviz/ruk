@@ -1,12 +1,15 @@
 {
   "name": "@xenoviz/ruk",
   "version": "0.5.0",
-  "description": "Dependency-aware Git workspaces for parallel coding agents",
+  "description": "Dependency-aware Git workspaces for parallel coding agents, with a local dashboard",
   "keywords": [
     "git",
     "worktree",
+    "workspaces",
     "monorepo",
     "agents",
+    "coding-agents",
+    "dashboard",
     "go",
     "golang",
     "bun",
@@ -19,7 +22,8 @@
   },
   "files": [
     "bin/ruk",
-    "scripts/npm"
+    "scripts/npm",
+    "README.md"
   ],
   "scripts": {
     "postinstall": "node scripts/npm/install.mjs"

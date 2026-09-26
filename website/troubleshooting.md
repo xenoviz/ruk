@@ -58,6 +58,20 @@ Expiry does not remove ownership. If the agent is still active, renew the exact
 assignment ID. If it has stopped, preview garbage collection and confirm the
 recovery target before using `--force-expired`.
 
+## `ruk update` reports an untrusted release pagination link
+
+Ruk 0.4.1 through 0.5.0 cannot read GitHub's release list now that it spans
+more than one page. Upgrade once by hand; later versions update normally:
+
+```sh
+npm install --global @xenoviz/ruk@latest
+```
+
+Use `bun install --global @xenoviz/ruk@latest` for a Bun install, or download
+the executable for your platform from
+[GitHub Releases](https://github.com/xenoviz/ruk/releases) for a standalone
+install.
+
 ## The dashboard does not open
 
 `ruk ui` prints the address to open. With `--open`, a missing browser opener

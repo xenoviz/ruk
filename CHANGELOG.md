@@ -3,6 +3,19 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Fix `ruk update` failing with "GitHub returned an untrusted release
+  pagination link". Once the repository had more than ten releases, GitHub
+  returned pagination links that name the repository by numeric ID, which
+  release discovery rejected. Discovery now accepts that form and always
+  requests pages from the canonical endpoint. Ruk 0.4.1 through 0.5.0 cannot
+  self-update and must upgrade once by hand: `npm install --global
+  @xenoviz/ruk@latest` (or the Bun equivalent) for package installs, or a new
+  executable from GitHub Releases for standalone installs.
+- The npm package page now shows a user guide instead of packaging notes, and
+  the description mentions the dashboard.
+
 ## 0.5.0 - 2026-09-26
 
 - Add `ruk ui`, a local web dashboard for every Ruk workspace on the machine.

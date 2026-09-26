@@ -21,7 +21,18 @@ const (
 	defaultUserAgent        = "ruk-go"
 	defaultDiscoveryTimeout = 30 * time.Second
 	defaultDownloadTimeout  = 5 * time.Minute
+	// repositoryID is GitHub's permanent numeric ID for xenoviz/ruk. GitHub
+	// writes pagination links with it (/repositories/<id>/releases) rather
+	// than the owner/name path, and it survives a repository rename.
+	repositoryID = "1320465110"
 )
+
+// trustedReleasePaths are the only release-list paths a pagination link may
+// name: the owner/name form Ruk requests and the numeric form GitHub returns.
+var trustedReleasePaths = map[string]bool{
+	"/repos/" + Repository + "/releases":          true,
+	"/repositories/" + repositoryID + "/releases": true,
+}
 
 func (updater *Updater) discovery() Discovery {
 	if updater.discover != nil {
@@ -199,10 +210,17 @@ func nextReleasePageURL(link string) (string, error) {
 			return "", errors.New("GitHub returned an invalid release pagination link")
 		}
 		parsed, err := url.Parse(rawURL[1 : len(rawURL)-1])
-		if err != nil || parsed.Scheme != "https" || parsed.Host != "api.github.com" || parsed.Path != "/repos/xenoviz/ruk/releases" {
+		if err != nil || parsed.Scheme != "https" || parsed.Host != "api.github.com" || !trustedReleasePaths[parsed.Path] || parsed.User != nil {
 			return "", errors.New("GitHub returned an untrusted release pagination link")
 		}
-		return parsed.String(), nil
+		// Keep only the page number and request it from the canonical
+		// owner/name endpoint, so every request goes to the same URL shape
+		// regardless of which form GitHub (or a proxy) prefers.
+		page, err := strconv.Atoi(parsed.Query().Get("page"))
+		if err != nil || page < 2 {
+			return "", errors.New("GitHub returned an invalid release pagination link")
+		}
+		return releasePageURL(ReleasesURL, page)
 	}
 	return "", nil
 }

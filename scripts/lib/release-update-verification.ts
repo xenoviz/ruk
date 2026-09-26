@@ -40,11 +40,13 @@ function parseReadyWindowsRelease(release: unknown, currentTag: string): Previou
   return { tagName: release["tag_name"], version };
 }
 
-// Standalone Windows updaters before this version paused with `timeout`,
-// which exits immediately without console input, so their replacement
-// helper gave up before the updater released its executable. They cannot be
-// fixed after publication, so they are not used as upgrade sources.
-export const FIRST_WORKING_WINDOWS_UPDATER = "0.4.1";
+// Updaters before this version cannot upgrade, and published releases cannot
+// be fixed, so they are not used as upgrade sources. Before 0.4.1 the Windows
+// replacement helper paused with `timeout`, which exits immediately without
+// console input. Through 0.5.0 release discovery rejected GitHub's pagination
+// links, which name the repository by numeric ID, so `ruk update` failed once
+// the eleventh release made GitHub paginate.
+export const FIRST_WORKING_WINDOWS_UPDATER = "0.5.1";
 
 function isEligibleUpgradeSource(
   release: unknown,

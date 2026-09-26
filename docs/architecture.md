@@ -69,8 +69,11 @@ executable, runs its updater against the newly finalized release, and verifies
 the executable version after deferred replacement. A prerelease uses the prior
 ready Windows executable on that same prerelease channel; the first tag on a
 channel skips because a stable install ignores prereleases and is not an
-upgrade source. Releases before 0.4.1 are not upgrade sources: their helper
-paused with `timeout`, which exits immediately without console input.
+upgrade source. Releases before 0.5.1 are not upgrade sources. Before 0.4.1
+the helper paused with `timeout`, which exits immediately without console
+input; through 0.5.0 release discovery rejected GitHub's pagination links,
+which name the repository by numeric ID. Discovery accepts both path forms and
+always requests the next page from the canonical owner/name endpoint.
 Windows CI also runs the generated helper against a locked executable in a
 path containing a space on every change.
 
