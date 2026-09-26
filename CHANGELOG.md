@@ -3,7 +3,7 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.5.1 - 2026-09-26
 
 - Fix `ruk update` failing with "GitHub returned an untrusted release
   pagination link". Once the repository had more than ten releases, GitHub

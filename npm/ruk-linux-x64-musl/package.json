@@ -1,6 +1,6 @@
 {
   "name": "@xenoviz/ruk-linux-x64-musl",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Native Ruk binary for Linux x64 with musl",
   "license": "MIT",
   "os": ["linux"],
