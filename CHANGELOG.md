@@ -3,7 +3,7 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.5.0 - 2026-09-26
 
 - Add `ruk ui`, a local web dashboard for every Ruk workspace on the machine.
   It shows lifecycle, owner, lease countdown, ports, tracked processes, and
