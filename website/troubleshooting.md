@@ -58,6 +58,16 @@ Expiry does not remove ownership. If the agent is still active, renew the exact
 assignment ID. If it has stopped, preview garbage collection and confirm the
 recovery target before using `--force-expired`.
 
+## The dashboard does not open
+
+`ruk ui` prints the address to open. With `--open`, a missing browser opener
+is only a warning; copy the printed address instead. If the port you passed
+with `--port` is in use, choose another or omit `--port` to pick a free one.
+
+If the page shows **Offline**, the `ruk ui` process has stopped; start it again.
+If it says the session ended, the page belongs to an earlier run. Each run
+prints a new one-time address, so open that one.
+
 ## A tracked process survives release
 
 Without `--force`, Ruk preserves the assignment when a recorded process does

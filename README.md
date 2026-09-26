@@ -34,6 +34,7 @@ surface:
 - reserve named host-local ports and inject them into assigned processes;
 - report recorded reuse, preparation, failure, timing, and optional disk metrics;
 - track commands launched by `ruk run` and safely collect recorded workspaces;
+- see and manage every workspace on the machine from a local web dashboard;
 - renew assignments automatically while Ruk-managed work remains active;
 - keep the primary checkout as a guarded control location during parallel work;
 - fingerprint root and workspace manifests, lockfiles, package-manager config,
@@ -164,7 +165,8 @@ ruk ui --open
 
 The dashboard listens on `127.0.0.1` only and runs the same commands you would
 type, so it follows the same rules. See the
-[dashboard design](./docs/plans/2026-09-26-workspace-dashboard-design.md).
+[dashboard guide](https://xenoviz.github.io/ruk/guides/dashboard) and
+[design](./docs/plans/2026-09-26-workspace-dashboard-design.md).
 
 Update Ruk without guessing how it was installed:
 
