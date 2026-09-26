@@ -26,7 +26,7 @@ test("first stable release skips because there is no upgrade source", () => {
   );
   assert.deepEqual(plan, {
     kind: "skip",
-    message: "No prior ready Windows release at or after 0.4.1 exists to exercise as an upgrade source.\n",
+    message: "No prior ready Windows release at or after 0.5.1 exists to exercise as an upgrade source.\n",
   });
 });
 
@@ -108,18 +108,19 @@ test("drafts, incomplete assets, and newer tags are not upgrade sources", () => 
 
 test("releases before the first working Windows updater are not upgrade sources", () => {
   const releases = [
-    release({ tag: "v0.4.2", prerelease: false }),
+    release({ tag: "v0.5.2", prerelease: false }),
+    release({ tag: "v0.5.1", prerelease: false }),
+    release({ tag: "v0.5.0", prerelease: false }),
     release({ tag: "v0.4.1", prerelease: false }),
-    release({ tag: "v0.4.0", prerelease: false }),
     release({ tag: "v0.3.0", prerelease: false }),
   ];
-  assert.deepEqual(planWindowsUpdateVerification(releases, "v0.4.1", "0.4.1"), {
+  assert.deepEqual(planWindowsUpdateVerification(releases, "v0.5.1", "0.5.1"), {
     kind: "skip",
-    message: "No prior ready Windows release at or after 0.4.1 exists to exercise as an upgrade source.\n",
+    message: "No prior ready Windows release at or after 0.5.1 exists to exercise as an upgrade source.\n",
   });
-  assert.deepEqual(planWindowsUpdateVerification(releases, "v0.4.2", "0.4.2"), {
+  assert.deepEqual(planWindowsUpdateVerification(releases, "v0.5.2", "0.5.2"), {
     kind: "verify",
-    previous: { tagName: "v0.4.1", version: "0.4.1" },
+    previous: { tagName: "v0.5.1", version: "0.5.1" },
   });
 });
 

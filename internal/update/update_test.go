@@ -570,6 +570,78 @@ func TestHTTPDiscoveryPagesUntilReadyRelease(t *testing.T) {
 	}
 }
 
+func TestNextReleasePageURLTrustsOnlyThisRepository(t *testing.T) {
+	// GitHub writes pagination links with the numeric repository ID. Ruk 0.4.1
+	// through 0.5.0 rejected that form, so ruk update failed as soon as the
+	// eleventh release made GitHub paginate.
+	for link, want := range map[string]string{
+		"": "",
+		`<https://api.github.com/repositories/1320465110/releases?per_page=10&page=2>; rel="next", <https://api.github.com/repositories/1320465110/releases?per_page=10&page=2>; rel="last"`: "https://api.github.com/repos/xenoviz/ruk/releases?page=2&per_page=10",
+		`<https://api.github.com/repos/xenoviz/ruk/releases?per_page=10&page=3>; rel="next"`:                                                                                                 "https://api.github.com/repos/xenoviz/ruk/releases?page=3&per_page=10",
+		`<https://api.github.com/repositories/1320465110/releases?page=1>; rel="prev"`:                                                                                                       "",
+	} {
+		got, err := nextReleasePageURL(link)
+		if err != nil || got != want {
+			t.Errorf("nextReleasePageURL(%q) = %q, %v; want %q", link, got, err, want)
+		}
+	}
+	for _, link := range []string{
+		`<https://api.github.com/repositories/1/releases?page=2>; rel="next"`,
+		`<https://api.github.com/repos/other/ruk/releases?page=2>; rel="next"`,
+		`<https://evil.example/repositories/1320465110/releases?page=2>; rel="next"`,
+		`<http://api.github.com/repositories/1320465110/releases?page=2>; rel="next"`,
+		`<https://user@api.github.com/repositories/1320465110/releases?page=2>; rel="next"`,
+		`<https://api.github.com/repositories/1320465110/releases/assets?page=2>; rel="next"`,
+		`https://api.github.com/repositories/1320465110/releases?page=2; rel="next"`,
+		`<https://api.github.com/repositories/1320465110/releases?page=two>; rel="next"`,
+		`<https://api.github.com/repositories/1320465110/releases?page=1>; rel="next"`,
+	} {
+		if _, err := nextReleasePageURL(link); err == nil {
+			t.Errorf("nextReleasePageURL(%q) accepted an untrusted link", link)
+		}
+	}
+}
+
+func TestHTTPDiscoveryFollowsGitHubRepositoryIDPagination(t *testing.T) {
+	readyVersion := "0.5.0"
+	assets := make([]map[string]string, 0, 8)
+	for _, name := range []string{"ruk-release.json", "ruk-linux-x64", "ruk-linux-arm64", "ruk-linux-x64-musl", "ruk-macos-x64", "ruk-macos-arm64", "ruk-windows-x64.exe", "ruk-windows-arm64.exe"} {
+		assets = append(assets, map[string]string{"name": name, "browser_download_url": "https://github.com/xenoviz/ruk/releases/download/v" + readyVersion + "/" + name})
+	}
+	pageOne := []map[string]any{{"tag_name": "v" + readyVersion, "assets": assets}}
+	for index := 1; index < releasesPerPage; index++ {
+		pageOne = append(pageOne, map[string]any{"tag_name": fmt.Sprintf("v0.0.%d", index)})
+	}
+	requested := make([]string, 0, 2)
+	client := &http.Client{Transport: updateRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requested = append(requested, request.URL.Path+"?"+request.URL.RawQuery)
+		header := http.Header{}
+		var body []byte
+		if request.URL.Query().Get("page") == "1" {
+			header.Set("Link", `<https://api.github.com/repositories/1320465110/releases?per_page=10&page=2>; rel="next", <https://api.github.com/repositories/1320465110/releases?per_page=10&page=2>; rel="last"`)
+			body, _ = json.Marshal(pageOne)
+		} else {
+			body, _ = json.Marshal([]map[string]any{{"tag_name": "v0.1.0"}})
+		}
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: header, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	})}
+	updater := New(Hooks{HTTPClient: client, Download: func(context.Context, Asset) ([]byte, error) {
+		return readyManifestBytes(readyVersion), nil
+	}})
+	result, err := updater.discoverHTTP(context.Background())
+	if err != nil {
+		t.Fatalf("discovery with GitHub's pagination link failed: %v", err)
+	}
+	if len(result) != 1 || result[0].Version != readyVersion {
+		t.Fatalf("discovered releases = %+v", result)
+	}
+	// The numeric-ID link is validated, then page 2 is requested from the
+	// canonical owner/name endpoint.
+	if len(requested) != 2 || requested[1] != "/repos/xenoviz/ruk/releases?page=2&per_page=10" {
+		t.Fatalf("requests = %q", requested)
+	}
+}
+
 func TestGitHubAPIHeadersOptionalToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
