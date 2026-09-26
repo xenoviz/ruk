@@ -140,7 +140,8 @@ func TestProjectionFingerprintTracksNestedAndSymlinkTargetChanges(t *testing.T) 
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(projection, "direct", "index.js"), "direct")
-	target := filepath.Join(root, "store", "package")
+	// Package stores live outside the workspace, like pnpm's and Bun's.
+	target := filepath.Join(t.TempDir(), "store", "package")
 	writeFile(t, filepath.Join(target, "index.js"), "one")
 	link := filepath.Join(projection, "linked")
 	if err := os.Symlink(target, link); err != nil {
@@ -225,5 +226,87 @@ func writeFile(t *testing.T, path, contents string) {
 	}
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProjectionFingerprintIgnoresHardLinksAddedElsewhere(t *testing.T) {
+	// pnpm and Bun hard-link one store file into every workspace that uses it.
+	// Each new link updates the file's change time, so another workspace's
+	// install must not invalidate this workspace's untouched projection.
+	root := t.TempDir()
+	store := filepath.Join(root, "store", "index.js")
+	writeFile(t, store, "shared")
+	projection := filepath.Join(root, "node_modules", "pkg")
+	if err := os.MkdirAll(projection, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(store, filepath.Join(projection, "index.js")); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	before, err := ProjectionFingerprint(root, []string{"node_modules"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(root, "other-workspace", "node_modules", "pkg")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(store, filepath.Join(sibling, "index.js")); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := ProjectionFingerprint(root, []string{"node_modules"}); err != nil || after != before {
+		t.Fatalf("a hard link in another workspace changed the fingerprint (%v)", err)
+	}
+	if !ProjectionIntegrityValid(root, []string{"node_modules"}, before) {
+		t.Fatal("untouched projection was reported as modified")
+	}
+
+	writeFile(t, filepath.Join(projection, "index.js"), "edited in this workspace")
+	if ProjectionIntegrityValid(root, []string{"node_modules"}, before) {
+		t.Fatal("an edited projection file was not detected")
+	}
+}
+
+func TestProjectionFingerprintDoesNotFollowLinksIntoWorkspaceSource(t *testing.T) {
+	// pnpm links monorepo packages into node_modules. Their files are the
+	// repository's own source, so editing them or letting a release's Git
+	// clean remove their build output must not look like dependency
+	// corruption, while retargeting the link still must.
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "packages", "lib", "index.js"), "source")
+	writeFile(t, filepath.Join(root, "packages", "other", "index.js"), "other")
+	writeFile(t, filepath.Join(root, "node_modules", "dep", "index.js"), "dependency")
+	link := filepath.Join(root, "node_modules", "lib")
+	if err := os.Symlink(filepath.Join("..", "packages", "lib"), link); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	projections := []string{"node_modules"}
+	before, err := ProjectionFingerprint(root, projections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "packages", "lib", "index.js"), "edited source")
+	writeFile(t, filepath.Join(root, "packages", "lib", "dist", "build.js"), "generated")
+	if !ProjectionIntegrityValid(root, projections, before) {
+		t.Fatal("editing linked workspace source invalidated the dependency projection")
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "packages", "other"), link); err != nil {
+		t.Fatal(err)
+	}
+	if ProjectionIntegrityValid(root, projections, before) {
+		t.Fatal("retargeting a workspace link was not detected")
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "packages", "lib"), link); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "node_modules", "dep", "index.js"), "tampered dependency")
+	if ProjectionIntegrityValid(root, projections, before) {
+		t.Fatal("a changed dependency file inside the projection was not detected")
 	}
 }
