@@ -202,6 +202,12 @@ func normalizeSourcePath(value string) (string, error) {
 // directory modes, symlink text, and the metadata/content shape of symlink
 // targets. A projection path must be lexically inside root and cannot pass
 // through a symlinked ancestor.
+//
+// A link whose target resolves inside the workspace but outside every
+// projection, such as a monorepo package linked into node_modules, is
+// recorded by its target path only. That target is the repository's own
+// source, which Git governs; following it would make source edits or a
+// release's Git clean look like dependency corruption.
 func ProjectionFingerprint(root string, projections []string) (string, error) {
 	if len(projections) == 0 {
 		return "", errors.New("at least one dependency projection is required")
@@ -213,17 +219,72 @@ func ProjectionFingerprint(root string, projections []string) (string, error) {
 	paths := append([]string(nil), projections...)
 	sort.Strings(paths)
 	hash := sha256.New()
-	visited := make(map[string]struct{})
+	walker := projectionWalker{hash: hash, visited: make(map[string]struct{})}
+	targets := make([]string, 0, len(paths))
+	labels := make([]string, 0, len(paths))
 	for _, relative := range paths {
 		target, label, err := projectionPath(resolvedRoot, relative)
 		if err != nil {
 			return "", err
 		}
-		if err := hashProjectionEntry(target, label, hash, visited); err != nil {
+		targets = append(targets, target)
+		labels = append(labels, label)
+	}
+	// Canonical forms let resolved link targets be compared with the
+	// workspace and its projections even when root sits under a symlink.
+	if walker.root, err = canonicalExisting(resolvedRoot); err != nil {
+		return "", fmt.Errorf("resolve dependency root: %w", err)
+	}
+	for _, target := range targets {
+		canonical, err := canonicalExisting(target)
+		if err != nil {
+			return "", fmt.Errorf("inspect dependency projection %q: %w", target, err)
+		}
+		walker.projections = append(walker.projections, canonical)
+	}
+	for index, target := range targets {
+		if err := walker.hashEntry(target, labels[index]); err != nil {
 			return "", err
 		}
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// projectionWalker hashes projection entries, following links into package
+// stores but not back into the workspace's own source.
+type projectionWalker struct {
+	hash        interface{ Write([]byte) (int, error) }
+	visited     map[string]struct{}
+	root        string
+	projections []string
+}
+
+func canonicalExisting(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(filepath.Clean(resolved))
+}
+
+func pathWithin(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+filepathSeparator) && !filepath.IsAbs(rel)
+}
+
+// workspaceSource reports a resolved path inside the workspace that no
+// projection contains.
+func (walker projectionWalker) workspaceSource(real string) (string, bool) {
+	if !pathWithin(walker.root, real) {
+		return "", false
+	}
+	for _, projection := range walker.projections {
+		if pathWithin(projection, real) {
+			return "", false
+		}
+	}
+	rel, _ := filepath.Rel(walker.root, real)
+	return filepath.ToSlash(rel), true
 }
 
 // ProjectionIntegrityValid reports whether every recorded projection exists
@@ -270,7 +331,8 @@ func projectionPath(root, relative string) (string, string, error) {
 
 const filepathSeparator = string(filepath.Separator)
 
-func hashProjectionEntry(entry, label string, hash interface{ Write([]byte) (int, error) }, visited map[string]struct{}) error {
+func (walker projectionWalker) hashEntry(entry, label string) error {
+	hash, visited := walker.hash, walker.visited
 	info, err := os.Lstat(entry)
 	if err != nil {
 		return fmt.Errorf("inspect dependency projection %q: %w", label, err)
@@ -282,11 +344,15 @@ func hashProjectionEntry(entry, label string, hash interface{ Write([]byte) (int
 			return fmt.Errorf("read dependency projection link %q: %w", label, err)
 		}
 		writeFields(hash, "symlink", label, target)
-		real, err := filepath.EvalSymlinks(entry)
+		real, err := canonicalExisting(entry)
 		if err != nil {
 			return fmt.Errorf("resolve dependency projection link %q: %w", label, err)
 		}
-		return hashProjectionEntry(real, label+"/@target", hash, visited)
+		if source, ok := walker.workspaceSource(real); ok {
+			writeFields(hash, "workspace-link", label, source)
+			return nil
+		}
+		return walker.hashEntry(real, label+"/@target")
 	}
 	if mode.IsDir() {
 		writeFields(hash, "directory", label, fmt.Sprintf("%o", mode.Perm()))
@@ -309,7 +375,7 @@ func hashProjectionEntry(entry, label string, hash interface{ Write([]byte) (int
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			if err := hashProjectionEntry(filepath.Join(entry, name), label+"/"+name, hash, visited); err != nil {
+			if err := walker.hashEntry(filepath.Join(entry, name), label+"/"+name); err != nil {
 				return err
 			}
 		}

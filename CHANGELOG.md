@@ -11,6 +11,11 @@ versioning.
   so any sibling install made an untouched `node_modules` look modified and
   release discarded it. The check now uses mode, size, and modification time.
   Existing recorded projections are rebuilt once after upgrading.
+- Fix monorepo workspaces always reinstalling dependencies. The integrity
+  check followed links from `node_modules` back into the repository's own
+  packages, so editing source or a release's Git clean made dependencies look
+  modified. Such links are now recorded by their target path, while links into
+  package stores are still followed.
 
 ## 0.5.1 - 2026-09-26
 
