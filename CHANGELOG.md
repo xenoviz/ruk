@@ -3,7 +3,7 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
-## Unreleased
+## 0.5.2 - 2026-09-26
 
 - Fix released workspaces always reinstalling dependencies. The projection
   integrity check hashed each file's change time, which a package manager
