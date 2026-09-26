@@ -404,6 +404,86 @@ func TestServeStopsOnCancellation(t *testing.T) {
 	}
 }
 
+func TestServeStopsDespiteConnectionsThatNeverSendARequest(t *testing.T) {
+	// Browsers open speculative connections that may never carry a request.
+	// http.Server.Shutdown treats such connections as active for seconds, so
+	// stopping must not wait for them or report an error.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHandler(&fakeSource{}, testToken, listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, listener, handler) }()
+	idle, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idle.Close()
+	time.Sleep(50 * time.Millisecond) // let the server accept the connection
+	started := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve() error = %v, want a clean stop", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve() waited for a connection that never sent a request")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Serve() took %s to stop; an idle connection must not use the %s grace period", elapsed, shutdownGrace)
+	}
+}
+
+func TestServeLetsARunningActionFinishBeforeStopping(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	source := &fakeSource{delay: 400 * time.Millisecond}
+	handler, err := NewHandler(source, testToken, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, listener, handler) }()
+
+	responded := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodPost, "http://"+address+"/api/actions", strings.NewReader(`{"kind":"gc-apply","repository":"/r"}`))
+		req.Header.Set("Origin", "http://"+address)
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: testToken})
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			responded <- 0
+			return
+		}
+		_ = response.Body.Close()
+		responded <- response.StatusCode
+	}()
+	for source.inFlight.Load() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if status := <-responded; status != http.StatusOK {
+		t.Fatalf("running action status = %d, want it to finish with 200", status)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if len(source.actions) != 1 {
+		t.Fatalf("actions completed = %d, want 1", len(source.actions))
+	}
+}
+
 func TestNewTokenIsRandomHex(t *testing.T) {
 	first, err := NewToken()
 	if err != nil {

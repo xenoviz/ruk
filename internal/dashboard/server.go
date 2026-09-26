@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,8 +25,11 @@ var assets embed.FS
 const (
 	cookieName     = "ruk_ui"
 	maxRequestBody = 64 << 10
-	shutdownGrace  = 5 * time.Second
 )
+
+// shutdownGrace bounds how long a stopping server waits for running requests.
+// It is a variable so tests can shorten it.
+var shutdownGrace = 5 * time.Second
 
 // securityHeaders apply to every response. The page loads only its own
 // embedded files, so the policy allows nothing from other origins.
@@ -302,13 +306,20 @@ func methodNotAllowed(writer http.ResponseWriter, allowed string) {
 	http.Error(writer, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-// Serve runs the dashboard on listener until ctx is cancelled, then shuts
-// down gracefully. Request contexts do not derive from ctx, so an action that
-// is already running gets the shutdown grace period to finish instead of
-// being cancelled mid-transition. It returns nil after a requested shutdown.
+// Serve runs the dashboard on listener until ctx is cancelled. On
+// cancellation it stops at once when no request is running; an action that is
+// already running gets up to the grace period to finish instead of being cut
+// off mid-transition. Request contexts do not derive from ctx for the same
+// reason. Connections that never send a request, which browsers open
+// speculatively, do not delay the stop. It returns nil after a requested stop.
 func Serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
+	var active atomic.Int64
 	server := &http.Server{
-		Handler:           handler,
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			active.Add(1)
+			defer active.Add(-1)
+			handler.ServeHTTP(writer, request)
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -320,13 +331,17 @@ func Serve(ctx context.Context, listener net.Listener, handler http.Handler) err
 		return fmt.Errorf("serve dashboard: %w", err)
 	case <-ctx.Done():
 	}
-	shutdown, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-	defer cancel()
-	if err := server.Shutdown(shutdown); err != nil {
-		return fmt.Errorf("stop dashboard: %w", err)
+	server.SetKeepAlivesEnabled(false)
+	deadline := time.Now().Add(shutdownGrace)
+	for active.Load() > 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
+	closeErr := server.Close()
 	if err := <-failed; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve dashboard: %w", err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("stop dashboard: %w", closeErr)
 	}
 	return nil
 }
