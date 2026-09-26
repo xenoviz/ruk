@@ -3,6 +3,16 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Fix a short-lived managed command, such as the `node --version` runtime
+  probe, occasionally leaving its workspace retained with `RESOURCE_BUSY`.
+  When the command exited before Ruk recorded its identity, the process table
+  no longer listed it, so Ruk could not prove it had led its own process
+  group and failed closed. Ruk now accepts an exited child that it has not yet
+  reaped, but only when that child's own process row shows it led its group
+  and its identity is unchanged.
+
 ## 0.5.2 - 2026-09-26
 
 - Fix released workspaces always reinstalling dependencies. The projection

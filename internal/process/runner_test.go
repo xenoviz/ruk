@@ -648,3 +648,70 @@ func (probe staticProbe) Inspect(context.Context, int) (lock.ProcessState, error
 type staticTable []processpkg.Entry
 
 func (table staticTable) Snapshot(context.Context) ([]processpkg.Entry, error) { return table, nil }
+
+type exitedLeaderTable struct {
+	staticTable
+	leader bool
+	err    error
+}
+
+func (table exitedLeaderTable) ExitedGroupLeader(context.Context, int) (bool, error) {
+	return table.leader, table.err
+}
+
+type sequenceProbe struct {
+	mu     sync.Mutex
+	states []lock.ProcessState
+}
+
+func (probe *sequenceProbe) Inspect(context.Context, int) (lock.ProcessState, error) {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	state := probe.states[0]
+	if len(probe.states) > 1 {
+		probe.states = probe.states[1:]
+	}
+	return state, nil
+}
+
+func TestNativeProcessDescriberAcceptsOnlyVerifiedExitedGroupLeader(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows detached children use a job boundary instead of a process group")
+	}
+	started := lock.ProcessState{Alive: true, IdentityKnown: true, Identity: "started"}
+	reused := lock.ProcessState{Alive: true, IdentityKnown: true, Identity: "reused"}
+	tests := []struct {
+		name   string
+		table  processpkg.ProcessTable
+		states []lock.ProcessState
+		want   bool
+	}{
+		{name: "exited leader with unchanged identity", table: exitedLeaderTable{leader: true}, states: []lock.ProcessState{started}, want: true},
+		{name: "exited leader whose identity changed", table: exitedLeaderTable{leader: true}, states: []lock.ProcessState{started, reused}},
+		{name: "exited leader whose identity became unknown", table: exitedLeaderTable{leader: true}, states: []lock.ProcessState{started, {}}},
+		{name: "exited process that did not lead its group", table: exitedLeaderTable{}, states: []lock.ProcessState{started}},
+		{name: "exited leader lookup failure", table: exitedLeaderTable{leader: true, err: errors.New("table unavailable")}, states: []lock.ProcessState{started}},
+		{name: "table without exited leader support", table: staticTable{}, states: []lock.ProcessState{started}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			describer := processpkg.NativeProcessDescriber{Probe: &sequenceProbe{states: test.states}, Table: test.table}
+			record, err := describer.Describe(context.Background(), 42, processpkg.Detached, []string{"tool"})
+			if !test.want {
+				var identityErr *processpkg.IdentityUnavailableError
+				if !errors.As(err, &identityErr) {
+					t.Fatalf("error = %T %v, want IdentityUnavailableError", err, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Describe returned an error: %v", err)
+			}
+			if record.StartedAt != "started" || record.GroupID == nil || *record.GroupID != 42 {
+				t.Fatalf("record = %#v, want exact identity and group 42", record)
+			}
+		})
+	}
+}

@@ -86,3 +86,6 @@ func createProcessSnapshot() (uintptr, error) {
 	}
 	return 0, fmt.Errorf("snapshot Windows process table: %w", errorBadLength)
 }
+
+// Windows detached children use a job boundary instead of a process group.
+func exitedGroupLeaderPlatform(context.Context, int) (bool, error) { return false, nil }

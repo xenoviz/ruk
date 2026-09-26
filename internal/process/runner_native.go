@@ -47,7 +47,34 @@ func (describer NativeProcessDescriber) Describe(ctx context.Context, pid int, m
 			return record, nil
 		}
 	}
+	// Process tables omit zombies, so a short-lived child that already exited
+	// is missing from the snapshot. It is still this supervisor's unreaped
+	// child, so its PID cannot be reused yet. Accept it only when its own row
+	// proves it led its group and its identity is unchanged.
+	if exited, ok := describer.Table.(ExitedGroupLeaderTable); ok {
+		leader, err := exited.ExitedGroupLeader(ctx, pid)
+		if err != nil {
+			return state.TrackedProcessRecord{}, &IdentityUnavailableError{PID: pid, Cause: err}
+		}
+		if leader {
+			revalidated, err := describer.Probe.Inspect(ctx, pid)
+			if err != nil {
+				return state.TrackedProcessRecord{}, &IdentityUnavailableError{PID: pid, Cause: err}
+			}
+			if revalidated.Alive && revalidated.IdentityKnown && exactIdentityMatch(record.StartedAt, revalidated.Identity) {
+				group := int64(pid)
+				record.GroupID = &group
+				return record, nil
+			}
+		}
+	}
 	return state.TrackedProcessRecord{}, &IdentityUnavailableError{PID: pid, Cause: errors.New("detached child is not its own process-group leader")}
+}
+
+// ExitedGroupLeaderTable reports whether pid is an exited but unreaped process
+// that led its own process group. Snapshot omits such rows.
+type ExitedGroupLeaderTable interface {
+	ExitedGroupLeader(ctx context.Context, pid int) (bool, error)
 }
 
 // NativeProcessCleaner identity-checks an attached child before signaling it,

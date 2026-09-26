@@ -91,8 +91,9 @@ agent's critical path.
 **An intermittent retained assignment.** In one of three runs, a reuse failed
 with `RESOURCE_BUSY` because a short-lived `node --version` probe exited before
 Ruk recorded its identity. Ruk then kept the workspace fenced, which is the
-safe outcome. The failure did not recur in two later runs and is tracked
-separately.
+safe outcome. The process table omitted the exited child, so Ruk could not
+prove it had led its process group. This is fixed after 0.5.2: Ruk now checks
+the exited child's own process row while the child is still unreaped.
 
 ## Limits
 

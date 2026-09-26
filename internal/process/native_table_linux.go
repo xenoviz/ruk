@@ -65,6 +65,21 @@ func snapshotPlatform(ctx context.Context) ([]Entry, error) {
 	return entries, nil
 }
 
+func exitedGroupLeaderPlatform(_ context.Context, pid int) (bool, error) {
+	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read Linux process %d: %w", pid, err)
+	}
+	entry, state, err := parseLinuxProcessEntry(string(stat))
+	if err != nil {
+		return false, fmt.Errorf("read Linux process %d: %w", pid, err)
+	}
+	return state == "Z" && entry.PID == pid && entry.GroupID == pid, nil
+}
+
 func parseLinuxProcessEntry(stat string) (Entry, string, error) {
 	commandEnd := strings.LastIndex(stat, ") ")
 	if commandEnd < 0 {

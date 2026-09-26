@@ -4,6 +4,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -45,4 +46,29 @@ func snapshotPlatform(ctx context.Context) ([]Entry, error) {
 		}
 	}
 	return entries, nil
+}
+
+func exitedGroupLeaderPlatform(ctx context.Context, pid int) (bool, error) {
+	output, err := exec.CommandContext(ctx, "/bin/ps", "-p", strconv.Itoa(pid), "-o", "pid=", "-o", "pgid=", "-o", "state=").Output()
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(strings.TrimSpace(string(output))) == 0 {
+		// ps exits non-zero when no row matches.
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect Darwin process %d: %w", pid, err)
+	}
+	fields := strings.Fields(strings.TrimSpace(string(output)))
+	if len(fields) != 3 {
+		return false, fmt.Errorf("parse Darwin process row %q", strings.TrimSpace(string(output)))
+	}
+	rowPID, pidErr := strconv.Atoi(fields[0])
+	group, groupErr := strconv.Atoi(fields[1])
+	if pidErr != nil || groupErr != nil {
+		return false, fmt.Errorf("parse Darwin process row %q", strings.TrimSpace(string(output)))
+	}
+	return strings.HasPrefix(fields[2], "Z") && rowPID == pid && group == pid, nil
 }

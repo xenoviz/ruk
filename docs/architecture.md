@@ -215,7 +215,10 @@ Attached POSIX leaders and descendants are captured with their start identities,
 and each identity is rechecked immediately before signaling, so PID reuse during
 process enumeration also fails closed. An empty or failed identity probe is
 accepted as completion only when an OS liveness check confirms that process no
-longer exists. The workspace tree lock remains held until child registration is
+longer exists. A detached POSIX child that exits before it is described is
+still Ruk's unreaped child, so its PID cannot be reused. Ruk records it only
+when its own process-table row shows it led its group and a second identity
+probe matches the first; otherwise the workspace stays retained. The workspace tree lock remains held until child registration is
 persisted or failed registration cleanup settles, so release cannot recycle the
 worktree during that handoff.
 Interactive shells and `ruk run` children inherit the user's terminal file
