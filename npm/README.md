@@ -1,7 +1,8 @@
-# @xenoviz/ruk package template
+# npm package templates
 
-The release packaging step stages `scripts/npm/**` beside this manifest before
-publishing. The published `bin/ruk` entry is a thin Node launcher: it validates
+`ruk/` is the template for the published `@xenoviz/ruk` package, and its
+`README.md` is the npm page. The release packaging step stages `scripts/npm/**`
+beside that manifest before publishing. The published `bin/ruk` entry is a thin Node launcher: it validates
 the matching optional native package, places the verified binary when needed,
 and executes that native command. A `postinstall` script performs the same
 placement eagerly when lifecycle scripts are allowed; when they are blocked,
