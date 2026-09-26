@@ -155,6 +155,17 @@ Ruk refuses to remove the workspace in which it is currently running. Removing
 a dirty workspace requires Git's normal protection to pass or an explicit
 `--force`.
 
+See every workspace on the machine, and renew, release, or clean them up from
+a local web dashboard:
+
+```bash
+ruk ui --open
+```
+
+The dashboard listens on `127.0.0.1` only and runs the same commands you would
+type, so it follows the same rules. See the
+[dashboard design](./docs/plans/2026-09-26-workspace-dashboard-design.md).
+
 Update Ruk without guessing how it was installed:
 
 ```bash

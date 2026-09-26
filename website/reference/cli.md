@@ -138,6 +138,16 @@ ruk gc [--max-age <minutes>] [--apply] [--force-expired] [--json]
 Preview or apply collection of old managed workspaces. The default maximum age
 is 1,440 minutes. `--force-expired` requires `--apply`.
 
+## Dashboard
+
+### `ruk ui [--port <number>] [--open] [--json]`
+
+Serve a local web dashboard for every Ruk workspace on this machine until
+interrupted. It listens on `127.0.0.1` only, on a free port unless `--port` is
+given, and prints a one-time address. `--open` opens that address in the
+default browser. With `--json`, Ruk prints one `listening` object with the
+`address` and `url`. See the [dashboard guide](../guides/dashboard).
+
 ## Update
 
 ### `ruk update [--check] [--json]`

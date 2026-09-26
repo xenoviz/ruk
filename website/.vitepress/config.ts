@@ -40,6 +40,7 @@ export default defineConfig({
           { text: "Assignments and renewal", link: "/guides/assignments" },
           { text: "Garbage collection", link: "/guides/garbage-collection" },
           { text: "Pools, ports, and statistics", link: "/guides/pools-ports-and-stats" },
+          { text: "Dashboard", link: "/guides/dashboard" },
         ],
       },
       {

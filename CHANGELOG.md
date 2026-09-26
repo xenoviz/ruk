@@ -3,6 +3,17 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Add `ruk ui`, a local web dashboard for every Ruk workspace on the machine.
+  It shows lifecycle, owner, lease countdown, ports, tracked processes, and
+  failures across repositories, and can renew, release, force-release expired
+  leases, remove unmanaged worktrees, preview and apply GC, and measure disk.
+  Each action runs the matching command in-process. The dashboard listens on
+  loopback only behind a one-time token, exact-host and same-origin checks,
+  and a strict content security policy, and is embedded in the binary with no
+  runtime dependencies.
+
 ## 0.4.2 - 2026-09-25
 
 - Fix a Windows lock-release race: when a concurrent contender briefly held a
