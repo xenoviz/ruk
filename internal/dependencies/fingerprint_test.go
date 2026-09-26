@@ -227,3 +227,41 @@ func writeFile(t *testing.T, path, contents string) {
 		t.Fatal(err)
 	}
 }
+
+func TestProjectionFingerprintIgnoresHardLinksAddedElsewhere(t *testing.T) {
+	// pnpm and Bun hard-link one store file into every workspace that uses it.
+	// Each new link updates the file's change time, so another workspace's
+	// install must not invalidate this workspace's untouched projection.
+	root := t.TempDir()
+	store := filepath.Join(root, "store", "index.js")
+	writeFile(t, store, "shared")
+	projection := filepath.Join(root, "node_modules", "pkg")
+	if err := os.MkdirAll(projection, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(store, filepath.Join(projection, "index.js")); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	before, err := ProjectionFingerprint(root, []string{"node_modules"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(root, "other-workspace", "node_modules", "pkg")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(store, filepath.Join(sibling, "index.js")); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := ProjectionFingerprint(root, []string{"node_modules"}); err != nil || after != before {
+		t.Fatalf("a hard link in another workspace changed the fingerprint (%v)", err)
+	}
+	if !ProjectionIntegrityValid(root, []string{"node_modules"}, before) {
+		t.Fatal("untouched projection was reported as modified")
+	}
+
+	writeFile(t, filepath.Join(projection, "index.js"), "edited in this workspace")
+	if ProjectionIntegrityValid(root, []string{"node_modules"}, before) {
+		t.Fatal("an edited projection file was not detected")
+	}
+}

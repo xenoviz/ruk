@@ -3,6 +3,15 @@
 All notable changes will be documented here. Releases follow semantic
 versioning.
 
+## Unreleased
+
+- Fix released workspaces always reinstalling dependencies. The projection
+  integrity check hashed each file's change time, which a package manager
+  updates whenever it hard-links the same store file into another workspace,
+  so any sibling install made an untouched `node_modules` look modified and
+  release discarded it. The check now uses mode, size, and modification time.
+  Existing recorded projections are rebuilt once after upgrading.
+
 ## 0.5.1 - 2026-09-26
 
 - Fix `ruk update` failing with "GitHub returned an untrusted release

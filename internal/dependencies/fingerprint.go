@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -320,26 +319,13 @@ func hashProjectionEntry(entry, label string, hash interface{ Write([]byte) (int
 	if mode.IsRegular() {
 		kind = "file"
 	}
-	writeFields(hash, kind, label, fmt.Sprintf("%o", mode.Perm()), fmt.Sprintf("%d", info.Size()), fmt.Sprintf("%d", info.ModTime().UnixNano()), changeTime(info))
+	// Change time is deliberately excluded. Package managers hard-link one
+	// store file into every workspace that uses it, and each new link updates
+	// the file's ctime, so a sibling workspace's install would otherwise
+	// invalidate this workspace's untouched projection. Writes change mtime
+	// or size, and permission changes change the mode.
+	writeFields(hash, kind, label, fmt.Sprintf("%o", mode.Perm()), fmt.Sprintf("%d", info.Size()), fmt.Sprintf("%d", info.ModTime().UnixNano()))
 	return nil
-}
-
-func changeTime(info os.FileInfo) string {
-	system := info.Sys()
-	if system == nil {
-		return ""
-	}
-	value := reflect.Indirect(reflect.ValueOf(system))
-	if !value.IsValid() || value.Kind() != reflect.Struct {
-		return ""
-	}
-	for _, name := range []string{"Ctim", "Ctimespec", "ChangeTime"} {
-		field := value.FieldByName(name)
-		if field.IsValid() && field.CanInterface() {
-			return fmt.Sprintf("%v", field.Interface())
-		}
-	}
-	return ""
 }
 
 func absoluteClean(value string) (string, error) {
