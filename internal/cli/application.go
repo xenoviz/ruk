@@ -35,6 +35,8 @@ type Application struct {
 	discover     RepositoryDiscovery
 	queries      QueryDependencies
 	now          func() time.Time
+	uiListen     UIListenFunc
+	uiOpen       UIOpenFunc
 }
 
 // New creates a Ruk command application.
@@ -105,6 +107,8 @@ func New(options Options) *Application {
 		discover:     discover,
 		queries:      mergeQueryDependencies(options.Queries, defaultQueryDependencies()),
 		now:          now,
+		uiListen:     options.UIListen,
+		uiOpen:       options.UIOpen,
 	}
 }
 

@@ -35,6 +35,8 @@ type Options struct {
 	DiscoverRepository RepositoryDiscovery
 	Queries            QueryDependencies
 	Now                func() time.Time
+	UIListen           UIListenFunc
+	UIOpen             UIOpenFunc
 }
 
 // UpdateOperation is injected so compatibility tests can exercise CLI output

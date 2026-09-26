@@ -32,6 +32,7 @@ type Invocation struct {
 	Disk                bool
 	AllowSharedCheckout bool
 	All                 bool
+	Open                bool
 }
 
 type optionSpec struct {
@@ -190,6 +191,8 @@ func commandGrammar(name string) (optionSpec, int, string, bool) {
 		return spec([]string{"--max-age"}, []string{"--apply", "--force-expired", "--json"}), 0, "gc does not accept positional arguments", true
 	case "update":
 		return spec(nil, []string{"--check", "--json"}), 0, "update does not accept positional arguments", true
+	case "ui":
+		return spec([]string{"--port"}, []string{"--open", "--json"}), 0, "ui does not accept positional arguments", true
 	default:
 		return optionSpec{}, 0, "", false
 	}
@@ -255,6 +258,8 @@ func setFlag(invocation *Invocation, option string) {
 		invocation.AllowSharedCheckout = true
 	case "--all":
 		invocation.All = true
+	case "--open":
+		invocation.Open = true
 	}
 }
 
